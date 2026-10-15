@@ -1,0 +1,26 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage
+*.out
+*.test
+coverage.txt
+
+# Worktrees and agent artifacts
+.worktrees/
+.apw/
+
+# Environment and local configs
+.env
+*.local.yaml
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
