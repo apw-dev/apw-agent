@@ -145,8 +145,8 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error)
 | T2 Mock provider | ☑ | `180ba42` |
 | T3 Reflex repair loop | ☑ | `41cfb59` |
 | T4 API provider | ☑ | `46caa1b` |
-| T5 CLI plan | ☑ | `feat(m0): add apw plan CLI command and provider factory (T5)` |
-| T6 Local provider (optional) | ☐ | |
+| T5 CLI plan | ☑ | `288e8ca` |
+| T6 Local provider (optional) | ☑ | `feat(m0): add OpenAI-compatible local provider (T6)` |
 | T7 Telegram PoC | ☐ | |
 | T8 SQLite spike | ☐ | |
 

@@ -6,6 +6,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/provider"
 	"github.com/apiwat/apw-agent/internal/provider/api"
+	"github.com/apiwat/apw-agent/internal/provider/local"
 	"github.com/apiwat/apw-agent/internal/provider/mock"
 )
 
@@ -28,6 +29,8 @@ func New(cfg config.ProviderConfig) (provider.Provider, error) {
 	switch cfg.Type {
 	case config.ProviderAPI:
 		return api.New(cfg)
+	case config.ProviderLocal:
+		return local.New(cfg)
 	case config.ProviderMock:
 		return mock.New(defaultMockPlanJSON), nil
 	default:
