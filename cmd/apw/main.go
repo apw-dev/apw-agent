@@ -639,6 +639,12 @@ func runExecute(args []string, stdout, stderr io.Writer) int {
 	for _, st := range report.Steps {
 		fmt.Fprintf(stdout, "    ✓ [%s] %s — %s\n", st.Action, st.SubtaskID, st.Message)
 	}
+	if report.Summary != "" {
+		fmt.Fprintf(stdout, "\n  %s%s───────────────────────────────────────────────────────────────────────%s\n", "\x1b[2m", "\x1b[38;2;130;138;150m", "\x1b[0m")
+		fmt.Fprintf(stdout, "  %s💬 สรุปผลการทำงาน (Triad Report):%s\n\n%s\n", "\x1b[1m\x1b[38;2;86;182;242m", "\x1b[0m", report.Summary)
+		fmt.Fprintf(stdout, "  %s%s───────────────────────────────────────────────────────────────────────%s\n\n", "\x1b[2m", "\x1b[38;2;130;138;150m", "\x1b[0m")
+	}
+
 	if report.Passed {
 		fmt.Fprintf(stdout, "  %s⚡ [Brain 1 · Reflex]%s Closed-loop PASS (%d attempt(s), %v)\n\n", "\x1b[1m\x1b[38;2;74;222;128m", "\x1b[0m", len(report.ReflexAttempts), report.Duration.Round(time.Millisecond))
 		return 0

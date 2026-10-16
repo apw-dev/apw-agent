@@ -34,6 +34,7 @@ type ExecutionReport struct {
 	ReflexAttempts []reflex.Attempt         `json:"reflex_attempts,omitempty"`
 	Passed         bool                     `json:"passed"`
 	Duration       time.Duration            `json:"duration"`
+	Summary        string                   `json:"summary,omitempty"`
 }
 
 // Executor coordinates Architect planning, Surgeon patching, and Reflex self-healing verification.
@@ -127,6 +128,28 @@ func (e *Executor) Execute(ctx context.Context, instruction string, codebaseOver
 	if len(attempts) > 0 && attempts[len(attempts)-1].Result.Passed {
 		report.Passed = true
 	}
+
+	// Synthesize final summary and findings report for the user
+	if e.Architect != nil && e.Architect.Provider != nil {
+		var stepSummaries []string
+		for _, s := range report.Steps {
+			stepSummaries = append(stepSummaries, fmt.Sprintf("- [%s] %s: %s", s.Action, s.SubtaskID, s.Message))
+		}
+		summaryPrompt := fmt.Sprintf(
+			"You are the APW Agent Triad Core.\nThe user gave the following instruction: %q\n\nExecution Plan Objective: %s\nSteps executed:\n%s\nReflex Closed-Loop Verification: passed=%v (duration: %v)\n\nProvide a clear, detailed, and comprehensive answer/summary in Thai (using Markdown) explaining what was inspected, verified, and found, answering the user's request thoroughly.",
+			instruction, plan.Objective, strings.Join(stepSummaries, "\n"), report.Passed, report.Duration.Round(time.Millisecond),
+		)
+		sumCtx, sumCancel := context.WithTimeout(ctx, 45*time.Second)
+		defer sumCancel()
+		if sumResp, sumErr := e.Architect.Provider.Ask(sumCtx, core.ModelRequest{
+			RequestID: fmt.Sprintf("sum-%d", time.Now().UnixNano()),
+			Prompt:    summaryPrompt,
+			Model:     e.Architect.Model,
+		}); sumErr == nil && sumResp != nil {
+			report.Summary = strings.TrimSpace(sumResp.Content)
+		}
+	}
+
 	return report, nil
 }
 
