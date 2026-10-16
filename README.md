@@ -43,6 +43,14 @@ go run ./cmd/apw verify .
 go run ./cmd/apw symbols internal/surgeon/surgeon.go
 ```
 
+สร้างแผน `ExecutionPlan` ด้วย Architect (คัดลอก `apw.example.json` เป็น `apw.json` และตั้งค่า environment variable ของ API key ก่อนใช้งานจริง):
+
+```bash
+go run ./cmd/apw plan --config ./apw.json "เพิ่มคำสั่ง healthcheck"
+```
+
+แผนที่สร้างจะถูกตรวจความถูกต้อง (`Validate()`) แสดงผลเป็น JSON และบันทึกไว้ที่ `.apw/plans/<plan_id>.json`
+
 ## พัฒนา
 
 ชุดตรวจเดียวกับ CI:
@@ -72,13 +80,14 @@ go run ./cmd/apw verify .
 ## โครงสร้าง
 
 ```text
-cmd/apw/              CLI
+cmd/apw/              CLI (version, plan, verify, symbols)
 cmd/apwd/             daemon (stub)
+internal/config/      โหลดและตรวจสอบไฟล์ตั้งค่า apw.json
 internal/core/        domain models: Task, ModelRequest, ModelResponse
-internal/provider/    Provider interface (API / local)
+internal/provider/    Provider interface + implementations (api, mock, factory)
 internal/architect/   planning + plan validation
 internal/surgeon/     safe file patching + AST symbols
-internal/reflex/      verification pipeline + diagnostics
+internal/reflex/      verification pipeline + repair loop + diagnostics
 docs/                 แผนพัฒนาและบันทึกการตรวจ
 ```
 
