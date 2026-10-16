@@ -143,8 +143,8 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error)
 | --- | --- | --- |
 | T1 Config | ☑ | `198e97b` |
 | T2 Mock provider | ☑ | `180ba42` |
-| T3 Reflex repair loop | ☑ | `feat(m0): add Reflex repair loop (T3)` |
-| T4 API provider | ☐ | |
+| T3 Reflex repair loop | ☑ | `41cfb59` |
+| T4 API provider | ☑ | `feat(m0): add Anthropic Messages API provider (T4)` |
 | T5 CLI plan | ☐ | |
 | T6 Local provider (optional) | ☐ | |
 | T7 Telegram PoC | ☐ | |

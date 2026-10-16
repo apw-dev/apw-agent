@@ -35,12 +35,18 @@ type ModelRequest struct {
 	Options   map[string]string `json:"options,omitempty"`
 }
 
+type Usage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
 type ModelResponse struct {
 	RequestID     string    `json:"request_id"`
 	Provider      string    `json:"provider"`
 	ModelObserved string    `json:"model_observed"`
 	Content       string    `json:"content"`
 	Completed     bool      `json:"completed"`
+	Usage         *Usage    `json:"usage,omitempty"`
 	RawResponse   string    `json:"raw_response,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`
 }

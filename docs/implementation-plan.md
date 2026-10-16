@@ -187,11 +187,11 @@ Telegram / Discord / CLI
 2. ~~Triad engine ขั้นต้น: Architect (`ExecutionPlan` + `Validate`), Surgeon (read-before-write, hash drift, AST symbols), Reflex (fmt/vet/build/test + diagnostics)~~ (ทำแล้ว)
 3. เขียนข้อสรุปสถาปัตยกรรมสั้น ๆ เรื่อง parser, provider รายแรก, patch format, verification และ task lifecycle
 4. ~~สร้าง config สำหรับ provider, model, endpoint, credential reference, timeout, workspace policy และ budget; แยก secret จาก config ที่ commit ได้~~ (ทำแล้ว — `internal/config`, `apw.example.json`)
-5. ~~เพิ่ม mock provider ที่ให้ผล deterministic สำหรับ integration test~~ (ทำแล้ว — `internal/provider/mock`) และ smoke test การเชื่อมต่อ provider จริงแบบ opt-in
+5. ~~เพิ่ม mock provider ที่ให้ผล deterministic สำหรับ integration test และ smoke test การเชื่อมต่อ provider จริงแบบ opt-in~~ (ทำแล้ว — `internal/provider/mock`, `internal/provider/api` พร้อม `APW_LIVE_TEST=1`)
 6. ~~ตั้ง build/test/vet และ format check ใน CI โดยไม่ต้องใช้ API key~~ (ทำแล้ว — `.github/workflows/ci.yml`)
 7. ทดลอง Telegram private bot ด้วยบัญชีที่เจ้าของเปิดใช้; ไม่เปิดรับผู้ใช้ทั่วไปในขั้นทดลอง
-8. พิสูจน์ provider round trip: ส่ง planning prompt ผ่าน API provider → รับคำตอบ → `ParsePlan` + `Validate` → บันทึก model observation และ usage; ทดสอบ response ยาว, JSON ผิดรูป และ timeout
-9. ตัดสินใจ API provider รายแรกและ local runtime ที่รองรับ พร้อมกำหนดรูปแบบ credential reference
+8. ~~พิสูจน์ provider round trip: ส่ง planning prompt ผ่าน API provider → รับคำตอบ → `ParsePlan` + `Validate` → บันทึก model observation และ usage; ทดสอบ response ยาว, JSON ผิดรูป และ timeout~~ (ทำแล้ว — `internal/provider/api`)
+9. ~~ตัดสินใจ API provider รายแรกและ local runtime ที่รองรับ พร้อมกำหนดรูปแบบ credential reference~~ (ทำแล้ว — Anthropic Messages API ผ่าน `api_key_env` และ OpenAI-compatible local endpoint)
 
 ### M1 — Safe execution
 
