@@ -597,13 +597,31 @@ async function loadSymbols() {
   ).join('');
 }
 
-function appendCard(title, body) {
+function appendCard(title, body, badgeText, badgeColor) {
   const feed = document.getElementById('feed');
   const card = document.createElement('div');
   card.className = 'card';
   const h = document.createElement('div');
   h.className = 'card-title';
-  h.textContent = title;
+  h.style.display = 'flex';
+  h.style.justifyContent = 'space-between';
+  h.style.alignItems = 'center';
+
+  const tSpan = document.createElement('span');
+  tSpan.textContent = title;
+  h.appendChild(tSpan);
+
+  if (badgeText) {
+    const bSpan = document.createElement('span');
+    bSpan.textContent = badgeText;
+    bSpan.style.padding = '2px 8px';
+    bSpan.style.borderRadius = '4px';
+    bSpan.style.fontSize = '11px';
+    bSpan.style.background = badgeColor || '#262c36';
+    bSpan.style.color = '#fff';
+    h.appendChild(bSpan);
+  }
+
   const pre = document.createElement('pre');
   pre.textContent = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
   card.appendChild(h);
@@ -612,14 +630,58 @@ function appendCard(title, body) {
   feed.scrollTop = feed.scrollHeight;
 }
 
+function formatNs(ns) {
+  if (!ns) return '0ms';
+  const ms = Math.round(ns / 1e6);
+  return ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : ms + 'ms';
+}
+
+function appendExecutionReport(data) {
+  const plan = data.plan || {};
+  const steps = (data.steps || []).map(s =>
+    '  ' + (s.success ? '✓' : '✗') + ' [' + s.action.toUpperCase() + '] ' + s.subtask_id + (s.target_file ? ' (' + s.target_file + ')' : '') + ' — ' + s.message
+  ).join('\n');
+
+  const attempts = (data.reflex_attempts || []).map(a =>
+    '  • รอบที่ ' + a.Number + ': ' + (a.Result && a.Result.passed ? 'PASS (fmt -> vet -> build -> test ผ่านทั้งหมด)' : 'FAIL ที่ขั้นตอน ' + (a.Result ? a.Result.failed_stage : 'unknown')) + ' [' + formatNs(a.Result ? a.Result.duration : 0) + ']'
+  ).join('\n');
+
+  const summary =
+    'เป้าหมาย (Objective): ' + (plan.objective || '-') + '\n' +
+    'ไฟล์ที่เกี่ยวข้อง     : ' + ((plan.affected_files || []).join(', ') || '-') + '\n\n' +
+    'ขั้นตอนการทำงาน (Surgeon Steps):\n' + (steps || '  (ไม่มีขั้นตอน)') + '\n\n' +
+    'ผลการตรวจสอบ (Reflex Verification):\n' + (attempts || '  (ไม่ได้รัน)');
+
+  appendCard(
+    'Triad Execution Report — ' + (plan.plan_id || data.task_id),
+    summary,
+    data.passed ? 'PASS · ' + formatNs(data.duration) : 'FAIL · ' + formatNs(data.duration),
+    data.passed ? '#2ea043' : '#f85149'
+  );
+}
+
+function appendPlanCard(plan) {
+  const subtasks = (plan.subtasks || []).map(st =>
+    '  • [' + st.action.toUpperCase() + '] ' + st.id + (st.target_file ? ' (' + st.target_file + ')' : '') + ': ' + st.description
+  ).join('\n');
+
+  const summary =
+    'เป้าหมาย (Objective): ' + (plan.objective || '-') + '\n' +
+    'ไฟล์ที่เกี่ยวข้อง     : ' + ((plan.affected_files || []).join(', ') || '-') + '\n\n' +
+    'แผนงานย่อย (Subtasks):\n' + subtasks + '\n\n' +
+    'เกณฑ์ผ่าน (Acceptance Criteria):\n  - ' + ((plan.acceptance_criteria || []).join('\n  - ') || '-');
+
+  appendCard('Architect ExecutionPlan — ' + plan.plan_id, summary, 'VALIDATED', '#d97757');
+}
+
 async function runVerify() {
-  appendCard('Reflex Engine — Running closed-loop verification...', 'gofmt -> go vet -> go build -> go test');
+  appendCard('Reflex Engine — กำลังตรวจสอบโค้ด...', 'gofmt -> go vet -> go build -> go test', 'RUNNING', '#d29922');
   const r = await fetch('/api/verify', { method: 'POST' });
   const res = await r.json();
   if (res.passed) {
-    appendCard('PASS — Verification Succeeded (' + res.duration_ms + 'ms)', 'All stages (fmt, vet, build, test) passed!');
+    appendCard('Reflex Verification', 'ผ่านครบทุกขั้นตอน (gofmt, go vet, go build, go test)', 'PASS · ' + res.duration_ms + 'ms', '#2ea043');
   } else {
-    appendCard('FAIL — Stage: ' + res.failed_stage, res.formatted);
+    appendCard('Reflex Verification — ล้มเหลวที่ขั้นตอน: ' + res.failed_stage, res.formatted, 'FAIL', '#f85149');
   }
 }
 
@@ -630,7 +692,7 @@ async function runTask(mode) {
   input.value = '';
 
   document.getElementById('pill-brain2').textContent = 'Brain 2 (Deep): Architect [Active]';
-  appendCard('apw > ' + instruction, 'Executing mode: ' + mode.toUpperCase() + '...');
+  appendCard('apw > ' + instruction, 'กำลังประมวลผลโหมด ' + (mode === 'plan' ? 'PLAN (วางแผน)' : 'TRIAD EXECUTE (วางแผน -> แก้ไข -> ตรวจสอบ)') + '...', mode.toUpperCase(), '#d97757');
 
   try {
     const endpoint = mode === 'plan' ? '/api/plan' : '/api/run';
@@ -641,10 +703,14 @@ async function runTask(mode) {
     });
     if (!r.ok) {
       const errText = await r.text();
-      appendCard('Error', errText);
+      appendCard('เกิดข้อผิดพลาด', errText, 'ERROR', '#f85149');
     } else {
       const data = await r.json();
-      appendCard(mode === 'plan' ? 'ExecutionPlan Generated' : 'Triad Execution Report', data);
+      if (mode === 'plan') {
+        appendPlanCard(data);
+      } else {
+        appendExecutionReport(data);
+      }
       loadSymbols();
     }
   } finally {
