@@ -85,6 +85,9 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	case "model", "models", "config":
 		return runModelCmdWithStdin(args[1:], stdin, stdout, stderr)
 
+	case "auth", "login":
+		return runAuthCmdWithStdin(args[1:], stdin, stdout, stderr)
+
 	case "skills":
 		return runSkillsCmd(".", stdout)
 
@@ -245,6 +248,13 @@ func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 			_ = runModelCmdWithStdin(sub, stdin, stdout, stderr)
 
+		case "auth", "login":
+			var sub []string
+			if rest != "" {
+				sub = strings.Fields(rest)
+			}
+			_ = runAuthCmdWithStdin(sub, stdin, stdout, stderr)
+
 		case "ui", "desktop":
 			srv := desktop.NewServer("./apw.json", version)
 			url, err := srv.StartAndOpen(context.Background(), "127.0.0.1:0", true)
@@ -327,6 +337,31 @@ func runDaemonCmd(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+func runAuthCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	cfgPath := "./apw.json"
+	if len(args) == 0 && stdin == os.Stdin {
+		if rc := tui.RunInteractiveAuthMenu(cfgPath, stdin, stdout, stderr); rc >= 0 {
+			return rc
+		}
+	}
+
+	cfg, statuses := tui.LoadSyncedConfig(".", cfgPath, true)
+	_ = cfg.Save(cfgPath)
+
+	fmt.Fprintln(stdout, "APW Authentication & Live Model Discovery:")
+	for _, st := range statuses {
+		mark := "○"
+		if st.Connected {
+			mark = "✓"
+		}
+		fmt.Fprintf(stdout, "  %s %-32s : %s\n", mark, st.Name, st.Detail)
+		for _, m := range st.Models {
+			fmt.Fprintf(stdout, "      - %-28s | %s (%s)\n", m.ProviderKey, m.DisplayName, m.ProviderType)
+		}
+	}
+	return 0
+}
+
 func runModelCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfgPath := "./apw.json"
 	if len(args) == 0 && stdin == os.Stdin {
@@ -335,29 +370,29 @@ func runModelCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 
-	cfg, err := config.LoadOrDefault(cfgPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "Error loading config: %v\n", err)
+	cfg, statuses := tui.LoadSyncedConfig(".", cfgPath, len(args) > 0 && strings.ToLower(args[0]) == "refresh")
+	if cfg == nil {
+		fmt.Fprintln(stderr, "Error loading config")
 		return 1
 	}
 
-	if len(args) == 0 || strings.ToLower(args[0]) == "status" || strings.ToLower(args[0]) == "list" {
+	if len(args) == 0 || strings.ToLower(args[0]) == "status" || strings.ToLower(args[0]) == "list" || strings.ToLower(args[0]) == "refresh" {
 		archProv := cfg.Providers[cfg.Roles.Architect]
 		reflexProv := cfg.Providers[cfg.Roles.Reflex]
 		fmt.Fprintln(stdout, "Active Dual-Brain Model Routing:")
 		fmt.Fprintf(stdout, "  Brain 1 (Reflex)    : %s -> %s (%s)\n", cfg.Roles.Reflex, reflexProv.Model, reflexProv.Type)
 		fmt.Fprintf(stdout, "  Brain 2 (Architect) : %s -> %s (%s)\n", cfg.Roles.Architect, archProv.Model, archProv.Type)
-		fmt.Fprintln(stdout, "\nConfigured Providers:")
-		for name, p := range cfg.Providers {
-			endpointInfo := p.Endpoint
-			if endpointInfo == "" {
-				endpointInfo = "built-in"
+		fmt.Fprintln(stdout, "\nAuthenticated Sources:")
+		for _, st := range statuses {
+			mark := "○"
+			if st.Connected {
+				mark = "✓"
 			}
-			fmt.Fprintf(stdout, "  - %-15s | type=%-6s | model=%-24s | endpoint=%s\n", name, p.Type, p.Model, endpointInfo)
+			fmt.Fprintf(stdout, "  %s %-32s : %s\n", mark, st.Name, st.Detail)
 		}
 		fmt.Fprintln(stdout, "\nCommands:")
-		fmt.Fprintln(stdout, "  apw model                                Open interactive model selector")
-		fmt.Fprintln(stdout, "  apw model init                           Generate ./apw.json in current workspace")
+		fmt.Fprintln(stdout, "  apw model                                Open interactive live model selector")
+		fmt.Fprintln(stdout, "  apw auth                                 Connect ChatGPT Sub/API, Claude Sub/API, or AGY CLI")
 		fmt.Fprintln(stdout, "  apw model set <architect|reflex> <name>  Switch active provider for a brain role")
 		return 0
 	}
@@ -380,7 +415,7 @@ func runModelCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writ
 		role := strings.ToLower(args[1])
 		provName := args[2]
 		if _, ok := cfg.Providers[provName]; !ok {
-			fmt.Fprintf(stderr, "Unknown provider %q. Run 'apw model' to see available providers.\n", provName)
+			fmt.Fprintf(stderr, "Unknown provider %q. Run 'apw auth' or 'apw model' to see available providers.\n", provName)
 			return 1
 		}
 		switch role {
@@ -403,7 +438,7 @@ func runModelCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return 0
 
 	default:
-		fmt.Fprintln(stderr, "Usage: apw model [status|init|set <architect|reflex|all> <provider>]")
+		fmt.Fprintln(stderr, "Usage: apw model [status|refresh|init|set <architect|reflex|all> <provider>]")
 		return 2
 	}
 }
@@ -468,6 +503,10 @@ func parseConfigAndTaskArgs(cmdName string, args []string, stderr io.Writer) (st
 func loadConfigForCLI(cfgPath string, explicit bool) (*config.Config, error) {
 	if explicit {
 		return config.Load(cfgPath)
+	}
+	cfg, _ := tui.LoadSyncedConfig(".", cfgPath, false)
+	if cfg != nil {
+		return cfg, nil
 	}
 	return config.LoadOrDefault(cfgPath)
 }
@@ -670,7 +709,8 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  plan [--config path] \"<task>\"  Generate an ExecutionPlan and save to .apw/plans/")
 	fmt.Fprintln(w, "  verify [dir]                   Run Reflex closed-loop verification (fmt -> vet -> build -> test)")
 	fmt.Fprintln(w, "  symbols <file.go>              Inspect AST code symbols using Surgeon inspector")
-	fmt.Fprintln(w, "  model [status|init|set ...]    View or configure Brain 1 (Reflex) & Brain 2 (Architect) models")
+	fmt.Fprintln(w, "  model [status|refresh|set ...] Select live models for Brain 1 (Reflex) & Brain 2 (Architect)")
+	fmt.Fprintln(w, "  auth                           Connect ChatGPT Sub/API, Claude Sub/API, or AGY CLI")
 	fmt.Fprintln(w, "  daemon [status|start|stop]     Manage apwd background agent daemon")
 	fmt.Fprintln(w, "  version                        Show version and architecture info")
 }

@@ -12,16 +12,27 @@ import (
 	"github.com/apiwat/apw-agent/internal/core"
 	"github.com/apiwat/apw-agent/internal/provider"
 	"github.com/apiwat/apw-agent/internal/provider/api"
+	"github.com/apiwat/apw-agent/internal/provider/cli"
 	"github.com/apiwat/apw-agent/internal/provider/local"
 )
 
 // New instantiates a provider.Provider from a ProviderConfig.
 func New(cfg config.ProviderConfig) (provider.Provider, error) {
+	timeout := time.Duration(cfg.TimeoutSec) * time.Second
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
 	switch cfg.Type {
 	case config.ProviderAPI:
 		return api.New(cfg)
-	case config.ProviderLocal:
+	case config.ProviderOpenAI, config.ProviderLocal:
 		return local.New(cfg)
+	case config.ProviderAGY:
+		return cli.New(cli.BackendAGY, cfg.Model, timeout), nil
+	case config.ProviderClaudeCLI:
+		return cli.New(cli.BackendClaude, cfg.Model, timeout), nil
+	case config.ProviderCodexCLI:
+		return cli.New(cli.BackendCodex, cfg.Model, timeout), nil
 	case config.ProviderMock:
 		return &builtinEngineProvider{model: cfg.Model}, nil
 	default:

@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/apiwat/apw-agent/internal/auth"
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/daemon"
 )
@@ -46,7 +47,8 @@ type SlashCommand struct {
 // DefaultCommands returns the ordered list of slash commands available in the APW CLI.
 func DefaultCommands() []SlashCommand {
 	return []SlashCommand{
-		{Name: "/model", Usage: "/model [set <role> <provider>]", Description: "Configure Brain 1 (Reflex) & Brain 2 (Architect) models or add endpoints", TakesArgs: false},
+		{Name: "/model", Usage: "/model", Description: "Select live models for Brain 1 (Reflex) & Brain 2 (Architect) from connected accounts", TakesArgs: false},
+		{Name: "/auth", Usage: "/auth", Description: "Connect & authenticate ChatGPT Sub/API, Claude Sub/API, and AGY CLI", TakesArgs: false},
 		{Name: "/plan", Usage: "/plan <instruction>", Description: "Spec-First Planning: create ExecutionPlan (.apw/plans/) before touching code", TakesArgs: true},
 		{Name: "/run", Usage: "/run <instruction>", Description: "Execute full Triad loop (Architect -> Surgeon -> Reflex) on a task", TakesArgs: true},
 		{Name: "/verify", Usage: "/verify [dir]", Description: "Run Reflex closed-loop verification (gofmt -> go vet -> go build -> go test)", TakesArgs: false},
@@ -68,7 +70,6 @@ func FilterCommands(input string) []SlashCommand {
 	if !strings.HasPrefix(trimmed, "/") {
 		return nil
 	}
-	// If the user already typed a space after the command name, hide autocomplete dropdown
 	if strings.Contains(trimmed, " ") {
 		return nil
 	}
@@ -119,10 +120,20 @@ func (s *Session) ResetSession() {
 	s.History = nil
 }
 
+// LoadSyncedConfig loads apw.json (or default) and merges live authenticated models.
+func LoadSyncedConfig(workspace, cfgPath string, forceRefresh bool) (*config.Config, []auth.ConnectionStatus) {
+	cfg, err := config.LoadOrDefault(cfgPath)
+	if err != nil {
+		cfg, _ = config.LoadOrDefault("")
+	}
+	statuses := auth.SyncConfigWithDiscovered(workspace, cfg, forceRefresh)
+	return cfg, statuses
+}
+
 // RenderDashboard draws the two-column framed APW header box with emblem, brains, daemon, and categorized skills.
 func RenderDashboard(w io.Writer, workspace, version, sessionID string) {
 	dState := daemon.EnsureRunning(workspace)
-	cfg, _ := config.LoadOrDefault("./apw.json")
+	cfg, statuses := LoadSyncedConfig(workspace, "./apw.json", false)
 	stack := config.DetectStack(workspace)
 	wsPath := formatWorkspace(workspace)
 
@@ -137,6 +148,17 @@ func RenderDashboard(w io.Writer, workspace, version, sessionID string) {
 		}
 	}
 
+	var connectedSources []string
+	for _, st := range statuses {
+		if st.Connected {
+			connectedSources = append(connectedSources, st.Source)
+		}
+	}
+	authSummary := "Built-in (/auth to connect)"
+	if len(connectedSources) > 0 {
+		authSummary = strings.Join(connectedSources, " · ")
+	}
+
 	leftColWidth := 38
 	rightColWidth := 48
 	totalInner := leftColWidth + 3 + rightColWidth
@@ -148,8 +170,9 @@ func RenderDashboard(w io.Writer, workspace, version, sessionID string) {
 		"",
 		fmt.Sprintf(" %sBrain 1 (Reflex)%s : %s%s%s", cGray, cReset, cGreen, truncatePlain(reflexModel, 18), cReset),
 		fmt.Sprintf(" %sBrain 2 (Deep)%s   : %s%s%s", cGray, cReset, cCyan, truncatePlain(archModel, 18), cReset),
-		fmt.Sprintf(" %sDaemon (apwd)%s    : %sPID %d · %dms%s", cGray, cReset, cGold, dState.PID, dState.LatencyMs, cReset),
-		fmt.Sprintf(" %sWorkspace%s        : %s%s (%s)%s", cGray, cReset, cWhite, truncatePlain(wsPath, 15), stack, cReset),
+		fmt.Sprintf(" %sConnected Auth%s   : %s%s%s", cGray, cReset, cGold, truncatePlain(authSummary, 18), cReset),
+		fmt.Sprintf(" %sDaemon (apwd)%s    : %sPID %d · %dms%s", cGray, cReset, cWhite, dState.PID, dState.LatencyMs, cReset),
+		fmt.Sprintf(" %sWorkspace%s        : %s%s (%s)%s", cGray, cReset, cWhite, truncatePlain(wsPath, 14), stack, cReset),
 		fmt.Sprintf(" %sSession%s          : %s%s%s", cGray, cReset, cGray, sessionID, cReset),
 	}
 
@@ -172,7 +195,7 @@ func RenderDashboard(w io.Writer, workspace, version, sessionID string) {
 		rightLines = append(rightLines, fmt.Sprintf("%s%s:%s %s%s%s", cAmber, cat, cReset, cWhite, truncatePlain(display, rightColWidth-len(cat)-3), cReset))
 	}
 	rightLines = append(rightLines, "")
-	rightLines = append(rightLines, fmt.Sprintf("%s4 engines · %d skills · /help or /model%s", cGray, totalSkills, cReset))
+	rightLines = append(rightLines, fmt.Sprintf("%s4 engines · %d skills · /model · /auth%s", cGray, totalSkills, cReset))
 
 	maxRows := len(leftLines)
 	if len(rightLines) > maxRows {
@@ -197,8 +220,8 @@ func RenderDashboard(w io.Writer, workspace, version, sessionID string) {
 		fmt.Fprintf(w, "%s│%s%s %s│%s %s%s│%s\n", cAmber, cReset, lPadded, cDim+cAmber, cReset, rPadded, cAmber, cReset)
 	}
 	fmt.Fprintln(w, botBorder)
-	fmt.Fprintf(w, "\n%sWelcome to Apiwat Agent!%s Type your instruction or %s/%s for commands (%s/model%s to switch models).\n",
-		cBold+cWhite, cReset, cCyan, cReset, cCyan, cReset)
+	fmt.Fprintf(w, "\n%sWelcome to Apiwat Agent!%s Type your instruction or %s/%s for commands (%s/model%s · %s/auth%s).\n",
+		cBold+cWhite, cReset, cCyan, cReset, cCyan, cReset, cCyan, cReset)
 }
 
 func formatSkillList(items []string, maxShow int) string {
@@ -210,7 +233,6 @@ func formatSkillList(items []string, maxShow int) string {
 }
 
 // ReadInteractiveLine reads a command line with live `/` dropdown autocomplete, arrow navigation, and mode toggling.
-// If the terminal does not support raw mode, it returns an error so the caller can fall back to line scanner.
 func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 	raw, err := enableRawTerminal()
 	if err != nil {
@@ -223,7 +245,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 		width = 92
 	}
 
-	cfg, _ := config.LoadOrDefault("./apw.json")
+	cfg, _ := LoadSyncedConfig(s.Workspace, "./apw.json", false)
 	dState := daemon.Status(s.Workspace)
 	reflexModel := "APW Engine"
 	archModel := "APW Engine"
@@ -238,7 +260,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 
 	hr := fmt.Sprintf("%s%s%s", cDim+cGray, strings.Repeat("─", width), cReset)
 	pill := fmt.Sprintf(" %s ⚡ %s %s│%s 🧠 %s %s│%s ctx [░░░░░░░░░░] %s│%s ⏱ %dms %s",
-		bgPill+cGold, reflexModel, cGray, cCyan, archModel, cGray, cWhite, cGray, cGreen, dState.LatencyMs, cReset)
+		bgPill+cGold, truncatePlain(reflexModel, 22), cGray, cCyan, truncatePlain(archModel, 22), cGray, cWhite, cGray, cGreen, dState.LatencyMs, cReset)
 
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, pill)
@@ -250,7 +272,6 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 
 	redraw := func(final bool) {
 		inputStr := string(buf)
-		// Clear from start of current input line to bottom of screen
 		fmt.Fprint(stdout, "\r\x1b[J")
 
 		if final {
@@ -259,9 +280,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			return
 		}
 
-		// Line 0: Input line
 		fmt.Fprintf(stdout, "%s>%s %s\r\n", cBold+cCyan, cReset, inputStr)
-		// Line 1: Bottom horizontal rule
 		fmt.Fprintf(stdout, "%s\r\n", hr)
 		linesBelow := 2
 
@@ -284,13 +303,17 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 				endIdx = len(matches)
 			}
 
+			descMax := width - 25
+			if descMax < 20 {
+				descMax = 20
+			}
 			for i := startIdx; i < endIdx; i++ {
 				m := matches[i]
 				if i == selectedIdx {
-					line := fmt.Sprintf("%s%s> %-22s%s %s%s%s", bgSelected+cBold+cCyan, "", m.Name, cReset+bgSelected, cWhite, truncatePlain(m.Description, width-26), cReset)
+					line := fmt.Sprintf("%s> %-20s%s %s%s%s", bgSelected+cBold+cCyan, m.Name, cReset+bgSelected, cWhite, truncatePlain(m.Description, descMax), cReset)
 					fmt.Fprintf(stdout, "%s\r\n", line)
 				} else {
-					fmt.Fprintf(stdout, "  %s%-22s%s %s%s%s\r\n", cWhite, m.Name, cReset, cGray, truncatePlain(m.Description, width-26), cReset)
+					fmt.Fprintf(stdout, "  %s%-20s%s %s%s%s\r\n", cWhite, m.Name, cReset, cGray, truncatePlain(m.Description, descMax), cReset)
 				}
 				linesBelow++
 			}
@@ -303,15 +326,14 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 
 			leftHint := fmt.Sprintf(" %s↑/↓%s Navigate · %senter%s Select · %stab%s Complete · %sesc%s Cancel",
 				cBold+cCyan, cGray, cBold+cCyan, cGray, cBold+cCyan, cGray, cBold+cCyan, cGray)
-			rightHint := fmt.Sprintf("%saccept-edits%s · %s%s%s", cGreen, cGray, cWhite, archModel, cReset)
-			fmt.Fprint(stdout, leftHint+"    "+rightHint)
+			rightHint := fmt.Sprintf("%saccept-edits%s · %s%s%s", cGreen, cGray, cWhite, truncatePlain(archModel, 18), cReset)
+			fmt.Fprint(stdout, leftHint+"   "+rightHint)
 		} else {
 			modeLabel := modeNames[s.ModeIndex%len(modeNames)]
-			fmt.Fprintf(stdout, " %s▸▸ %s%s %s(shift+tab to cycle · / for commands)%s",
+			fmt.Fprintf(stdout, " %s▸▸ %s%s %s(shift+tab to cycle · /model · /auth)%s",
 				cGold, modeLabel, cReset, cGray, cReset)
 		}
 
-		// Move cursor back up to Line 0 and position after `> <input>`
 		fmt.Fprintf(stdout, "\x1b[%dA\r", linesBelow)
 		colOffset := 2 + utf8.RuneCountInString(inputStr)
 		if colOffset > 0 {
@@ -329,10 +351,8 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 		}
 		b := inBuf[:n]
 
-		// Handle ANSI escape sequences (arrows, Shift+Tab, Esc)
 		if b[0] == 0x1b {
 			if n == 1 {
-				// Bare Esc key: clear current input
 				buf = nil
 				selectedIdx = 0
 				redraw(false)
@@ -340,7 +360,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			}
 			if n >= 3 && b[1] == '[' {
 				switch b[2] {
-				case 'A': // Up arrow
+				case 'A':
 					matches := FilterCommands(string(buf))
 					if len(matches) > 0 {
 						selectedIdx--
@@ -352,7 +372,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 						buf = []rune(s.History[histIdx])
 					}
 					redraw(false)
-				case 'B': // Down arrow
+				case 'B':
 					matches := FilterCommands(string(buf))
 					if len(matches) > 0 {
 						selectedIdx++
@@ -367,7 +387,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 						buf = nil
 					}
 					redraw(false)
-				case 'Z': // Shift+Tab -> cycle execution mode
+				case 'Z':
 					s.ModeIndex = (s.ModeIndex + 1) % len(modeNames)
 					redraw(false)
 				}
@@ -375,19 +395,16 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			continue
 		}
 
-		// Ctrl+C or Ctrl+D
 		if b[0] == 3 || b[0] == 4 {
 			fmt.Fprint(stdout, "\r\x1b[J\r\n")
 			return "/quit", nil
 		}
 
-		// Ctrl+L -> clear screen
 		if b[0] == 12 {
 			redraw(true)
 			return "/clear", nil
 		}
 
-		// Tab -> autocomplete selected slash command
 		if b[0] == '\t' {
 			matches := FilterCommands(string(buf))
 			if len(matches) > 0 {
@@ -406,7 +423,6 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			continue
 		}
 
-		// Enter (\r or \n)
 		if b[0] == '\r' || b[0] == '\n' {
 			matches := FilterCommands(string(buf))
 			if len(matches) > 0 {
@@ -414,7 +430,6 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 					selectedIdx = 0
 				}
 				chosen := matches[selectedIdx]
-				// If user typed partial slash command (e.g. "/mo") and pressed Enter:
 				if string(buf) != chosen.Name && chosen.TakesArgs {
 					buf = []rune(chosen.Name + " ")
 					selectedIdx = 0
@@ -428,7 +443,6 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			if finalLine != "" {
 				s.History = append(s.History, finalLine)
 			}
-			// If mode is plan-only or fast-reflex and user typed natural language:
 			if finalLine != "" && !strings.HasPrefix(finalLine, "/") {
 				switch s.ModeIndex % len(modeNames) {
 				case 1:
@@ -440,7 +454,6 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			return finalLine, nil
 		}
 
-		// Backspace (0x7f or 0x08)
 		if b[0] == 0x7f || b[0] == 0x08 {
 			if len(buf) > 0 {
 				buf = buf[:len(buf)-1]
@@ -450,7 +463,6 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			continue
 		}
 
-		// Printable UTF-8 characters
 		text := string(b)
 		for _, r := range text {
 			if r >= 32 {
@@ -462,143 +474,73 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 	}
 }
 
-// RunInteractiveModelSelector opens an arrow-key interactive menu to switch Brain 1 / Brain 2 models or add a custom provider.
-func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
+type selectorItem struct {
+	Label  string
+	Detail string
+	Action func() (bool, error) // returns (done, err)
+}
+
+func runSingleLineSelector(title string, subtitleLines []string, items []selectorItem, stdout io.Writer) int {
 	raw, err := enableRawTerminal()
 	if err != nil {
-		// Non-TTY fallback: return -1 so caller prints standard model status
 		return -1
 	}
 
-	cfg, err := config.LoadOrDefault(cfgPath)
-	if err != nil {
-		raw.restore()
-		fmt.Fprintf(stderr, "Error loading config: %v\n", err)
-		return 1
+	termW := terminalWidth()
+	if termW < 68 {
+		termW = 68
 	}
-
-	type menuOption struct {
-		Label       string
-		Description string
-		Apply       func(*config.Config) string
-		IsCustom    bool
+	labelW := 36
+	detailW := termW - labelW - 6
+	if detailW < 18 {
+		detailW = 18
 	}
-
-	// Build options from existing providers + presets
-	var provNames []string
-	for k := range cfg.Providers {
-		provNames = append(provNames, k)
-	}
-	sort.Strings(provNames)
-
-	options := []menuOption{
-		{
-			Label:       "Preset: Hybrid Pro (Recommended)",
-			Description: "Brain 2 (Architect) = claude-sonnet (API) · Brain 1 (Reflex) = ollama-local (Fast Local)",
-			Apply: func(c *config.Config) string {
-				if _, ok := c.Providers["claude-sonnet"]; ok {
-					c.Roles.Architect = "claude-sonnet"
-				}
-				if _, ok := c.Providers["ollama-local"]; ok {
-					c.Roles.Reflex = "ollama-local"
-				}
-				return "Switched to Hybrid Pro (Architect: claude-sonnet, Reflex: ollama-local)"
-			},
-		},
-		{
-			Label:       "Preset: 100% Local (Zero API Key)",
-			Description: "Brain 1 & Brain 2 both use ollama-local (qwen2.5-coder:7b @ 127.0.0.1:11434)",
-			Apply: func(c *config.Config) string {
-				if _, ok := c.Providers["ollama-local"]; ok {
-					c.Roles.Architect = "ollama-local"
-					c.Roles.Reflex = "ollama-local"
-				}
-				return "Switched both brains to ollama-local (qwen2.5-coder:7b)"
-			},
-		},
-		{
-			Label:       "Preset: Cloud API (Anthropic)",
-			Description: "Brain 2 = claude-sonnet-4 · Brain 1 = claude-3-5-haiku (uses ANTHROPIC_API_KEY)",
-			Apply: func(c *config.Config) string {
-				if _, ok := c.Providers["claude-sonnet"]; ok {
-					c.Roles.Architect = "claude-sonnet"
-				}
-				if _, ok := c.Providers["claude-haiku"]; ok {
-					c.Roles.Reflex = "claude-haiku"
-				}
-				return "Switched to Cloud API (claude-sonnet + claude-haiku)"
-			},
-		},
-		{
-			Label:       "Preset: Built-in Offline Engine",
-			Description: "Brain 1 & Brain 2 use apw-builtin (APW Engine)",
-			Apply: func(c *config.Config) string {
-				if _, ok := c.Providers["apw-builtin"]; !ok {
-					c.Providers["apw-builtin"] = config.ProviderConfig{
-						Type:       config.ProviderMock,
-						Model:      "APW Engine",
-						TimeoutSec: 30,
-					}
-				}
-				c.Roles.Architect = "apw-builtin"
-				c.Roles.Reflex = "apw-builtin"
-				return "Switched both brains to apw-builtin (APW Engine)"
-			},
-		},
-	}
-
-	for _, name := range provNames {
-		pName := name
-		pCfg := cfg.Providers[pName]
-		options = append(options, menuOption{
-			Label:       fmt.Sprintf("Set Brain 2 (Architect) -> %s", pName),
-			Description: fmt.Sprintf("model=%s (%s)", pCfg.Model, pCfg.Type),
-			Apply: func(c *config.Config) string {
-				c.Roles.Architect = pName
-				return fmt.Sprintf("Set Brain 2 (Architect) -> %s (%s)", pName, pCfg.Model)
-			},
-		})
-		options = append(options, menuOption{
-			Label:       fmt.Sprintf("Set Brain 1 (Reflex)    -> %s", pName),
-			Description: fmt.Sprintf("model=%s (%s)", pCfg.Model, pCfg.Type),
-			Apply: func(c *config.Config) string {
-				c.Roles.Reflex = pName
-				return fmt.Sprintf("Set Brain 1 (Reflex) -> %s (%s)", pName, pCfg.Model)
-			},
-		})
-	}
-
-	options = append(options, menuOption{
-		Label:       "+ Add / Configure Custom Model Provider...",
-		Description: "Add a new Ollama, LM Studio, vLLM, or Cloud API model into apw.json",
-		IsCustom:    true,
-	})
 
 	selectedIdx := 0
-	renderMenu := func() {
-		fmt.Fprint(stdout, "\r\x1b[J")
-		archP := cfg.Providers[cfg.Roles.Architect]
-		refP := cfg.Providers[cfg.Roles.Reflex]
-		fmt.Fprintf(stdout, "%s%sSelect Dual-Brain Model Configuration%s\r\n", cBold, cCyan, cReset)
-		fmt.Fprintf(stdout, "  Current Brain 1 (Reflex)    : %s%s%s (%s)\r\n", cGreen, cfg.Roles.Reflex, cReset, refP.Model)
-		fmt.Fprintf(stdout, "  Current Brain 2 (Architect) : %s%s%s (%s)\r\n\r\n", cCyan, cfg.Roles.Architect, cReset, archP.Model)
+	maxVisible := 9
 
-		linesPrinted := 4
-		for i, opt := range options {
+	render := func() {
+		fmt.Fprint(stdout, "\r\x1b[J")
+		fmt.Fprintf(stdout, "%s%s%s\r\n", cBold+cCyan, truncatePlain(title, termW-2), cReset)
+		linesPrinted := 1
+		for _, sub := range subtitleLines {
+			fmt.Fprintf(stdout, "%s\r\n", sub)
+			linesPrinted++
+		}
+		fmt.Fprintf(stdout, "\r\n")
+		linesPrinted++
+
+		startIdx := 0
+		if selectedIdx >= maxVisible {
+			startIdx = selectedIdx - maxVisible + 1
+		}
+		endIdx := startIdx + maxVisible
+		if endIdx > len(items) {
+			endIdx = len(items)
+		}
+
+		for i := startIdx; i < endIdx; i++ {
+			it := items[i]
+			lbl := truncatePlain(it.Label, labelW)
+			det := truncatePlain(it.Detail, detailW)
 			if i == selectedIdx {
-				fmt.Fprintf(stdout, "%s> %-42s%s %s%s%s\r\n", bgSelected+cBold+cCyan, opt.Label, cReset+bgSelected, cWhite, opt.Description, cReset)
+				fmt.Fprintf(stdout, "%s> %-*s%s %s%s%s\r\n", bgSelected+cBold+cCyan, labelW, lbl, cReset+bgSelected, cWhite, det, cReset)
 			} else {
-				fmt.Fprintf(stdout, "  %s%-42s%s %s%s%s\r\n", cWhite, opt.Label, cReset, cGray, opt.Description, cReset)
+				fmt.Fprintf(stdout, "  %s%-*s%s %s%s%s\r\n", cWhite, labelW, lbl, cReset, cGray, det, cReset)
 			}
 			linesPrinted++
 		}
-		fmt.Fprintf(stdout, "\r\n %s↑/↓%s Navigate · %senter%s Apply & Save to apw.json · %sesc%s Cancel",
+		if len(items) > maxVisible {
+			fmt.Fprintf(stdout, "  %s(%d/%d — use ↑/↓ to scroll)%s\r\n", cDim+cGray, selectedIdx+1, len(items), cReset)
+			linesPrinted++
+		}
+		fmt.Fprintf(stdout, "\r\n %s↑/↓%s Navigate · %senter%s Select · %sesc%s Back/Cancel",
 			cBold+cCyan, cGray, cBold+cCyan, cGray, cBold+cCyan, cReset)
 		linesPrinted++
 		fmt.Fprintf(stdout, "\x1b[%dA\r", linesPrinted)
 	}
 
-	renderMenu()
+	render()
 
 	var inBuf [16]byte
 	for {
@@ -613,7 +555,6 @@ func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr
 			if n == 1 {
 				fmt.Fprint(stdout, "\r\x1b[J")
 				raw.restore()
-				fmt.Fprintln(stdout, "Model selection cancelled.")
 				return 0
 			}
 			if n >= 3 && b[1] == '[' {
@@ -621,15 +562,15 @@ func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr
 				case 'A':
 					selectedIdx--
 					if selectedIdx < 0 {
-						selectedIdx = len(options) - 1
+						selectedIdx = len(items) - 1
 					}
-					renderMenu()
+					render()
 				case 'B':
 					selectedIdx++
-					if selectedIdx >= len(options) {
+					if selectedIdx >= len(items) {
 						selectedIdx = 0
 					}
-					renderMenu()
+					render()
 				}
 			}
 			continue
@@ -644,73 +585,278 @@ func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr
 		if b[0] == '\r' || b[0] == '\n' {
 			fmt.Fprint(stdout, "\r\x1b[J")
 			raw.restore()
-
-			chosen := options[selectedIdx]
-			if chosen.IsCustom {
-				return promptCustomProvider(cfg, cfgPath, stdin, stdout, stderr)
-			}
-
-			msg := chosen.Apply(cfg)
-			if err := cfg.Save(cfgPath); err != nil {
-				fmt.Fprintf(stderr, "Error saving %s: %v\n", cfgPath, err)
+			done, actErr := items[selectedIdx].Action()
+			if actErr != nil {
+				fmt.Fprintf(stdout, "Error: %v\n", actErr)
 				return 1
 			}
-			fmt.Fprintf(stdout, "%s✓ %s%s (saved to %s)\n", cGreen, msg, cReset, cfgPath)
-			return 0
+			if done {
+				return 0
+			}
+			// Re-enter raw mode if Action opened a nested menu and returned done=false
+			raw2, err2 := enableRawTerminal()
+			if err2 != nil {
+				return 0
+			}
+			raw = raw2
+			render()
 		}
 	}
 }
 
-func promptCustomProvider(cfg *config.Config, cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
-	reader := bufio.NewReader(stdin)
-	ask := func(label, defVal string) string {
-		if defVal != "" {
-			fmt.Fprintf(stdout, "  %s [%s]: ", label, defVal)
+// RunInteractiveModelSelector opens the live model picker fetched from AGY CLI, Claude Sub/API, ChatGPT Sub/OpenAI API, and Ollama.
+func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
+	cfg, statuses := LoadSyncedConfig(".", cfgPath, false)
+
+	var allLiveModels []auth.DiscoveredModel
+	for _, st := range statuses {
+		allLiveModels = append(allLiveModels, st.Models...)
+	}
+
+	pickModelForRole := func(roleName, roleLabel string) (bool, error) {
+		var modelItems []selectorItem
+		for _, m := range allLiveModels {
+			mod := m
+			modelItems = append(modelItems, selectorItem{
+				Label:  fmt.Sprintf("[%s] %s", mod.Source, mod.ID),
+				Detail: mod.DisplayName,
+				Action: func() (bool, error) {
+					cfg.Providers[mod.ProviderKey] = config.ProviderConfig{
+						Type:       mod.ProviderType,
+						Endpoint:   mod.Endpoint,
+						Model:      mod.ID,
+						APIKeyEnv:  mod.APIKeyEnv,
+						TimeoutSec: 120,
+					}
+					if roleName == "reflex" {
+						cfg.Roles.Reflex = mod.ProviderKey
+					} else if roleName == "architect" {
+						cfg.Roles.Architect = mod.ProviderKey
+					} else {
+						cfg.Roles.Reflex = mod.ProviderKey
+						cfg.Roles.Architect = mod.ProviderKey
+					}
+					if err := cfg.Save(cfgPath); err != nil {
+						return true, err
+					}
+					fmt.Fprintf(stdout, "%s✓ Set %s -> %s (%s via %s)%s\n", cGreen, roleLabel, mod.DisplayName, mod.ID, mod.Source, cReset)
+					return true, nil
+				},
+			})
+		}
+		if len(modelItems) == 0 {
+			fmt.Fprintln(stdout, "No live models discovered yet. Opening /auth to connect an account...")
+			_ = RunInteractiveAuthMenu(cfgPath, stdin, stdout, stderr)
+			return true, nil
+		}
+		sub := []string{
+			fmt.Sprintf("  Found %s%d live authenticated models%s from connected providers", cGreen, len(modelItems), cReset),
+		}
+		runSingleLineSelector("Select Model for "+roleLabel, sub, modelItems, stdout)
+		return true, nil
+	}
+
+	refProv := cfg.Providers[cfg.Roles.Reflex]
+	archProv := cfg.Providers[cfg.Roles.Architect]
+
+	var connSummary []string
+	for _, st := range statuses {
+		if st.Connected {
+			connSummary = append(connSummary, fmt.Sprintf("%s✓ %s (%d)%s", cGreen, st.Source, len(st.Models), cReset))
 		} else {
-			fmt.Fprintf(stdout, "  %s: ", label)
+			connSummary = append(connSummary, fmt.Sprintf("%s○ %s%s", cGray, st.Source, cReset))
 		}
-		line, _ := reader.ReadString('\n')
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return defVal
+	}
+
+	subtitles := []string{
+		fmt.Sprintf("  Brain 1 (Reflex)    : %s%s%s (%s)", cGreen, refProv.Model, cReset, cfg.Roles.Reflex),
+		fmt.Sprintf("  Brain 2 (Architect) : %s%s%s (%s)", cCyan, archProv.Model, cReset, cfg.Roles.Architect),
+		fmt.Sprintf("  Connected Sources   : %s", strings.Join(connSummary, " · ")),
+	}
+
+	mainItems := []selectorItem{
+		{
+			Label:  "⚡ Set Brain 1 (Reflex) Model...",
+			Detail: fmt.Sprintf("Choose from %d live authenticated models", len(allLiveModels)),
+			Action: func() (bool, error) {
+				return pickModelForRole("reflex", "Brain 1 (Reflex)")
+			},
+		},
+		{
+			Label:  "🧠 Set Brain 2 (Architect) Model...",
+			Detail: fmt.Sprintf("Choose from %d live authenticated models", len(allLiveModels)),
+			Action: func() (bool, error) {
+				return pickModelForRole("architect", "Brain 2 (Architect)")
+			},
+		},
+		{
+			Label:  "🔗 Set Both Brains to Same Model...",
+			Detail: "Assign one live model to both Brain 1 and Brain 2",
+			Action: func() (bool, error) {
+				return pickModelForRole("both", "Brain 1 & Brain 2")
+			},
+		},
+		{
+			Label:  "🔄 Refresh Live Models Now",
+			Detail: "Re-fetch models from AGY CLI, Claude Sub/API, ChatGPT/OpenAI, Ollama",
+			Action: func() (bool, error) {
+				fmt.Fprintln(stdout, "Fetching live models from connected accounts...")
+				cfg, statuses = LoadSyncedConfig(".", cfgPath, true)
+				_ = cfg.Save(cfgPath)
+				total := 0
+				for _, st := range statuses {
+					if st.Connected {
+						fmt.Fprintf(stdout, "  %s✓ %-28s%s : %s\n", cGreen, st.Name, cReset, st.Detail)
+						total += len(st.Models)
+					} else {
+						fmt.Fprintf(stdout, "  %s○ %-28s%s : %s\n", cGray, st.Name, cReset, st.Detail)
+					}
+				}
+				fmt.Fprintf(stdout, "%s✓ Synced %d live models into %s%s\n", cGreen, total, cfgPath, cReset)
+				return true, nil
+			},
+		},
+		{
+			Label:  "🔐 Authenticate / Connect Accounts...",
+			Detail: "Connect ChatGPT Sub/API, Claude Sub/API, or AGY CLI (/auth)",
+			Action: func() (bool, error) {
+				_ = RunInteractiveAuthMenu(cfgPath, stdin, stdout, stderr)
+				return true, nil
+			},
+		},
+	}
+
+	return runSingleLineSelector("Dual-Brain Live Model Selector (/model)", subtitles, mainItems, stdout)
+}
+
+// RunInteractiveAuthMenu opens the authentication & account connection manager (/auth).
+func RunInteractiveAuthMenu(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
+	cfg, statuses := LoadSyncedConfig(".", cfgPath, true)
+
+	var subtitles []string
+	for _, st := range statuses {
+		if st.Connected {
+			subtitles = append(subtitles, fmt.Sprintf("  %s✓ %-32s%s : %s", cGreen, st.Name, cReset, st.Detail))
+		} else {
+			subtitles = append(subtitles, fmt.Sprintf("  %s○ %-32s%s : %s", cGray, st.Name, cReset, st.Detail))
 		}
-		return line
 	}
 
-	fmt.Fprintf(stdout, "%sConfigure Custom Model Provider%s\n", cBold+cCyan, cReset)
-	name := ask("Provider alias (e.g. my-local, deepseek-api)", "custom-model")
-	pType := strings.ToLower(ask("Provider type (local / api)", "local"))
-	var pc config.ProviderConfig
-	if pType == "api" {
-		pc.Type = config.ProviderAPI
-		pc.Endpoint = ask("API Endpoint URL", "https://api.anthropic.com")
-		pc.Model = ask("Model ID", "claude-sonnet-4-20250514")
-		pc.APIKeyEnv = ask("Environment Variable Name for API Key", "ANTHROPIC_API_KEY")
-	} else {
-		pc.Type = config.ProviderLocal
-		pc.Endpoint = ask("Local Server URL (Ollama / vLLM / LM Studio)", "http://127.0.0.1:11434")
-		pc.Model = ask("Model ID", "qwen2.5-coder:7b")
+	items := []selectorItem{
+		{
+			Label:  "1. AGY CLI Connect (Google AI Pro)",
+			Detail: "Fetch live Gemini 4 / 3.8 & Claude 5.5 models from agy CLI",
+			Action: func() (bool, error) {
+				fmt.Fprintln(stdout, "Checking AGY CLI connection and fetching live models (`agy models`)...")
+				cfg, statuses = LoadSyncedConfig(".", cfgPath, true)
+				_ = cfg.Save(cfgPath)
+				for _, st := range statuses {
+					if st.Source == "AGY CLI" {
+						if st.Connected {
+							fmt.Fprintf(stdout, "%s✓ Connected to AGY CLI: %s%s\n", cGreen, st.Detail, cReset)
+							for _, m := range st.Models {
+								fmt.Fprintf(stdout, "    - %-26s (%s)\n", m.ID, m.DisplayName)
+							}
+						} else {
+							fmt.Fprintf(stdout, "%s! %s%s\n", cGold, st.Detail, cReset)
+						}
+					}
+				}
+				return true, nil
+			},
+		},
+		{
+			Label:  "2. Claude Subscription (Claude CLI)",
+			Detail: "Authenticate via Claude Code OAuth Subscription (`claude auth login`)",
+			Action: func() (bool, error) {
+				claudePath, err := exec.LookPath("claude")
+				if err != nil {
+					fmt.Fprintln(stdout, "Claude CLI is not installed in PATH. Use Option 3 to connect via ANTHROPIC_API_KEY.")
+					return true, nil
+				}
+				fmt.Fprintln(stdout, "Launching Claude Subscription OAuth login (`claude auth login`)...")
+				cmd := exec.Command(claudePath, "auth", "login")
+				cmd.Stdin = os.Stdin
+				cmd.Stdout = stdout
+				cmd.Stderr = stderr
+				_ = cmd.Run()
+				cfg, _ = LoadSyncedConfig(".", cfgPath, true)
+				_ = cfg.Save(cfgPath)
+				fmt.Fprintf(stdout, "%s✓ Claude Subscription synced with APW!%s\n", cGreen, cReset)
+				return true, nil
+			},
+		},
+		{
+			Label:  "3. Claude API (ANTHROPIC_API_KEY)",
+			Detail: "Enter Anthropic API Key & fetch live Claude models from api.anthropic.com",
+			Action: func() (bool, error) {
+				return promptAndSaveAPIKey("ANTHROPIC_API_KEY", "Anthropic Claude API Key (sk-ant-...)", cfgPath, stdin, stdout)
+			},
+		},
+		{
+			Label:  "4. ChatGPT API (OPENAI_API_KEY)",
+			Detail: "Enter OpenAI API Key & fetch live GPT-4.1 / o4-mini models from api.openai.com",
+			Action: func() (bool, error) {
+				return promptAndSaveAPIKey("OPENAI_API_KEY", "OpenAI / ChatGPT API Key (sk-...)", cfgPath, stdin, stdout)
+			},
+		},
+		{
+			Label:  "5. ChatGPT Subscription (Codex CLI)",
+			Detail: "Authenticate via ChatGPT Plus/Pro Subscription (`codex login`)",
+			Action: func() (bool, error) {
+				codexPath, err := exec.LookPath("codex")
+				if err != nil {
+					fmt.Fprintln(stdout, "OpenAI Codex CLI (`codex`) not found. Install via `npm i -g @openai/codex` or use Option 4 (OPENAI_API_KEY).")
+					return true, nil
+				}
+				fmt.Fprintln(stdout, "Launching ChatGPT Subscription OAuth (`codex login`)...")
+				cmd := exec.Command(codexPath, "login")
+				cmd.Stdin = os.Stdin
+				cmd.Stdout = stdout
+				cmd.Stderr = stderr
+				_ = cmd.Run()
+				cfg, _ = LoadSyncedConfig(".", cfgPath, true)
+				_ = cfg.Save(cfgPath)
+				fmt.Fprintf(stdout, "%s✓ ChatGPT Subscription synced with APW!%s\n", cGreen, cReset)
+				return true, nil
+			},
+		},
+		{
+			Label:  "6. Refresh & Sync All Live Models",
+			Detail: "Re-scan AGY CLI, Claude, ChatGPT/OpenAI, and Ollama and update apw.json",
+			Action: func() (bool, error) {
+				cfg, statuses = LoadSyncedConfig(".", cfgPath, true)
+				_ = cfg.Save(cfgPath)
+				fmt.Fprintf(stdout, "%s✓ Refreshed all providers and updated %s%s\n", cGreen, cfgPath, cReset)
+				return true, nil
+			},
+		},
 	}
-	pc.TimeoutSec = 120
 
-	cfg.Providers[name] = pc
-	roleChoice := strings.ToLower(ask("Assign to which Brain? (architect / reflex / both)", "both"))
-	switch roleChoice {
-	case "architect", "brain2":
-		cfg.Roles.Architect = name
-	case "reflex", "brain1":
-		cfg.Roles.Reflex = name
-	default:
-		cfg.Roles.Architect = name
-		cfg.Roles.Reflex = name
-	}
+	return runSingleLineSelector("APW Authentication & Live Model Hub (/auth)", subtitles, items, stdout)
+}
 
-	if err := cfg.Save(cfgPath); err != nil {
-		fmt.Fprintf(stderr, "Error saving config: %v\n", err)
-		return 1
+func promptAndSaveAPIKey(envName, label, cfgPath string, stdin io.Reader, stdout io.Writer) (bool, error) {
+	reader := bufio.NewReader(stdin)
+	fmt.Fprintf(stdout, "  Enter %s: ", label)
+	key, _ := reader.ReadString('\n')
+	key = strings.TrimSpace(key)
+	if key == "" {
+		fmt.Fprintln(stdout, "Cancelled (empty key).")
+		return true, nil
 	}
-	fmt.Fprintf(stdout, "%s✓ Added provider %q (%s) and saved to %s%s\n", cGreen, name, pc.Model, cfgPath, cReset)
-	return 0
+	if err := config.SaveAuthKey(".", envName, key); err != nil {
+		return true, err
+	}
+	_ = os.Setenv(envName, key)
+	cfg, statuses := LoadSyncedConfig(".", cfgPath, true)
+	_ = cfg.Save(cfgPath)
+	total := 0
+	for _, st := range statuses {
+		total += len(st.Models)
+	}
+	fmt.Fprintf(stdout, "%s✓ Saved %s to .apw/auth.json (gitignored) and synced %d live models!%s\n", cGreen, envName, total, cReset)
+	return true, nil
 }
 
 func visibleLen(s string) int {

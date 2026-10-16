@@ -28,13 +28,14 @@ const (
 type Provider struct {
 	cfg        config.ProviderConfig
 	endpoint   string
+	apiKey     string
 	timeout    time.Duration
 	client     *http.Client
 	MaxRetries int
 	BaseDelay  time.Duration
 }
 
-// New creates a Local Provider from a validated ProviderConfig.
+// New creates a Local or OpenAI-compatible Provider from a validated ProviderConfig.
 func New(cfg config.ProviderConfig) (*Provider, error) {
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("local provider: model is required")
@@ -42,7 +43,20 @@ func New(cfg config.ProviderConfig) (*Provider, error) {
 
 	endpoint := strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/")
 	if endpoint == "" {
-		endpoint = defaultEndpoint
+		if cfg.Type == config.ProviderOpenAI {
+			endpoint = "https://api.openai.com"
+		} else {
+			endpoint = defaultEndpoint
+		}
+	}
+
+	var apiKey string
+	if strings.TrimSpace(cfg.APIKeyEnv) != "" {
+		k, err := cfg.APIKey()
+		if err != nil && cfg.Type == config.ProviderOpenAI {
+			return nil, err
+		}
+		apiKey = k
 	}
 
 	timeout := time.Duration(cfg.TimeoutSec) * time.Second
@@ -53,6 +67,7 @@ func New(cfg config.ProviderConfig) (*Provider, error) {
 	return &Provider{
 		cfg:        cfg,
 		endpoint:   endpoint,
+		apiKey:     apiKey,
 		timeout:    timeout,
 		client:     &http.Client{},
 		MaxRetries: defaultMaxRetries,
@@ -62,6 +77,9 @@ func New(cfg config.ProviderConfig) (*Provider, error) {
 
 // Name returns the provider identifier.
 func (p *Provider) Name() string {
+	if p.cfg.Type == config.ProviderOpenAI {
+		return "openai"
+	}
 	return "local"
 }
 
@@ -155,6 +173,9 @@ func (p *Provider) doOnce(ctx context.Context, requestID string, payload []byte)
 		return nil, 0, false, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if p.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {

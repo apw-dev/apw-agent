@@ -14,9 +14,13 @@ import (
 type ProviderType string
 
 const (
-	ProviderAPI   ProviderType = "api"
-	ProviderLocal ProviderType = "local"
-	ProviderMock  ProviderType = "mock"
+	ProviderAPI       ProviderType = "api"
+	ProviderOpenAI    ProviderType = "openai"
+	ProviderLocal     ProviderType = "local"
+	ProviderAGY       ProviderType = "agy"
+	ProviderClaudeCLI ProviderType = "claude-cli"
+	ProviderCodexCLI  ProviderType = "codex-cli"
+	ProviderMock      ProviderType = "mock"
 )
 
 // ProviderConfig defines connection and model settings for a single provider.
@@ -28,17 +32,52 @@ type ProviderConfig struct {
 	TimeoutSec int          `json:"timeout_sec,omitempty"` // default 120
 }
 
-// APIKey resolves the secret key from the environment variable named in APIKeyEnv.
+// APIKey resolves the secret key from the environment variable named in APIKeyEnv, or from .apw/auth.json.
 func (p ProviderConfig) APIKey() (string, error) {
 	envName := strings.TrimSpace(p.APIKeyEnv)
 	if envName == "" {
 		return "", errors.New("config: api_key_env is not set")
 	}
-	val := os.Getenv(envName)
-	if val == "" {
-		return "", fmt.Errorf("config: environment variable %q is not set or empty", envName)
+	if val := os.Getenv(envName); val != "" {
+		return val, nil
 	}
-	return val, nil
+	if val := LoadSavedKey(".", envName); val != "" {
+		return val, nil
+	}
+	return "", fmt.Errorf("config: environment variable %q is not set or empty", envName)
+}
+
+// SaveAuthKey stores an API key reference locally in .apw/auth.json (which is gitignored).
+func SaveAuthKey(workspace, envName, secret string) error {
+	dir := filepath.Join(workspace, ".apw")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	authPath := filepath.Join(dir, "auth.json")
+	keys := make(map[string]string)
+	if data, err := os.ReadFile(authPath); err == nil {
+		_ = json.Unmarshal(data, &keys)
+	}
+	keys[strings.TrimSpace(envName)] = strings.TrimSpace(secret)
+	out, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(authPath, out, 0600)
+}
+
+// LoadSavedKey reads a saved API key from .apw/auth.json if present.
+func LoadSavedKey(workspace, envName string) string {
+	authPath := filepath.Join(workspace, ".apw", "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return ""
+	}
+	var keys map[string]string
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(keys[strings.TrimSpace(envName)])
 }
 
 // Config holds the top-level configuration for apw.
@@ -196,16 +235,16 @@ func (c *Config) Validate() error {
 
 	for name, p := range c.Providers {
 		switch p.Type {
-		case ProviderAPI:
+		case ProviderAPI, ProviderOpenAI:
 			if strings.TrimSpace(p.APIKeyEnv) == "" {
-				return fmt.Errorf("config: provider %q (type api) requires api_key_env", name)
+				return fmt.Errorf("config: provider %q (type %s) requires api_key_env", name, p.Type)
 			}
 			if strings.TrimSpace(p.Model) == "" {
-				return fmt.Errorf("config: provider %q (type api) requires model", name)
+				return fmt.Errorf("config: provider %q (type %s) requires model", name, p.Type)
 			}
-		case ProviderLocal:
+		case ProviderLocal, ProviderAGY, ProviderClaudeCLI, ProviderCodexCLI:
 			if strings.TrimSpace(p.Model) == "" {
-				return fmt.Errorf("config: provider %q (type local) requires model", name)
+				return fmt.Errorf("config: provider %q (type %s) requires model", name, p.Type)
 			}
 		case ProviderMock:
 		default:
