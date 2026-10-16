@@ -20,9 +20,9 @@ func TestRun_InteractiveBannerAndCommands(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"▄▀█ █▀█ █░█░█",
-		"Brain 1 (Reflex) : Jev Engine [Active",
-		"Brain 2 (Deep)   : Architect  [Standby]",
-		"Daemon (Hermes)  : Running (PID:",
+		"Brain 1 (Reflex) : Reflex Engine [Active",
+		"Brain 2 (Deep)   : Architect     [Standby]",
+		"Daemon (apwd)    : Running (PID:",
 		"Skills Loaded",
 		"Workspace        :",
 		"apw > ",

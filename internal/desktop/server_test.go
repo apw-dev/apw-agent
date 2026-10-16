@@ -20,7 +20,7 @@ func TestServer_Endpoints(t *testing.T) {
 	}
 
 	cfgPath := filepath.Join(ws, "apw.json")
-	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "providers": {"m": {"type": "mock", "model": "Jev Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
+	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "providers": {"m": {"type": "mock", "model": "APW Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
 	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestServer_Endpoints(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
-	if st.Brain1Name != "Jev Engine" || !st.DaemonRunning {
+	if st.Brain1Name != "Reflex Engine" || !st.DaemonRunning {
 		t.Errorf("unexpected status payload: %+v", st)
 	}
 

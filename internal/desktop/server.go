@@ -132,7 +132,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, statusPayload{
 		Version:       s.Version,
-		Brain1Name:    "Jev Engine",
+		Brain1Name:    "Reflex Engine",
 		Brain1State:   "Active",
 		Brain1Latency: dState.LatencyMs,
 		Brain2Name:    "Architect",
@@ -535,9 +535,9 @@ const desktopHTML = `<!DOCTYPE html>
     </div>
   </div>
   <div class="status-pills">
-    <div class="pill"><span class="dot"></span><span id="pill-brain1">Brain 1 (Reflex): Jev Engine</span></div>
+    <div class="pill"><span class="dot"></span><span id="pill-brain1">Brain 1 (Reflex): Reflex Engine</span></div>
     <div class="pill"><span class="dot standby" id="dot-brain2"></span><span id="pill-brain2">Brain 2 (Deep): Architect [Standby]</span></div>
-    <div class="pill"><span class="dot"></span><span id="pill-daemon">Daemon (Hermes): Running</span></div>
+    <div class="pill"><span class="dot"></span><span id="pill-daemon">Daemon (apwd): Running</span></div>
   </div>
 </header>
 
@@ -570,14 +570,14 @@ async function loadStatus() {
   document.getElementById('hdr-workspace').textContent = s.workspace + ' (' + s.stack + ')';
   document.getElementById('pill-brain1').textContent = 'Brain 1 (Reflex): ' + s.brain1_name + ' [' + s.brain1_state + ' - ' + s.brain1_latency_ms + 'ms]';
   document.getElementById('pill-brain2').textContent = 'Brain 2 (Deep): ' + s.brain2_name + ' [' + s.brain2_state + ']';
-  document.getElementById('pill-daemon').textContent = 'Daemon (Hermes): Running (PID: ' + s.daemon_pid + ') | ' + s.skills_loaded + ' Skills';
+  document.getElementById('pill-daemon').textContent = 'Daemon (apwd): Running (PID: ' + s.daemon_pid + ') | ' + s.skills_loaded + ' Skills';
   document.getElementById('banner-box').textContent =
     "  ▄▀█ █▀█ █░█░█\n" +
     "  █▀█ █▀▀ ▀▄▀▄▀   v" + s.version + " (Apiwat Agent)\n" +
     " ───────────────────────────────────────────────────────\n" +
     "  Brain 1 (Reflex) : " + s.brain1_name + " [" + s.brain1_state + " - " + s.brain1_latency_ms + "ms]\n" +
-    "  Brain 2 (Deep)   : " + s.brain2_name + "  [" + s.brain2_state + "]\n" +
-    "  Daemon (Hermes)  : Running (PID: " + s.daemon_pid + ") | " + s.skills_loaded + " Skills Loaded\n" +
+    "  Brain 2 (Deep)   : " + s.brain2_name + "     [" + s.brain2_state + "]\n" +
+    "  Daemon (apwd)    : Running (PID: " + s.daemon_pid + ") | " + s.skills_loaded + " Skills Loaded\n" +
     " ───────────────────────────────────────────────────────\n" +
     "  Workspace        : " + s.workspace + " (" + s.stack + ")";
 }

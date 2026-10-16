@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// State represents the persisted runtime status of the Hermes background daemon (apwd).
+// State represents the persisted runtime status of the apwd background daemon.
 type State struct {
 	Running      bool      `json:"running"`
 	PID          int       `json:"pid"`
@@ -25,7 +25,7 @@ func stateFilePath(workspace string) string {
 	return filepath.Join(workspace, ".apw", "daemon.json")
 }
 
-// WriteState records the current process as the active Hermes daemon for the workspace.
+// WriteState records the current process as the active apwd daemon for the workspace.
 func WriteState(workspace string, pid int) error {
 	dir := filepath.Join(workspace, ".apw")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -51,7 +51,7 @@ func ClearState(workspace string) {
 	_ = os.Remove(stateFilePath(workspace))
 }
 
-// EnsureRunning checks if the Hermes background daemon (apwd) is running, and spawns it automatically if not.
+// EnsureRunning checks if the apwd background daemon is running, and spawns it automatically if not.
 func EnsureRunning(workspace string) State {
 	start := time.Now()
 	st, ok := readExistingState(workspace)
@@ -75,7 +75,7 @@ func EnsureRunning(workspace string) State {
 		}
 	}
 
-	// Fallback: in-process embedded Hermes service
+	// Fallback: in-process embedded APW background service
 	pid := os.Getpid()
 	_ = WriteState(workspace, pid)
 	return State{
@@ -154,7 +154,7 @@ func measureElapsedMs(start time.Time) int64 {
 
 // CountSkills counts available skills from user/project skill directories (plus built-in Triad skills).
 func CountSkills(workspace string) int {
-	count := 6 // Built-in Triad core skills: Architect, Surgeon, Reflex, AST-Inspector, SQLite-Store, Telegram-Hermes
+	count := 6 // Built-in Triad core skills: Architect, Surgeon, Reflex, AST-Inspector, SQLite-Store, Telegram-Gateway
 
 	home, err := os.UserHomeDir()
 	if err == nil {

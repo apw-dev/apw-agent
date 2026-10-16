@@ -105,9 +105,9 @@ func LoadOrDefault(path string) (*Config, error) {
 				Model:      "qwen2.5-coder:7b",
 				TimeoutSec: 120,
 			},
-			"jev-engine": {
+			"apw-builtin": {
 				Type:       ProviderMock,
-				Model:      "Jev Engine",
+				Model:      "APW Engine",
 				TimeoutSec: 30,
 			},
 		},
@@ -116,8 +116,8 @@ func LoadOrDefault(path string) (*Config, error) {
 		cfg.Roles.Architect = "claude-sonnet"
 		cfg.Roles.Reflex = "claude-haiku"
 	} else {
-		cfg.Roles.Architect = "jev-engine"
-		cfg.Roles.Reflex = "jev-engine"
+		cfg.Roles.Architect = "apw-builtin"
+		cfg.Roles.Reflex = "apw-builtin"
 	}
 	cfg.applyDefaults()
 	return cfg, nil

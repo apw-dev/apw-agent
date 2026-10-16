@@ -35,7 +35,7 @@ type builtinEngineProvider struct {
 }
 
 func (b *builtinEngineProvider) Name() string {
-	return "jev-engine"
+	return "apw-builtin"
 }
 
 func (b *builtinEngineProvider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelResponse, error) {
@@ -82,7 +82,7 @@ func (b *builtinEngineProvider) Ask(ctx context.Context, req core.ModelRequest) 
 
 	modelName := b.model
 	if modelName == "" {
-		modelName = "Jev Engine (Built-in)"
+		modelName = "APW Engine (Built-in)"
 	}
 
 	return &core.ModelResponse{

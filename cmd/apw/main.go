@@ -99,9 +99,9 @@ func printBanner(w io.Writer, workspace string) {
 	fmt.Fprintln(w, "  ▄▀█ █▀█ █░█░█")
 	fmt.Fprintf(w, "  █▀█ █▀▀ ▀▄▀▄▀   v%s (Apiwat Agent)\n", version)
 	fmt.Fprintln(w, " ───────────────────────────────────────────────────────")
-	fmt.Fprintf(w, "  Brain 1 (Reflex) : Jev Engine [Active - %dms]\n", dState.LatencyMs)
-	fmt.Fprintln(w, "  Brain 2 (Deep)   : Architect  [Standby]")
-	fmt.Fprintf(w, "  Daemon (Hermes)  : Running (PID: %d) | %d Skills Loaded\n", dState.PID, dState.SkillsLoaded)
+	fmt.Fprintf(w, "  Brain 1 (Reflex) : Reflex Engine [Active - %dms]\n", dState.LatencyMs)
+	fmt.Fprintln(w, "  Brain 2 (Deep)   : Architect     [Standby]")
+	fmt.Fprintf(w, "  Daemon (apwd)    : Running (PID: %d) | %d Skills Loaded\n", dState.PID, dState.SkillsLoaded)
 	fmt.Fprintln(w, " ───────────────────────────────────────────────────────")
 	fmt.Fprintf(w, "  Workspace        : %s (%s)\n", wsDisplay, stack)
 }
@@ -145,7 +145,7 @@ func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
 
 		switch head {
 		case "exit", "quit", "q":
-			fmt.Fprintln(stdout, "Shutting down interactive session. Daemon (Hermes) remains active in background.")
+			fmt.Fprintln(stdout, "Shutting down interactive session. Daemon (apwd) remains active in background.")
 			return 0
 
 		case "help", "?":
@@ -246,14 +246,14 @@ func runDaemonCmd(args []string, stdout, stderr io.Writer) int {
 	switch action {
 	case "status", "start":
 		st := daemon.EnsureRunning(".")
-		fmt.Fprintf(stdout, "Daemon (Hermes): Running (PID: %d) | %d Skills Loaded | Reflex Latency: %dms\n", st.PID, st.SkillsLoaded, st.LatencyMs)
+		fmt.Fprintf(stdout, "Daemon (apwd): Running (PID: %d) | %d Skills Loaded | Reflex Latency: %dms\n", st.PID, st.SkillsLoaded, st.LatencyMs)
 		return 0
 	case "stop":
 		if err := daemon.Stop("."); err != nil {
 			fmt.Fprintf(stderr, "Failed to stop daemon: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "Daemon (Hermes) stopped.")
+		fmt.Fprintln(stdout, "Daemon (apwd) stopped.")
 		return 0
 	default:
 		fmt.Fprintln(stderr, "Usage: apw daemon [status|start|stop]")
@@ -523,6 +523,6 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  plan [--config path] \"<task>\"  Generate an ExecutionPlan and save to .apw/plans/")
 	fmt.Fprintln(w, "  verify [dir]                   Run Reflex closed-loop verification (fmt -> vet -> build -> test)")
 	fmt.Fprintln(w, "  symbols <file.go>              Inspect AST code symbols using Surgeon inspector")
-	fmt.Fprintln(w, "  daemon [status|start|stop]     Manage Hermes background agent daemon")
+	fmt.Fprintln(w, "  daemon [status|start|stop]     Manage apwd background agent daemon")
 	fmt.Fprintln(w, "  version                        Show version and architecture info")
 }

@@ -4,7 +4,7 @@
 
 ## 1. เป้าหมายและขอบเขต
 
-สร้าง agent ด้วย Go ที่ใช้งานผ่าน Telegram หรือ Discord ได้คล้ายแนวทาง Hermes รับงานต่อเนื่องผ่านบริการเบื้องหลัง เข้าใจบริบท สร้างแผนหรือ patch แก้ไฟล์ในพื้นที่แยก และส่งผลตรวจสอบกลับแชตเดิม โดยเลือกใช้โมเดลได้ทั้งผ่าน API และโมเดล local
+สร้าง agent ด้วย Go ที่ใช้งานผ่าน Telegram หรือ Discord รับงานต่อเนื่องผ่านบริการเบื้องหลัง (`apwd`) เข้าใจบริบท สร้างแผนหรือ patch แก้ไฟล์ในพื้นที่แยก และส่งผลตรวจสอบกลับแชตเดิม โดยเลือกใช้โมเดลได้ทั้งผ่าน API และโมเดล local
 
 สถานะปัจจุบันของ repository: มีโครง `cmd/apw`, `cmd/apwd`, `internal/core`, `internal/provider` (interface) และแกน Triad ใน `internal/architect`, `internal/surgeon`, `internal/reflex` พร้อมเทสต์; คำสั่ง `apw verify` และ `apw symbols` ใช้งานได้ ยังไม่มี provider จริง, gateway, session หรือ state
 
@@ -81,9 +81,9 @@ apw ออกแบบขึ้นภายใต้แกนปรัชญา�
    - **Autonomous Self-Healing:** หากคอมไพเลอร์หรือเทสต์ล้มเหลว นำ diagnostic กลับไปให้โมเดลสร้าง surgical fix วนซ้ำแบบ bounded retry สูงสุด 3 ครั้ง (`ReflexEngine.Run` ทำแล้ว)
    - **Fast-Path Reflex:** ข้อผิดพลาดเชิงไวยากรณ์หรือ type เล็กๆ ใช้โมเดลขนาดเล็ก/เร็วผ่าน API หรือ local model แก้ โดยไม่ต้องย้อนกลับไปที่ Architect เว้นแต่เป็นปัญหาเชิงสถาปัตยกรรม
 
-### 3.1 Messaging Gateway แบบ Hermes
+### 3.1 APW Messaging Gateway
 
-ยึดแนวทางแยก platform adapter ออกจาก gateway/session และตัว agent ตาม [Hermes platform adapter architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/adding-platform-adapters) และ [Messaging Gateway](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/) โดยสร้าง implementation ของ apw เอง
+แยก platform adapter ออกจาก gateway/session และตัว agent (`apwd`) โดยพัฒนาสถาปัตยกรรมของ apw เองทั้งหมด
 
 - **Telegram:** เริ่มจาก bot ใน private chat ใช้ long polling; เก็บ update ID และ offset หลังรับลง durable inbox เพื่อป้องกันการสร้าง task ซ้ำ ตามรูปแบบ [Telegram Bot API](https://core.telegram.org/bots/api#getupdates)
 - **Discord:** เพิ่ม bot ใน DM และ channel/thread ที่กำหนด ใช้ Gateway สำหรับรับ event พร้อม reconnect/heartbeat ตาม [Discord Gateway](https://docs.discord.com/developers/events/gateway); เริ่มรับงานจาก mention หรือคำสั่งที่กำหนดและจัด intents ให้สอดคล้อง
