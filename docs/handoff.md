@@ -146,8 +146,8 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error)
 | T3 Reflex repair loop | ☑ | `41cfb59` |
 | T4 API provider | ☑ | `46caa1b` |
 | T5 CLI plan | ☑ | `288e8ca` |
-| T6 Local provider (optional) | ☑ | `feat(m0): add OpenAI-compatible local provider (T6)` |
-| T7 Telegram PoC | ☐ | |
+| T6 Local provider (optional) | ☑ | `760c354` |
+| T7 Telegram PoC | ☑ | `feat(m0): add Telegram long-polling PoC and apwd integration (T7)` |
 | T8 SQLite spike | ☐ | |
 
 ## Prompt สำหรับเริ่ม session ใหม่
