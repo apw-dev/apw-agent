@@ -34,13 +34,19 @@ type VerificationResult struct {
 type Verifier struct {
 	Workspace string
 	Timeout   time.Duration
+	Packages  []string
 }
 
 // NewVerifier creates a new Verifier
-func NewVerifier(workspace string) *Verifier {
+func NewVerifier(workspace string, packages ...string) *Verifier {
+	pkgs := packages
+	if len(pkgs) == 0 {
+		pkgs = []string{"./..."}
+	}
 	return &Verifier{
 		Workspace: workspace,
 		Timeout:   60 * time.Second,
+		Packages:  pkgs,
 	}
 }
 
@@ -210,12 +216,7 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error) {
 		return attempts, nil
 	}
 
-	maxRetries := e.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 3
-	}
-
-	for retry := 1; retry <= maxRetries; retry++ {
+	for retry := 1; retry <= e.MaxRetries; retry++ {
 		if err := ctx.Err(); err != nil {
 			return attempts, err
 		}
@@ -249,7 +250,11 @@ func FormatDiagnostics(res *VerificationResult) string {
 	sb.WriteString("### Diagnostics:\n")
 	for _, d := range res.Diagnostics {
 		if d.File != "" {
-			sb.WriteString(fmt.Sprintf("- `%s:%d:%d`: %s\n", d.File, d.Line, d.Col, d.Message))
+			if d.Col == 0 {
+				sb.WriteString(fmt.Sprintf("- `%s:%d`: %s\n", d.File, d.Line, d.Message))
+			} else {
+				sb.WriteString(fmt.Sprintf("- `%s:%d:%d`: %s\n", d.File, d.Line, d.Col, d.Message))
+			}
 		} else {
 			sb.WriteString(fmt.Sprintf("- %s\n", d.Message))
 		}

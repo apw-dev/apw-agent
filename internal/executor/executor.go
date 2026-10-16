@@ -130,27 +130,59 @@ func (e *Executor) Execute(ctx context.Context, instruction string, codebaseOver
 	}
 
 	// Synthesize final summary and findings report for the user
+	baseSummary := e.formatReportSummary(instruction, plan, report.Steps, report.Passed, report.Duration)
+	report.Summary = baseSummary
+
 	if e.Architect != nil && e.Architect.Provider != nil {
 		var stepSummaries []string
 		for _, s := range report.Steps {
 			stepSummaries = append(stepSummaries, fmt.Sprintf("- [%s] %s: %s", s.Action, s.SubtaskID, s.Message))
 		}
 		summaryPrompt := fmt.Sprintf(
-			"You are the APW Agent Triad Core.\nThe user gave the following instruction: %q\n\nExecution Plan Objective: %s\nSteps executed:\n%s\nReflex Closed-Loop Verification: passed=%v (duration: %v)\n\nProvide a clear, detailed, and comprehensive answer/summary in Thai (using Markdown) explaining what was inspected, verified, and found, answering the user's request thoroughly.",
+			"You are the APW Agent Triad Core.\nThe user gave the following instruction: %q\n\nExecution Plan Objective: %s\nSteps executed:\n%s\nReflex Closed-Loop Verification: passed=%v (duration: %v)\n\nProvide a concise 2-4 paragraph explanation in Thai summarizing your key code findings, architecture quality, and what was achieved.",
 			instruction, plan.Objective, strings.Join(stepSummaries, "\n"), report.Passed, report.Duration.Round(time.Millisecond),
 		)
-		sumCtx, sumCancel := context.WithTimeout(ctx, 45*time.Second)
+		sumCtx, sumCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer sumCancel()
 		if sumResp, sumErr := e.Architect.Provider.Ask(sumCtx, core.ModelRequest{
 			RequestID: fmt.Sprintf("sum-%d", time.Now().UnixNano()),
 			Prompt:    summaryPrompt,
 			Model:     e.Architect.Model,
-		}); sumErr == nil && sumResp != nil {
-			report.Summary = strings.TrimSpace(sumResp.Content)
+		}); sumErr == nil && sumResp != nil && strings.TrimSpace(sumResp.Content) != "" {
+			report.Summary = strings.TrimSpace(sumResp.Content) + "\n\n" + baseSummary
 		}
 	}
 
 	return report, nil
+}
+
+func (e *Executor) formatReportSummary(instruction string, plan *architect.ExecutionPlan, steps []StepReport, passed bool, duration time.Duration) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**ภารกิจ:** %s\n\n", instruction))
+	sb.WriteString(fmt.Sprintf("**เป้าหมายของแผน:** %s\n\n", plan.Objective))
+	sb.WriteString("**ขั้นตอนที่ดำเนินการ:**\n")
+	reads := 0
+	patches := 0
+	creates := 0
+	for _, s := range steps {
+		switch s.Action {
+		case architect.ActionRead:
+			reads++
+		case architect.ActionPatch:
+			patches++
+		case architect.ActionCreate:
+			creates++
+		}
+		sb.WriteString(fmt.Sprintf("- `[%s]` %s: %s\n", s.Action, s.SubtaskID, s.Message))
+	}
+	sb.WriteString("\n**ผลการตรวจสอบด้วย Reflex (Closed-Loop Verification):**\n")
+	if passed {
+		sb.WriteString(fmt.Sprintf("- ✅ ตรวจสอบสำเร็จสมบูรณ์ (`gofmt`, `go vet`, `go build`, `go test -race`) ในเวลา %v\n", duration.Round(time.Millisecond)))
+		sb.WriteString(fmt.Sprintf("- 📊 สถิติการทำงาน: อ่านบริบท %d จุด, ผ่าตัดโค้ด %d จุด, สร้างไฟล์ใหม่ %d จุด\n", reads, patches, creates))
+	} else {
+		sb.WriteString(fmt.Sprintf("- ❌ การตรวจสอบไม่ผ่านหลังจากใช้เวลา %v\n", duration.Round(time.Millisecond)))
+	}
+	return sb.String()
 }
 
 func (e *Executor) executeSubtask(ctx context.Context, st architect.Subtask) (StepReport, string, error) {

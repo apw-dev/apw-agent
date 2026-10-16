@@ -43,24 +43,66 @@ func TestParseGoErrors_Prefixes(t *testing.T) {
 }
 
 func TestFormatDiagnostics(t *testing.T) {
-	res := &VerificationResult{
-		Passed:      false,
-		FailedStage: "build",
-		Diagnostics: []Diagnostic{
-			{
-				Stage:   "build",
-				File:    "main.go",
-				Line:    10,
-				Col:     2,
-				Message: "undefined: Foo",
+	t.Run("with col", func(t *testing.T) {
+		res := &VerificationResult{
+			Passed:      false,
+			FailedStage: "build",
+			Diagnostics: []Diagnostic{
+				{
+					Stage:   "build",
+					File:    "main.go",
+					Line:    10,
+					Col:     2,
+					Message: "undefined: Foo",
+				},
 			},
-		},
-		RawOutput: "main.go:10:2: undefined: Foo\n",
-	}
+			RawOutput: "main.go:10:2: undefined: Foo\n",
+		}
+		msg := FormatDiagnostics(res)
+		if msg == "" || len(msg) < 20 {
+			t.Fatalf("formatted diagnostics message is too short or empty")
+		}
+		if !strings.Contains(msg, "main.go:10:2") {
+			t.Errorf("expected col to appear in output, got: %s", msg)
+		}
+	})
 
-	msg := FormatDiagnostics(res)
-	if msg == "" || len(msg) < 20 {
-		t.Fatalf("formatted diagnostics message is too short or empty")
+	t.Run("col=0 omits :0", func(t *testing.T) {
+		res := &VerificationResult{
+			Passed:      false,
+			FailedStage: "build",
+			Diagnostics: []Diagnostic{
+				{
+					Stage:   "build",
+					File:    "main.go",
+					Line:    45,
+					Col:     0,
+					Message: "missing return at end of function",
+				},
+			},
+			RawOutput: "main.go:45: missing return at end of function\n",
+		}
+		msg := FormatDiagnostics(res)
+		if strings.Contains(msg, ":0") {
+			t.Errorf("expected :0 to be absent when Col=0, got: %s", msg)
+		}
+		if !strings.Contains(msg, "main.go:45") {
+			t.Errorf("expected file:line to appear in output, got: %s", msg)
+		}
+	})
+}
+
+func TestVerifier_CustomPackages(t *testing.T) {
+	v := NewVerifier(".", "./internal/reflex")
+	if len(v.Packages) != 1 || v.Packages[0] != "./internal/reflex" {
+		t.Fatalf("expected Packages=[./internal/reflex], got %v", v.Packages)
+	}
+	out, err := v.RunCommand(context.Background(), "go", "version")
+	if err != nil {
+		t.Fatalf("RunCommand failed: %v", err)
+	}
+	if !strings.Contains(out, "go version") {
+		t.Errorf("expected 'go version' in output, got: %s", out)
 	}
 }
 
