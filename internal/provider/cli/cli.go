@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -76,8 +78,15 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 	runCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	args := p.buildArgs(model, fullPrompt)
+	var tmpOutputFile string
+	if p.backend == BackendCodex {
+		tmpOutputFile = filepath.Join(os.TempDir(), fmt.Sprintf("apw_codex_%d.txt", time.Now().UnixNano()))
+		defer os.Remove(tmpOutputFile)
+	}
+
+	args := p.buildArgs(model, fullPrompt, tmpOutputFile)
 	cmd := exec.CommandContext(runCtx, p.binary, args...)
+	cmd.Stdin = strings.NewReader("") // Crucial: close stdin so CLI does not hang waiting for input
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -86,12 +95,23 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg == "" {
+			errMsg = strings.TrimSpace(stdout.String())
+		}
+		if errMsg == "" {
 			errMsg = err.Error()
 		}
 		return nil, fmt.Errorf("%s CLI execution failed: %s", p.binary, errMsg)
 	}
 
-	content := strings.TrimSpace(stdout.String())
+	var content string
+	if tmpOutputFile != "" {
+		if data, err := os.ReadFile(tmpOutputFile); err == nil && len(bytes.TrimSpace(data)) > 0 {
+			content = string(bytes.TrimSpace(data))
+		}
+	}
+	if content == "" {
+		content = strings.TrimSpace(stdout.String())
+	}
 	if content == "" {
 		return nil, fmt.Errorf("%s CLI returned empty response", p.binary)
 	}
@@ -112,7 +132,7 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 	}, nil
 }
 
-func (p *Provider) buildArgs(model, prompt string) []string {
+func (p *Provider) buildArgs(model, prompt, tmpOutputFile string) []string {
 	switch p.backend {
 	case BackendClaude:
 		args := []string{"-p", prompt, "--output-format", "text", "--tools", ""}
@@ -122,7 +142,11 @@ func (p *Provider) buildArgs(model, prompt string) []string {
 		return args
 	case BackendCodex:
 		args := []string{"exec", "--ephemeral", "--skip-git-repo-check"}
-		if model != "" {
+		if tmpOutputFile != "" {
+			args = append(args, "-o", tmpOutputFile)
+		}
+		// In ChatGPT account mode, codex uses gpt-6.1-sol by default
+		if model != "" && model != "gpt-6.1-sol" {
 			args = append(args, "--model", model)
 		}
 		args = append(args, prompt)

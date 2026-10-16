@@ -625,23 +625,25 @@ func runExecute(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	fmt.Fprintf(stdout, "  [Brain 2 · Architect] Analyzing task & formulating ExecutionPlan...\n")
+	fmt.Fprintf(stdout, "\n  %s⚡ [Dual-Brain Triad]%s Executing task: %s%s%s\n", "\x1b[1m\x1b[38;2;229;169;60m", "\x1b[0m", "\x1b[1m\x1b[38;2;235;240;245m", instruction, "\x1b[0m")
+	fmt.Fprintf(stdout, "  %s🧠 [Brain 2 · Architect]%s Formulating ExecutionPlan using %s (%s)...\n", "\x1b[38;2;86;182;242m", "\x1b[0m", archCfg.Model, cfg.Roles.Architect)
+
 	ex := executor.New(cfg.Workspace, archProv, reflexProv, archCfg.Model, reflexCfg.Model, cfg.Budget.MaxRepairs)
 	report, err := ex.Execute(ctx, instruction, overview)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error executing task: %v\n", err)
+		fmt.Fprintf(stdout, "\n  %s❌ [Triad Error]%s: %v\n\n", "\x1b[1m\x1b[31m", "\x1b[0m", err)
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "  [Plan %s] Objective: %s (%d steps)\n", report.Plan.PlanID, report.Plan.Objective, len(report.Steps))
+	fmt.Fprintf(stdout, "\n  %s📋 [ExecutionPlan %s]%s %s (%d step(s))\n", "\x1b[1m\x1b[38;2;86;182;242m", report.Plan.PlanID, "\x1b[0m", report.Plan.Objective, len(report.Steps))
 	for _, st := range report.Steps {
 		fmt.Fprintf(stdout, "    ✓ [%s] %s — %s\n", st.Action, st.SubtaskID, st.Message)
 	}
 	if report.Passed {
-		fmt.Fprintf(stdout, "  [Brain 1 · Reflex] PASS (%d attempt(s), %v)\n", len(report.ReflexAttempts), report.Duration.Round(time.Millisecond))
+		fmt.Fprintf(stdout, "  %s⚡ [Brain 1 · Reflex]%s Closed-loop PASS (%d attempt(s), %v)\n\n", "\x1b[1m\x1b[38;2;74;222;128m", "\x1b[0m", len(report.ReflexAttempts), report.Duration.Round(time.Millisecond))
 		return 0
 	}
-	fmt.Fprintf(stdout, "  [Brain 1 · Reflex] FAIL after %d attempt(s)\n", len(report.ReflexAttempts))
+	fmt.Fprintf(stdout, "  %s❌ [Brain 1 · Reflex]%s FAIL after %d attempt(s)\n\n", "\x1b[1m\x1b[31m", "\x1b[0m", len(report.ReflexAttempts))
 	return 1
 }
 
