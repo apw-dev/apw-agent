@@ -1,6 +1,6 @@
 # แผนพัฒนา apw — Apiwat Agent
 
-สถานะ: แผนเสนอ revision 3 — ผสานข้อเสนอแนะเชิงสถาปัตยกรรมและเทคนิคจาก Gemini Argon (go-rod/rod, CDP Network stream detection, FIFO Worker Queue, และ Anti-bot/Graceful shutdown policy)
+สถานะ: แผนเสนอ revision 5 — บูรณาการคำแนะนำสถาปัตยกรรมและจุดเสี่ยงจาก Gemini Argon (go-rod/rod CDP, Single-Worker FIFO, Network Stream Event, SingletonLock Lifecycle) พร้อมรับคำสั่งผ่าน Telegram Gateway และ Browser Provider
 
 ## 1. เป้าหมายและขอบเขต
 
@@ -60,6 +60,26 @@
 JSON Schema ตรวจได้ว่า response มีโครงสร้างถูกต้อง แต่ไม่ได้พิสูจน์ว่าโค้ดถูก type หรือทำงานถูก ต้องอาศัย compiler, static analysis และ test เพิ่มเติม ระบบรายงานว่า “ผ่านคำสั่งตรวจสอบใดบ้าง” แทนการรับประกันความถูกต้องทั้งหมด
 
 AST ใช้หาขอบเขตและ symbol ได้ แต่ semantic rename ต้องมีข้อมูลการอ้างอิงและชนิดข้อมูลเพิ่มเติม จึงไม่จัดเป็นคำสั่ง rename ที่พร้อมใช้เพียงเพราะมี AST
+
+### 3.0 ปรัชญาแกนกลาง: Triad of Next-Gen Agent (Architect, Surgeon, Reflex)
+
+apw ออกแบบขึ้นภายใต้แกนปรัชญาสามประสาน (Triad Engine) เพื่อยกระดับความแม่นยำและความปลอดภัยในการดัดแปลงโค้ดเทียบเท่ามาตรฐานของ **Claude Code** และโมเดลเอเจนต์ชั้นนำยุคใหม่:
+
+1. **The Architect (การคิดเชิงสถาปัตยกรรมและวางผังงาน):**
+   - **หน้าที่:** ถอดรหัสความต้องการของผู้ใช้ (intent analysis), ทำความเข้าใจโครงสร้างโปรเจกต์เชิงลึก (system & symbol topology), และแตกงานเป็นขั้นตอนย่อยที่มีลำดับขึ้นต่อกัน (DAG of atomic subtasks)
+   - **กลยุทธ์โมเดล:** มอบหมายให้โมเดลระดับสูงที่มี reasoning capacity กว้างขวาง (เช่น **Gemini Argon / Advanced** ผ่าน Browser CDP หรือ Claude Sonnet) รับหน้าที่คิด ออกแบบโครงสร้าง และตรวจสอบ architecture tradeoffs
+   - **สัญญาการทำงาน:** สถาปัตย์จะไม่ลงมือแก้ไขไฟล์โดยตรงแบบสุ่มสี่สุ่มห้า แต่จะส่งมอบ `ExecutionPlan` ที่ระบุชัดเจนถึงเป้าหมาย, ไฟล์ที่เกี่ยวข้อง, สัญลักษณ์ (symbol) ที่กระทบ, และเงื่อนไขการทดสอบ (acceptance criteria)
+
+2. **The Surgeon (ศัลยแพทย์โค้ดตามหลักการ Claude Code):**
+   - **หลักการ Read-Before-Write:** ห้ามแก้ไขไฟล์ใดๆ โดยไม่อ่านบริบทจริงล่าสุดเด็ดขาด เพื่อป้องกัน hallucination ของโครงสร้างโค้ด
+   - **Precision Surgical Patching:** ไม่เขียนทับไฟล์ทั้งไฟล์ (Full file overwrite) หากไม่จำเป็นอย่างยิ่ง แต่ใช้การผ่าตัดเฉพาะจุด (Targeted block replacement) โดยอ้างอิง unique surrounding context lines และ AST node boundaries เพื่อรับประกันว่าจะไม่มี line drift หรือแก้ผิดตำแหน่ง
+   - **Base Hash & Integrity Fingerprint:** ทุก patch ต้องระบุ SHA-256 hash หรือ content fingerprint ของไฟล์ตั้งต้น หากไฟล์ในดิสก์ถูกแก้ไขโดยภายนอกระหว่างทำงาน ระบบศัลยกรรมจะปฏิเสธการแก้ทับทันที (Refuse on drift)
+   - **Safe Workspace Isolation:** การผ่าตัดโค้ดทุกครั้งต้องทำในพื้นที่ทดลองแยก (**Git Worktree**) เสมอ เพื่อรับประกันว่า working tree เดิมของผู้ใช้จะไม่เสียหายแม้การผ่าตัดจะล้มเหลว
+
+3. **The Reflex (การสะท้อนคิด แก้ไขตัวเอง และทดสอบอัตโนมัติ - Reflexion Loop):**
+   - **Closed-Loop Verification:** เมื่อ Surgeon ลงมือผ่าตัดเสร็จสิ้น Reflex Engine จะเข้ามารับช่วงต่อทันที โดยสั่งรันวงจรตรวจจับข้อผิดพลาดแบบ multi-stage: `gofmt` → `go vet` → `go build` → `go test`
+   - **Autonomous Self-Healing:** หากคอมไพเลอร์หรือเทสต์ล้มเหลว Reflex Engine จะดักจับ stderr / compiler error traceback นำมาวิเคราะห์ความผิดพลาด (reflection) และสร้าง surgical fix วนซ้ำอัตโนมัติ (สูงสุด 3 ครั้งแบบมี bounded retry)
+   - **Fast-Path Reflex:** สำหรับข้อผิดพลาดเชิงไวยากรณ์หรือ type checking เล็กๆ สามารถใช้โมเดลความเร็วสูง (Fast Reflex เช่น Gemini Flash หรือ Local model) เพื่อแก้ปัญหาได้ในเสี้ยววินาที โดยไม่ต้องส่งกลับไปยัง Architect ขนาดใหญ่ เว้นแต่เป็นปัญหาเชิงสถาปัตยกรรม
 
 ### 3.1 Messaging Gateway แบบ Hermes
 
@@ -179,6 +199,8 @@ Telegram / Discord / CLI
 6. ทดลอง Telegram private bot และ browser session ด้วยบัญชีที่เจ้าของเปิดใช้; ไม่เปิดรับผู้ใช้ทั่วไปในขั้นทดลอง
 7. พิสูจน์ browser round trip: เลือกโมเดล → ส่ง prompt → รอจบ → อ่าน code block/JSON → จับคู่ request; ทดสอบอย่างน้อย multi-turn, fresh chat และ response ยาว พร้อมบันทึกสิ่งที่ยังทำไม่ได้
 8. ตัดสินใจ browser driver/worker จากผล spike และกำหนดแหล่งเก็บ profile, runtime version และโปรโตคอลกับ Go core; **เลือกใช้ `go-rod/rod` เป็นตัวขับเคลื่อน CDP หลักตามข้อเสนอแนะของ Argon** (เพื่อความแม่นยำในการจัดการ Shadow DOM, Auto-wait, และ Network Event stream)
+9. **Concurrency & Rate Limit Policy (จาก Argon):** กำหนดให้ Browser Worker ทำงานแบบ Single Worker Queue (FIFO channel) 1 แท็บต่อ 1 งาน ป้องกัน race condition และ rate limit พร้อมเพิ่ม jitter หน่วงเวลาสุ่ม 2–5 วินาที
+10. **Process & Lock Management (จาก Argon):** ออกแบบ graceful shutdown สำหรับจัดการลบไฟล์ `SingletonLock` ใน User Data Dir เมื่อโปรเซสหยุดทำงาน ป้องกันปัญหา Chrome ค้างหรือเปิดซ้ำไม่ได้
 
 ### M1 — Safe execution
 

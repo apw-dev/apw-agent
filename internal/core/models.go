@@ -7,15 +7,14 @@ import (
 type TaskStatus string
 
 const (
-	StatusQueued             TaskStatus = "queued"
-	StatusAnalyzing          TaskStatus = "analyzing"
-	StatusPlanning           TaskStatus = "planning"
-	StatusPatching           TaskStatus = "patching"
-	StatusVerifying          TaskStatus = "verifying"
-	StatusSucceeded          TaskStatus = "succeeded"
-	StatusFailed             TaskStatus = "failed"
-	StatusCancelled          TaskStatus = "cancelled"
-	StatusWaitingForLogin    TaskStatus = "waiting_for_login"
+	StatusQueued              TaskStatus = "queued"
+	StatusAnalyzing           TaskStatus = "analyzing"
+	StatusPlanning            TaskStatus = "planning"
+	StatusPatching            TaskStatus = "patching"
+	StatusVerifying           TaskStatus = "verifying"
+	StatusSucceeded           TaskStatus = "succeeded"
+	StatusFailed              TaskStatus = "failed"
+	StatusCancelled           TaskStatus = "cancelled"
 	StatusProviderUnavailable TaskStatus = "provider_unavailable"
 )
 
@@ -37,11 +36,11 @@ type ModelRequest struct {
 }
 
 type ModelResponse struct {
-	RequestID       string    `json:"request_id"`
-	Provider        string    `json:"provider"`
-	ModelObserved   string    `json:"model_observed"`
-	Content         string    `json:"content"`
-	Completed       bool      `json:"completed"`
-	RawResponse     string    `json:"raw_response,omitempty"`
-	Timestamp       time.Time `json:"timestamp"`
+	RequestID     string    `json:"request_id"`
+	Provider      string    `json:"provider"`
+	ModelObserved string    `json:"model_observed"`
+	Content       string    `json:"content"`
+	Completed     bool      `json:"completed"`
+	RawResponse   string    `json:"raw_response,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
 }

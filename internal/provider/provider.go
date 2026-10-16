@@ -5,7 +5,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/core"
 )
 
-// Provider is the common interface for model backends (API, Local, Browser/Argon)
+// Provider is the common interface for model backends (API, Local)
 type Provider interface {
 	Name() string
 	Ask(ctx context.Context, req core.ModelRequest) (*core.ModelResponse, error)
