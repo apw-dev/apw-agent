@@ -96,6 +96,8 @@ type Session struct {
 	SessionID string
 	ModeIndex int // 0 = auto-triad, 1 = plan-first, 2 = fast-reflex
 	History   []string
+
+	lastInterrupt time.Time
 }
 
 var modeNames = []string{
@@ -103,6 +105,9 @@ var modeNames = []string{
 	"plan-only (Spec-First Architect)",
 	"fast-reflex (Brain 1 Verify & Repair)",
 }
+
+// ctrlCExitWindow is the time window in which a second Ctrl+C confirms exiting the CLI.
+const ctrlCExitWindow = 2 * time.Second
 
 // NewSession creates a new TUI session.
 func NewSession(workspace, version string) *Session {
@@ -118,6 +123,26 @@ func NewSession(workspace, version string) *Session {
 func (s *Session) ResetSession() {
 	s.SessionID = fmt.Sprintf("%08x", time.Now().UnixNano()&0xffffffff)
 	s.History = nil
+}
+
+// RegisterInterrupt records a Ctrl+C press at now and reports whether it confirms exit (second press within ctrlCExitWindow).
+func (s *Session) RegisterInterrupt(now time.Time) bool {
+	if !s.lastInterrupt.IsZero() && now.Sub(s.lastInterrupt) <= ctrlCExitWindow {
+		s.lastInterrupt = time.Time{}
+		return true
+	}
+	s.lastInterrupt = now
+	return false
+}
+
+// InterruptPending reports whether a first Ctrl+C is armed and still inside the exit window.
+func (s *Session) InterruptPending(now time.Time) bool {
+	return !s.lastInterrupt.IsZero() && now.Sub(s.lastInterrupt) <= ctrlCExitWindow
+}
+
+// ClearInterrupt disarms the pending Ctrl+C exit confirmation.
+func (s *Session) ClearInterrupt() {
+	s.lastInterrupt = time.Time{}
 }
 
 // LoadSyncedConfig loads apw.json (or default) and merges live authenticated models.
@@ -329,9 +354,13 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			rightHint := fmt.Sprintf("%saccept-edits%s · %s%s%s", cGreen, cGray, cWhite, truncatePlain(archModel, 18), cReset)
 			fmt.Fprint(stdout, leftHint+"   "+rightHint)
 		} else {
-			modeLabel := modeNames[s.ModeIndex%len(modeNames)]
-			fmt.Fprintf(stdout, " %s▸▸ %s%s %s(shift+tab to cycle · /model · /auth)%s",
-				cGold, modeLabel, cReset, cGray, cReset)
+			if s.InterruptPending(time.Now()) {
+				fmt.Fprintf(stdout, " %s⚠ Press Ctrl+C again to exit%s %s(Ctrl+D exits immediately)%s", cBold+cAmber, cReset, cGray, cReset)
+			} else {
+				modeLabel := modeNames[s.ModeIndex%len(modeNames)]
+				fmt.Fprintf(stdout, " %s▸▸ %s%s %s(shift+tab to cycle · /model · /auth)%s",
+					cGold, modeLabel, cReset, cGray, cReset)
+			}
 		}
 
 		fmt.Fprintf(stdout, "\x1b[%dA\r", linesBelow)
@@ -350,6 +379,9 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			return "", io.EOF
 		}
 		b := inBuf[:n]
+		if b[0] != 3 && s.InterruptPending(time.Now()) {
+			s.ClearInterrupt()
+		}
 
 		if b[0] == 0x1b {
 			if n == 1 {
@@ -395,9 +427,30 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			continue
 		}
 
-		if b[0] == 3 || b[0] == 4 {
+		if b[0] == 4 {
+			s.ClearInterrupt()
 			fmt.Fprint(stdout, "\r\x1b[J\r\n")
 			return "/quit", nil
+		}
+
+		if b[0] == 3 {
+			if len(buf) > 0 {
+				s.ClearInterrupt()
+				buf = nil
+				selectedIdx = 0
+				histIdx = len(s.History)
+				fmt.Fprint(stdout, "^C\r\n")
+				redraw(false)
+				continue
+			}
+
+			if s.RegisterInterrupt(time.Now()) {
+				fmt.Fprint(stdout, "\r\x1b[J\r\n  Goodbye! Exiting apw.\r\n")
+				return "/quit", nil
+			}
+			fmt.Fprint(stdout, "\r\x1b[J\r\n  \x1b[38;2;251;191;36m(Press Ctrl+C again within 2s to exit apw)\x1b[0m\r\n")
+			redraw(false)
+			continue
 		}
 
 		if b[0] == 12 {

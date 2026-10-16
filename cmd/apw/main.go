@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -588,6 +589,67 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+type triadSpinner struct {
+	w       io.Writer
+	mu      sync.Mutex
+	stop    chan struct{}
+	done    chan struct{}
+	msg     string
+	started time.Time
+}
+
+func startSpinner(w io.Writer, initialMsg string) *triadSpinner {
+	s := &triadSpinner{
+		w:       w,
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
+		msg:     initialMsg,
+		started: time.Now(),
+	}
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	go func() {
+		defer close(s.done)
+		idx := 0
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.stop:
+				fmt.Fprint(s.w, "\r\x1b[K")
+				return
+			case <-ticker.C:
+				s.mu.Lock()
+				elapsed := time.Since(s.started).Round(100 * time.Millisecond)
+				fmt.Fprintf(s.w, "\r  \x1b[38;2;86;182;242m%s\x1b[0m %s \x1b[2m[%v]\x1b[0m", frames[idx%len(frames)], s.msg, elapsed)
+				s.mu.Unlock()
+				idx++
+			}
+		}
+	}()
+	return s
+}
+
+func (s *triadSpinner) Update(msg string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.msg = msg
+}
+
+func (s *triadSpinner) Stop() {
+	if s == nil {
+		return
+	}
+	select {
+	case <-s.stop:
+	default:
+		close(s.stop)
+		<-s.done
+	}
+}
+
 func runExecute(args []string, stdout, stderr io.Writer) int {
 	cfgPath, instruction, explicit, errCode := parseConfigAndTaskArgs("run", args, stderr)
 	if errCode != 0 {
@@ -625,23 +687,79 @@ func runExecute(args []string, stdout, stderr io.Writer) int {
 	if timeout <= 0 {
 		timeout = 600 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	sigCtx, stopSig := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSig()
+	ctx, cancel := context.WithTimeout(sigCtx, timeout)
 	defer cancel()
 
 	fmt.Fprintf(stdout, "\n  %s⚡ [Dual-Brain Triad]%s Executing task: %s%s%s\n", "\x1b[1m\x1b[38;2;229;169;60m", "\x1b[0m", "\x1b[1m\x1b[38;2;235;240;245m", instruction, "\x1b[0m")
-	fmt.Fprintf(stdout, "  %s🧠 [Brain 2 · Architect]%s Formulating ExecutionPlan using %s (%s)...\n", "\x1b[38;2;86;182;242m", "\x1b[0m", archCfg.Model, cfg.Roles.Architect)
+
+	var spinner *triadSpinner
+	defer func() {
+		if spinner != nil {
+			spinner.Stop()
+		}
+	}()
+
+	spinner = startSpinner(stdout, fmt.Sprintf("🧠 [Brain 2 · Architect] Formulating ExecutionPlan using %s (%s)...", archCfg.Model, cfg.Roles.Architect))
 
 	ex := executor.New(cfg.Workspace, archProv, reflexProv, archCfg.Model, reflexCfg.Model, cfg.Budget.MaxRepairs)
+	ex.OnProgress = func(ev executor.ProgressEvent) {
+		switch ev.Stage {
+		case "plan_ready":
+			if spinner != nil {
+				spinner.Stop()
+				spinner = nil
+			}
+			fmt.Fprintf(stdout, "  %s📋 [ExecutionPlan Ready]%s %s (%d step(s) · %v)\n", "\x1b[1m\x1b[38;2;86;182;242m", "\x1b[0m", ev.Message, ev.TotalSteps, ev.Duration.Round(time.Millisecond))
+		case "step_start":
+			if spinner != nil {
+				spinner.Stop()
+				spinner = nil
+			}
+			fmt.Fprintf(stdout, "    \x1b[38;2;229;169;60m⚡\x1b[0m [%d/%d] %s...\n", ev.StepIndex, ev.TotalSteps, ev.Message)
+		case "step_done":
+			if ev.Step != nil {
+				fmt.Fprintf(stdout, "    \x1b[32m✓\x1b[0m [%d/%d] [%s] %s — %s\n", ev.StepIndex, ev.TotalSteps, ev.Step.Action, ev.Step.SubtaskID, ev.Step.Message)
+			}
+		case "verifying":
+			if spinner != nil {
+				spinner.Stop()
+			}
+			spinner = startSpinner(stdout, "⚡ [Brain 1 · Reflex] Running closed-loop verification (gofmt, vet, build, test)...")
+		case "verified":
+			if spinner != nil {
+				spinner.Stop()
+				spinner = nil
+			}
+			if ev.Passed {
+				fmt.Fprintf(stdout, "  %s✓ [Brain 1 · Reflex]%s %s (%v)\n", "\x1b[1m\x1b[38;2;74;222;128m", "\x1b[0m", ev.Message, ev.Duration.Round(time.Millisecond))
+			} else {
+				fmt.Fprintf(stdout, "  %s❌ [Brain 1 · Reflex]%s %s (%v)\n", "\x1b[1m\x1b[31m", "\x1b[0m", ev.Message, ev.Duration.Round(time.Millisecond))
+			}
+		case "synthesizing":
+			if spinner != nil {
+				spinner.Stop()
+			}
+			spinner = startSpinner(stdout, "💬 [Triad Report] Synthesizing summary report in Thai...")
+		}
+	}
+
 	report, err := ex.Execute(ctx, instruction, overview)
+	if spinner != nil {
+		spinner.Stop()
+		spinner = nil
+	}
+
 	if err != nil {
+		if sigCtx.Err() != nil {
+			fmt.Fprintf(stdout, "\n  %s⚠ [Triad Interrupted]%s Task cancelled by user (Ctrl+C).\n\n", "\x1b[1m\x1b[33m", "\x1b[0m")
+			return 130
+		}
 		fmt.Fprintf(stdout, "\n  %s❌ [Triad Error]%s: %v\n\n", "\x1b[1m\x1b[31m", "\x1b[0m", err)
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "\n  %s📋 [ExecutionPlan %s]%s %s (%d step(s))\n", "\x1b[1m\x1b[38;2;86;182;242m", report.Plan.PlanID, "\x1b[0m", report.Plan.Objective, len(report.Steps))
-	for _, st := range report.Steps {
-		fmt.Fprintf(stdout, "    ✓ [%s] %s — %s\n", st.Action, st.SubtaskID, st.Message)
-	}
 	if report.Summary != "" {
 		fmt.Fprintf(stdout, "\n  %s%s───────────────────────────────────────────────────────────────────────%s\n", "\x1b[2m", "\x1b[38;2;130;138;150m", "\x1b[0m")
 		fmt.Fprintf(stdout, "  %s💬 สรุปผลการทำงาน (Triad Report):%s\n\n%s\n", "\x1b[1m\x1b[38;2;86;182;242m", "\x1b[0m", report.Summary)
@@ -715,6 +833,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "\nInteractive & Desktop:")
 	fmt.Fprintln(w, "  apw                            Launch interactive Triad CLI shell (apw > _)")
 	fmt.Fprintln(w, "  apw desktop (or apw ui)        Launch Claude Code Desktop-style Windows App")
+	fmt.Fprintln(w, "  Ctrl+C twice (within 2s)       Safely exit the interactive shell (Ctrl+D exits immediately)")
 	fmt.Fprintln(w, "\nCommands:")
 	fmt.Fprintln(w, "  run [--config path] \"<task>\"   Execute full Triad loop (Architect -> Surgeon -> Reflex)")
 	fmt.Fprintln(w, "  plan [--config path] \"<task>\"  Generate an ExecutionPlan and save to .apw/plans/")

@@ -37,6 +37,20 @@ type ExecutionReport struct {
 	Summary        string                   `json:"summary,omitempty"`
 }
 
+// ProgressEvent describes a real-time progress update during Triad execution.
+type ProgressEvent struct {
+	Stage      string // "planning", "plan_ready", "step_start", "step_done", "verifying", "verified", "synthesizing", "done"
+	Message    string
+	StepIndex  int
+	TotalSteps int
+	Duration   time.Duration
+	Step       *StepReport
+	Passed     bool
+}
+
+// ProgressCallback receives live progress events as each Triad phase runs.
+type ProgressCallback func(event ProgressEvent)
+
 // Executor coordinates Architect planning, Surgeon patching, and Reflex self-healing verification.
 type Executor struct {
 	Workspace         string
@@ -46,6 +60,13 @@ type Executor struct {
 	ReflexProvider    provider.Provider
 	ReflexModel       string
 	SkipReflexOnEmpty bool
+	OnProgress        ProgressCallback
+}
+
+func (e *Executor) emit(ev ProgressEvent) {
+	if e.OnProgress != nil {
+		e.OnProgress(ev)
+	}
 }
 
 // New creates a new Triad Executor.
@@ -90,10 +111,23 @@ func (e *Executor) Execute(ctx context.Context, instruction string, codebaseOver
 		UpdatedAt:   start,
 	}
 
+	archModel := "Architect"
+	if e.Architect != nil && e.Architect.Model != "" {
+		archModel = e.Architect.Model
+	}
+	e.emit(ProgressEvent{Stage: "planning", Message: fmt.Sprintf("Formulating ExecutionPlan using %s...", archModel)})
+
 	plan, err := e.Architect.Plan(ctx, task, codebaseOverview)
 	if err != nil {
 		return nil, fmt.Errorf("architect planning failed: %w", err)
 	}
+
+	e.emit(ProgressEvent{
+		Stage:      "plan_ready",
+		Message:    plan.Objective,
+		TotalSteps: len(plan.Subtasks),
+		Duration:   time.Since(start),
+	})
 
 	report := &ExecutionReport{
 		TaskID: task.ID,
@@ -101,13 +135,29 @@ func (e *Executor) Execute(ctx context.Context, instruction string, codebaseOver
 	}
 
 	var modifiedFiles []string
-	for _, st := range plan.Subtasks {
+	for i, st := range plan.Subtasks {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
 
+		e.emit(ProgressEvent{
+			Stage:      "step_start",
+			StepIndex:  i + 1,
+			TotalSteps: len(plan.Subtasks),
+			Message:    fmt.Sprintf("[%s] %s — %s", st.Action, st.ID, st.TargetFile),
+		})
+
 		sr, modFile, stepErr := e.executeSubtask(ctx, st)
 		report.Steps = append(report.Steps, sr)
+
+		e.emit(ProgressEvent{
+			Stage:      "step_done",
+			StepIndex:  i + 1,
+			TotalSteps: len(plan.Subtasks),
+			Step:       &sr,
+			Message:    sr.Message,
+		})
+
 		if stepErr != nil {
 			return report, stepErr
 		}
@@ -117,6 +167,7 @@ func (e *Executor) Execute(ctx context.Context, instruction string, codebaseOver
 	}
 
 	// Run Reflex verification and autonomous repair loop
+	e.emit(ProgressEvent{Stage: "verifying", Message: "Running Reflex closed-loop verification (gofmt, vet, build, test)..."})
 	attempts, err := e.Reflex.Run(ctx, func(ctx context.Context, diagnostics string) error {
 		return e.repairWithReflex(ctx, diagnostics, modifiedFiles)
 	})
@@ -128,12 +179,19 @@ func (e *Executor) Execute(ctx context.Context, instruction string, codebaseOver
 	if len(attempts) > 0 && attempts[len(attempts)-1].Result.Passed {
 		report.Passed = true
 	}
+	e.emit(ProgressEvent{
+		Stage:    "verified",
+		Passed:   report.Passed,
+		Duration: report.Duration,
+		Message:  fmt.Sprintf("Closed-loop verification complete (%d attempt(s))", len(attempts)),
+	})
 
 	// Synthesize final summary and findings report for the user
 	baseSummary := e.formatReportSummary(instruction, plan, report.Steps, report.Passed, report.Duration)
 	report.Summary = baseSummary
 
 	if e.Architect != nil && e.Architect.Provider != nil {
+		e.emit(ProgressEvent{Stage: "synthesizing", Message: "Synthesizing executive summary in Thai..."})
 		var stepSummaries []string
 		for _, s := range report.Steps {
 			stepSummaries = append(stepSummaries, fmt.Sprintf("- [%s] %s: %s", s.Action, s.SubtaskID, s.Message))
