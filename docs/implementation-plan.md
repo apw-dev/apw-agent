@@ -78,7 +78,7 @@ apw ออกแบบขึ้นภายใต้แกนปรัชญา�
 
 3. **The Reflex (การสะท้อนคิด แก้ไขตัวเอง และทดสอบอัตโนมัติ — Reflexion Loop)** — `internal/reflex`
    - **Closed-Loop Verification:** หลัง Surgeon แก้เสร็จ รันวงจรตรวจแบบ multi-stage: `gofmt` → `go vet` → `go build` → `go test` แล้วแปลง output เป็น `Diagnostic` ที่มีไฟล์/บรรทัด/คอลัมน์ (ทำแล้ว ใช้ผ่าน `apw verify`)
-   - **Autonomous Self-Healing:** หากคอมไพเลอร์หรือเทสต์ล้มเหลว นำ diagnostic กลับไปให้โมเดลสร้าง surgical fix วนซ้ำแบบ bounded retry สูงสุด 3 ครั้ง (`ReflexEngine.MaxRetries` มีแล้ว ลูปยังไม่ทำ)
+   - **Autonomous Self-Healing:** หากคอมไพเลอร์หรือเทสต์ล้มเหลว นำ diagnostic กลับไปให้โมเดลสร้าง surgical fix วนซ้ำแบบ bounded retry สูงสุด 3 ครั้ง (`ReflexEngine.Run` ทำแล้ว)
    - **Fast-Path Reflex:** ข้อผิดพลาดเชิงไวยากรณ์หรือ type เล็กๆ ใช้โมเดลขนาดเล็ก/เร็วผ่าน API หรือ local model แก้ โดยไม่ต้องย้อนกลับไปที่ Architect เว้นแต่เป็นปัญหาเชิงสถาปัตยกรรม
 
 ### 3.1 Messaging Gateway แบบ Hermes

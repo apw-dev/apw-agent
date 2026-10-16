@@ -2,7 +2,12 @@ package reflex
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
 func TestParseGoErrors(t *testing.T) {
@@ -64,5 +69,86 @@ func TestVerifier(t *testing.T) {
 	out, err := v.RunCommand(context.Background(), "go", "version")
 	if err != nil || out == "" {
 		t.Fatalf("expected go version to succeed, got %v: %s", err, out)
+	}
+}
+
+func TestReflexEngine_Run_HealsInSecondAttempt(t *testing.T) {
+	dir := t.TempDir()
+	goMod := "module example.com/tempmod\n\ngo 1.24\n"
+	brokenMain := "package main\n\nfunc main() {\n\t_ = undefinedSymbol\n}\n"
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(mainPath, []byte(brokenMain), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := surgeon.NewSurgeon()
+	engine := NewReflexEngine(dir, 3)
+
+	attempts, err := engine.Run(context.Background(), func(ctx context.Context, diagnostics string) error {
+		if !strings.Contains(diagnostics, "undefinedSymbol") {
+			t.Errorf("expected diagnostics to mention undefinedSymbol, got: %s", diagnostics)
+		}
+		_, hash, err := s.ReadFile(mainPath)
+		if err != nil {
+			return err
+		}
+		_, err = s.ApplyPatch(surgeon.PatchOperation{
+			Path:       mainPath,
+			BaseHash:   hash,
+			OldContent: "_ = undefinedSymbol",
+			NewContent: "x := 42\n\t_ = x",
+		})
+		return err
+	})
+	if err != nil {
+		t.Fatalf("engine.Run returned unexpected error: %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("expected 2 attempts (initial fail + 1 repair pass), got %d", len(attempts))
+	}
+	if attempts[0].Number != 1 || attempts[0].Result.Passed {
+		t.Errorf("attempt 1 should have failed, got %+v", attempts[0].Result)
+	}
+	if attempts[1].Number != 2 || !attempts[1].Result.Passed {
+		t.Errorf("attempt 2 should have passed, got %+v", attempts[1].Result)
+	}
+}
+
+func TestReflexEngine_Run_ExhaustsMaxRetries(t *testing.T) {
+	dir := t.TempDir()
+	goMod := "module example.com/tempmod\n\ngo 1.24\n"
+	brokenMain := "package main\n\nfunc main() {\n\t_ = stillBroken\n}\n"
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(brokenMain), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := NewReflexEngine(dir, 2)
+	fixCalls := 0
+
+	attempts, err := engine.Run(context.Background(), func(ctx context.Context, diagnostics string) error {
+		fixCalls++
+		return nil // no-op fixer that fails to resolve the error
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fixCalls != 2 {
+		t.Errorf("expected fixer to be called MaxRetries (2) times, got %d", fixCalls)
+	}
+	if len(attempts) != 3 {
+		t.Fatalf("expected 3 attempts (1 initial + 2 retries), got %d", len(attempts))
+	}
+	for i, a := range attempts {
+		if a.Result.Passed {
+			t.Errorf("attempt %d unexpectedly passed", i+1)
+		}
 	}
 }

@@ -167,6 +167,15 @@ func (v *Verifier) Verify(ctx context.Context) *VerificationResult {
 	}
 }
 
+// Fixer receives formatted diagnostics and applies a surgical fix (typically via Surgeon)
+type Fixer func(ctx context.Context, diagnostics string) error
+
+// Attempt records the outcome of a single verification round in the repair loop
+type Attempt struct {
+	Number int
+	Result *VerificationResult
+}
+
 // ReflexEngine orchestrates the self-correction loop
 type ReflexEngine struct {
 	Verifier   *Verifier
@@ -182,6 +191,52 @@ func NewReflexEngine(workspace string, maxRetries int) *ReflexEngine {
 		Verifier:   NewVerifier(workspace),
 		MaxRetries: maxRetries,
 	}
+}
+
+// Run executes verify -> if failed, invokes fix and re-verifies up to MaxRetries times.
+// It returns all attempts for reporting and stops immediately if ctx is cancelled or fix returns an error.
+func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var attempts []Attempt
+	res := e.Verifier.Verify(ctx)
+	attempts = append(attempts, Attempt{
+		Number: 1,
+		Result: res,
+	})
+	if res.Passed {
+		return attempts, nil
+	}
+
+	maxRetries := e.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	for retry := 1; retry <= maxRetries; retry++ {
+		if err := ctx.Err(); err != nil {
+			return attempts, err
+		}
+		if err := fix(ctx, FormatDiagnostics(res)); err != nil {
+			return attempts, err
+		}
+		if err := ctx.Err(); err != nil {
+			return attempts, err
+		}
+
+		res = e.Verifier.Verify(ctx)
+		attempts = append(attempts, Attempt{
+			Number: retry + 1,
+			Result: res,
+		})
+		if res.Passed {
+			return attempts, nil
+		}
+	}
+
+	return attempts, nil
 }
 
 // FormatDiagnostics formats error list into actionable markdown prompt for model reflection

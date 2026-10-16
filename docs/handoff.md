@@ -142,8 +142,8 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error)
 | งาน | สถานะ | commit |
 | --- | --- | --- |
 | T1 Config | ☑ | `198e97b` |
-| T2 Mock provider | ☑ | `feat(m0): add deterministic mock provider (T2)` |
-| T3 Reflex repair loop | ☐ | |
+| T2 Mock provider | ☑ | `180ba42` |
+| T3 Reflex repair loop | ☑ | `feat(m0): add Reflex repair loop (T3)` |
 | T4 API provider | ☐ | |
 | T5 CLI plan | ☐ | |
 | T6 Local provider (optional) | ☐ | |
