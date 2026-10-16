@@ -154,26 +154,40 @@ func measureElapsedMs(start time.Time) int64 {
 
 // CountSkills counts available skills from user/project skill directories (plus built-in Triad skills).
 func CountSkills(workspace string) int {
-	count := 6 // Built-in Triad core skills: Architect, Surgeon, Reflex, AST-Inspector, SQLite-Store, Telegram-Gateway
+	groups := DiscoverSkills(workspace)
+	total := 0
+	for _, list := range groups {
+		total += len(list)
+	}
+	return total
+}
+
+// DiscoverSkills returns available skills grouped by category.
+func DiscoverSkills(workspace string) map[string][]string {
+	groups := map[string][]string{
+		"triad-core": {"architect-planner", "surgical-patcher", "reflex-verifier", "ast-symbol-inspector"},
+		"runtime":    {"sqlite-memory", "apwd-daemon", "telegram-gateway", "desktop-ui"},
+	}
 
 	home, err := os.UserHomeDir()
 	if err == nil {
-		roots := []string{
-			filepath.Join(home, ".gemini", "antigravity", "builtin", "skills"),
-			filepath.Join(home, ".gemini", "config", "skills"),
-			filepath.Join(workspace, ".apw", "skills"),
-		}
-		for _, root := range roots {
+		scanRoot := func(category, root string) {
 			_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return nil
 				}
 				if !d.IsDir() && strings.EqualFold(d.Name(), "SKILL.md") {
-					count++
+					name := filepath.Base(filepath.Dir(path))
+					if name != "" && name != "." && name != "skills" {
+						groups[category] = append(groups[category], name)
+					}
 				}
 				return nil
 			})
 		}
+		scanRoot("workspace", filepath.Join(workspace, ".apw", "skills"))
+		scanRoot("extensions", filepath.Join(home, ".gemini", "config", "skills"))
+		scanRoot("system", filepath.Join(home, ".gemini", "antigravity", "builtin", "skills"))
 	}
-	return count
+	return groups
 }

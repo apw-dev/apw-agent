@@ -24,6 +24,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/provider/factory"
 	"github.com/apiwat/apw-agent/internal/reflex"
 	"github.com/apiwat/apw-agent/internal/surgeon"
+	"github.com/apiwat/apw-agent/internal/tui"
 )
 
 const (
@@ -82,7 +83,10 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return runDaemonCmd(args[1:], stdout, stderr)
 
 	case "model", "models", "config":
-		return runModelCmd(args[1:], stdout, stderr)
+		return runModelCmdWithStdin(args[1:], stdin, stdout, stderr)
+
+	case "skills":
+		return runSkillsCmd(".", stdout)
 
 	case "ui", "desktop":
 		return runDesktopApp(args[1:], stdout, stderr)
@@ -122,18 +126,45 @@ func formatWorkspacePath(workspace string) string {
 }
 
 func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
-	printBanner(stdout, ".")
-	fmt.Fprintln(stdout)
+	sess := tui.NewSession(".", version)
+	if stdin == os.Stdin {
+		tui.RenderDashboard(stdout, ".", version, sess.SessionID)
+	} else {
+		printBanner(stdout, ".")
+		fmt.Fprintln(stdout)
+	}
 
-	scanner := bufio.NewScanner(stdin)
+	var scanner *bufio.Scanner
 	for {
-		fmt.Fprint(stdout, "apw > ")
-		if !scanner.Scan() {
-			fmt.Fprintln(stdout)
-			return 0
+		var line string
+		if stdin == os.Stdin {
+			l, err := sess.ReadInteractiveLine(stdout)
+			if err == nil {
+				line = strings.TrimSpace(l)
+			} else {
+				// Fallback to standard scanner if raw terminal mode is not supported
+				if scanner == nil {
+					scanner = bufio.NewScanner(stdin)
+				}
+				fmt.Fprint(stdout, "apw > ")
+				if !scanner.Scan() {
+					fmt.Fprintln(stdout)
+					return 0
+				}
+				line = strings.TrimSpace(scanner.Text())
+			}
+		} else {
+			if scanner == nil {
+				scanner = bufio.NewScanner(stdin)
+			}
+			fmt.Fprint(stdout, "apw > ")
+			if !scanner.Scan() {
+				fmt.Fprintln(stdout)
+				return 0
+			}
+			line = strings.TrimSpace(scanner.Text())
 		}
 
-		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
@@ -157,9 +188,20 @@ func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
 		case "status":
 			printBanner(stdout, ".")
 
-		case "clear", "cls":
+		case "new", "reset":
+			sess.ResetSession()
+			fmt.Fprintf(stdout, "Started fresh session: %s\n", sess.SessionID)
+
+		case "clear", "cls", "redraw":
 			fmt.Fprint(stdout, "\033[H\033[2J")
-			printBanner(stdout, ".")
+			if stdin == os.Stdin {
+				tui.RenderDashboard(stdout, ".", version, sess.SessionID)
+			} else {
+				printBanner(stdout, ".")
+			}
+
+		case "skills":
+			_ = runSkillsCmd(".", stdout)
 
 		case "verify":
 			ws := "."
@@ -201,7 +243,7 @@ func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
 			if rest != "" {
 				sub = strings.Fields(rest)
 			}
-			_ = runModelCmd(sub, stdout, stderr)
+			_ = runModelCmdWithStdin(sub, stdin, stdout, stderr)
 
 		case "ui", "desktop":
 			srv := desktop.NewServer("./apw.json", version)
@@ -219,6 +261,20 @@ func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout)
 	}
+}
+
+func runSkillsCmd(workspace string, stdout io.Writer) int {
+	groups := daemon.DiscoverSkills(workspace)
+	cats := []string{"triad-core", "runtime", "extensions", "system", "workspace"}
+	fmt.Fprintln(stdout, "Available APW Skills & Modules:")
+	for _, cat := range cats {
+		items := groups[cat]
+		if len(items) == 0 {
+			continue
+		}
+		fmt.Fprintf(stdout, "  %-12s : %s\n", cat, strings.Join(items, ", "))
+	}
+	return 0
 }
 
 func executeVerify(workspace string, stdout io.Writer) int {
@@ -271,8 +327,14 @@ func runDaemonCmd(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func runModelCmd(args []string, stdout, stderr io.Writer) int {
+func runModelCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfgPath := "./apw.json"
+	if len(args) == 0 && stdin == os.Stdin {
+		if rc := tui.RunInteractiveModelSelector(cfgPath, stdin, stdout, stderr); rc >= 0 {
+			return rc
+		}
+	}
+
 	cfg, err := config.LoadOrDefault(cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error loading config: %v\n", err)
@@ -294,6 +356,7 @@ func runModelCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  - %-15s | type=%-6s | model=%-24s | endpoint=%s\n", name, p.Type, p.Model, endpointInfo)
 		}
 		fmt.Fprintln(stdout, "\nCommands:")
+		fmt.Fprintln(stdout, "  apw model                                Open interactive model selector")
 		fmt.Fprintln(stdout, "  apw model init                           Generate ./apw.json in current workspace")
 		fmt.Fprintln(stdout, "  apw model set <architect|reflex> <name>  Switch active provider for a brain role")
 		return 0
