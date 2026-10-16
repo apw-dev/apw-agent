@@ -1,97 +1,124 @@
 # apw — Apiwat Agent
 
-Coding agent เขียนด้วย Go ที่วางแผน แก้โค้ดเฉพาะจุด และตรวจผลด้วย compiler/test อัตโนมัติ เป้าหมายคือสั่งงานผ่าน Telegram/Discord และใช้โมเดลผ่าน API หรือ local
+**ระบบปฏิบัติการ AI สำหรับนักพัฒนาซอฟต์แวร์ (Ground-Up AI Developer OS)** ที่สร้างขึ้นใหม่ตั้งแต่ศูนย์ด้วยภาษา Go โดยไม่พึ่งพาเฟรมเวิร์กสำเร็จรูปที่เทอะทะ ผสานสมองสองระบบ (**System 1: Reflex** และ **System 2: Architect**), ศัลยแพทย์โค้ดความแม่นยำสูง (**Surgeon**), บริการเบื้องหลัง 24/7 (**`apwd` Daemon**) และระบบความจำ/ทักษะอัตโนมัติเข้าเป็นเนื้อเดียวกัน
 
-> **สถานะ:** `0.1.0-alpha` — milestone M0 ยังไม่มี model provider จริง, gateway หรือ daemon ที่ใช้งานได้ ดูแผนเต็มที่ [docs/implementation-plan.md](docs/implementation-plan.md)
+---
 
-## Triad Engine
+## 1. วิสัยทัศน์และปรัชญาการออกแบบ (Core Philosophy — 100% Native APW)
 
-| ส่วน | Package | ทำอะไร |
+| แกนปรัชญาของ APW | แก่นหลักที่สร้างขึ้นใน `apw` | โมดูลในระบบ |
 | --- | --- | --- |
-| **Architect** | `internal/architect` | สร้าง planning prompt, parse คำตอบโมเดลเป็น `ExecutionPlan` และตรวจด้วย `Validate()` (action ต้องรู้จัก, `target_file` ต้องอยู่ใน workspace) |
-| **Surgeon** | `internal/surgeon` | แก้ไฟล์แบบ read-before-write ตรวจ SHA-256 กัน drift แทนที่เฉพาะจุดที่ match ครั้งเดียว รักษา CRLF/LF และอ่าน symbol จาก Go AST |
-| **Reflex** | `internal/reflex` | รัน `gofmt -l` → `go vet` → `go build` → `go test` แล้วแปลง output เป็น diagnostic ที่มีไฟล์/บรรทัด/คอลัมน์ |
+| **1. System 1 — Fast Reflex Principle** | ตอบสนองระดับเสี้ยววินาที (<10ms routing), บังคับโครงสร้าง Type-safe, วิเคราะห์โค้ดผ่าน AST และตรวจจับข้อผิดพลาดอัตโนมัติ | `internal/reflex` |
+| **2. System 2 — Spec-First Architecture** | วางแผนสถาปัตยกรรมเป็นขั้นตอน (`ExecutionPlan` / `plan.json`) และตรวจสอบขอบเขตความปลอดภัยก่อนอนุญาตให้แตะไฟล์โค้ด | `internal/architect` |
+| **3. Precision Code Surgery** | ผ่าตัดแก้ไขไฟล์เฉพาะจุด (Read-Before-Write + SHA-256 Base Hash + Surgical Diff) พร้อมรัน Compiler/Test วนลูปอัตโนมัติ | `internal/surgeon` |
+| **4. 24/7 Autonomous Daemon & Skills** | รันเบื้องหลังตลอดเวลา (`apwd`), จัดการคิวงาน, ความจำระยะยาว (SQLite) และระบบขยายทักษะ (Skill Hub) | `internal/daemon`, `internal/store`, `skills/` |
+| **5. Headless Core & Multi-Client Protocol** | แยกส่วนสมองออกจากหน้าจอ เชื่อมต่อได้ทั้ง Interactive CLI (`apw`), Desktop UI (`apw desktop`), Editor (RPC) และ Chat (`Telegram`) | `pkg/protocol`, `internal/desktop`, `internal/channels` |
 
-## ความต้องการ
+---
 
-- Go 1.27+
-- พัฒนาและทดสอบบน Windows เป็นหลัก (Linux ผ่าน CI)
-
-## Build
-
-```bash
-go build -o bin/ ./cmd/...
-```
-
-ได้ `bin/apw` (CLI) และ `bin/apwd` (daemon — ตอนนี้แค่รอ Ctrl+C)
-
-## ใช้งาน
-
-```bash
-go run ./cmd/apw version
-```
-
-ตรวจ repository Go ด้วย Reflex (ค่าเริ่มต้นคือ directory ปัจจุบัน; exit 1 เมื่อไม่ผ่าน):
-
-```bash
-go run ./cmd/apw verify .
-```
-
-ดู symbol ในไฟล์ Go:
-
-```bash
-go run ./cmd/apw symbols internal/surgeon/surgeon.go
-```
-
-สร้างแผน `ExecutionPlan` ด้วย Architect (คัดลอก `apw.example.json` เป็น `apw.json` และตั้งค่า environment variable ของ API key ก่อนใช้งานจริง):
-
-```bash
-go run ./cmd/apw plan --config ./apw.json "เพิ่มคำสั่ง healthcheck"
-```
-
-แผนที่สร้างจะถูกตรวจความถูกต้อง (`Validate()`) แสดงผลเป็น JSON และบันทึกไว้ที่ `.apw/plans/<plan_id>.json`
-
-## พัฒนา
-
-ชุดตรวจเดียวกับ CI:
-
-```bash
-gofmt -l .
-```
-
-```bash
-go mod tidy -diff
-```
-
-```bash
-go vet ./...
-```
-
-```bash
-go test -race ./...
-```
-
-หรือใช้ apw ตรวจตัวเอง:
-
-```bash
-go run ./cmd/apw verify .
-```
-
-## โครงสร้าง
+## 2. สถาปัตยกรรมระบบ (System Architecture)
 
 ```text
-cmd/apw/              CLI (version, plan, verify, symbols)
-cmd/apwd/             daemon (stub)
-internal/config/      โหลดและตรวจสอบไฟล์ตั้งค่า apw.json
-internal/core/        domain models: Task, ModelRequest, ModelResponse
-internal/provider/    Provider interface + implementations (api, mock, factory)
-internal/architect/   planning + plan validation
-internal/surgeon/     safe file patching + AST symbols
-internal/reflex/      verification pipeline + repair loop + diagnostics
-docs/                 แผนพัฒนาและบันทึกการตรวจ
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        Surface Layer (Multi-Client)                        │
+│     [ $ apw CLI ]      [ $ apw desktop UI ]       [ Telegram / Chat ]      │
+└─────────────────────────────────────┬──────────────────────────────────────┘
+                                      │ JSON-RPC 2.0 / HTTP / Local Socket
+┌─────────────────────────────────────▼──────────────────────────────────────┐
+│                       APW Core Daemon ($ apwd - 24/7)                      │
+│                                                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                    1. Reflex Engine (System 1)                       │  │
+│  │  • Intent Router (<10ms)         • AST Symbol & Syntax Inspector     │  │
+│  │  • Fast Constrained LLM (Local)  • Deterministic Type-Safe Schema    │  │
+│  └──────────────────┬───────────────────────────────┬───────────────────┘  │
+│                     │ (Fast Path: 75% ของงาน)        │ (Slow Path: 25% ของงาน)│
+│                     │                               ▼                      │
+│                     │              ┌────────────────────────────────────┐  │
+│                     │              │   2. Architect Engine (System 2)   │  │
+│                     │              │  • Deep Reasoning LLM              │  │
+│                     │              │  • Dependency Graph Analyzer       │  │
+│                     │              │  • Task Decomposition (plan.json)  │  │
+│                     │              └────────────────┬───────────────────┘  │
+│                     │                               │ (ส่ง Sub-tasks กลับ)  │
+│                     ▼                               ▼                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                3. Surgeon & Verification Sandbox                     │  │
+│  │  • Surgical Block Patcher        • Auto Compiler/Linter Gatekeeper   │  │
+│  │  • Git Worktree Isolation        • Self-Healing Retry Loop (Max 3)   │  │
+│  └──────────────────────────────────┬───────────────────────────────────┘  │
+│                                     │                                      │
+│  ┌──────────────────────────────────▼───────────────────────────────────┐  │
+│  │                4. Memory & Self-Evolving Skill Hub                   │  │
+│  │  • Project Context Graph         • Auto Skill Extractor              │  │
+│  │  • Episodic Error Memory (SQLite)• Sandboxed Script Runner           │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## เอกสาร
+---
 
-- [แผนพัฒนา](docs/implementation-plan.md)
-- [ผลตรวจ repo และการแก้ไข](docs/review-fixes.md)
+## 3. แผนผังโครงสร้างโมดูลในโปรเจกต์ (Repository Topology)
+
+```text
+apw-agent/
+├── cmd/
+│   ├── apw/                        # Surface CLI & Interactive Shell (apw > _)
+│   └── apwd/                       # 24/7 Background Core Daemon
+├── internal/
+│   ├── core/                       # Core Domain Models (Task, Request, Response, Capabilities)
+│   ├── config/                     # ระบบตั้งค่า apw.json + Validation
+│   ├── reflex/                     # [Brain 1] Verification Pipeline (fmt/vet/build/test) + Self-Healing Loop
+│   ├── architect/                  # [Brain 2] Spec-First Planner + DAG Subtask Decomposition + Plan Validator
+│   ├── surgeon/                    # [Surgeon] Read-Before-Write Snapshot, SHA-256 Drift Guard, AST Symbol Parser
+│   ├── executor/                   # Triad Orchestrator (เชื่อม Architect -> Surgeon -> Reflex ครบวงจร)
+│   ├── daemon/                     # Auto-start & Lifecycle Manager สำหรับ apwd + Skill Discovery
+│   ├── desktop/                    # Native Desktop Web UI Server (apw desktop / apw ui)
+│   ├── channels/
+│   │   └── telegram/               # Messaging Gateway (Long-polling, Allowlist, Task Commands)
+│   ├── provider/
+│   │   ├── api/                    # Deep Reasoning Cloud API Provider
+│   │   ├── local/                  # Fast Local LLM Provider (OpenAI-compatible endpoint)
+│   │   ├── mock/                   # Deterministic Mock Provider สำหรับ Test & CI
+│   │   └── factory/                # Provider Router & Built-in APW Engine
+│   └── store/                      # SQLite Persistent Memory (Sessions, Tasks, Inbox Dedup, Episodic Logs)
+└── docs/                           # เอกสารสถาปัตยกรรม, ADR และแผนพัฒนา
+```
+
+---
+
+## 4. การเริ่มต้นใช้งาน (Quick Start)
+
+### ติดตั้งไบนารี (`apw` และ `apwd`)
+```bash
+go install ./cmd/...
+```
+
+### 1) โหมด Interactive CLI (`apw > _`)
+พิมพ์ `apw` จากโฟลเดอร์โปรเจกต์ใดก็ได้ ระบบจะปลุก `apwd` เบื้องหลังอัตโนมัติและเข้าสู่หน้าต่างโต้ตอบทันที:
+```text
+  ▄▀█ █▀█ █░█░█
+  █▀█ █▀▀ ▀▄▀▄▀   v0.1.0-alpha (Apiwat Agent)
+ ───────────────────────────────────────────────────────
+  Brain 1 (Reflex) : Reflex Engine [Active - 1ms]
+  Brain 2 (Deep)   : Architect     [Standby]
+  Daemon (apwd)    : Running (PID: 48760) | 17 Skills Loaded
+ ───────────────────────────────────────────────────────
+  Workspace        : D:/APW_Project/apw-agent (Go)
+
+apw > _
+```
+
+### 2) โหมดหน้าต่าง Desktop UI (`apw desktop`)
+```bash
+apw desktop
+```
+
+### 3) คำสั่งบรรทัดคำสั่งโดยตรง (Direct CLI Commands)
+```bash
+apw run "อธิบายหรือสั่งงานที่ต้องการ"      # รันวงจร Triad (Architect -> Surgeon -> Reflex)
+apw plan "วางแผนงานก่อนแก้ไขจริง"        # สร้างแผน ExecutionPlan (.apw/plans/<id>.json)
+apw verify .                           # รัน Reflex ตรวจสอบโค้ด (fmt -> vet -> build -> test)
+apw symbols internal/surgeon/surgeon.go # สกัดโครงสร้าง AST Symbols ในไฟล์
+apw daemon status                      # ตรวจสอบสถานะบริการเบื้องหลัง apwd
+```
