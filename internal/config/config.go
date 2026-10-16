@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -73,6 +74,86 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// LoadOrDefault loads the config at path, or returns a sensible auto-configured default if the file does not exist.
+func LoadOrDefault(path string) (*Config, error) {
+	if _, err := os.Stat(path); err == nil {
+		return Load(path)
+	}
+
+	cfg := &Config{
+		Workspace: ".",
+		Providers: map[string]ProviderConfig{
+			"claude-sonnet": {
+				Type:       ProviderAPI,
+				Endpoint:   "https://api.anthropic.com",
+				Model:      "claude-sonnet-4-20250514",
+				APIKeyEnv:  "ANTHROPIC_API_KEY",
+				TimeoutSec: 120,
+			},
+			"claude-haiku": {
+				Type:       ProviderAPI,
+				Endpoint:   "https://api.anthropic.com",
+				Model:      "claude-3-5-haiku-latest",
+				APIKeyEnv:  "ANTHROPIC_API_KEY",
+				TimeoutSec: 60,
+			},
+			"ollama-local": {
+				Type:       ProviderLocal,
+				Endpoint:   "http://127.0.0.1:11434",
+				Model:      "qwen2.5-coder:7b",
+				TimeoutSec: 120,
+			},
+			"jev-engine": {
+				Type:       ProviderMock,
+				Model:      "Jev Engine",
+				TimeoutSec: 30,
+			},
+		},
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		cfg.Roles.Architect = "claude-sonnet"
+		cfg.Roles.Reflex = "claude-haiku"
+	} else {
+		cfg.Roles.Architect = "jev-engine"
+		cfg.Roles.Reflex = "jev-engine"
+	}
+	cfg.applyDefaults()
+	return cfg, nil
+}
+
+// DetectStack inspects the workspace directory and returns detected languages/frameworks.
+func DetectStack(workspace string) string {
+	var stacks []string
+	checks := []struct {
+		file  string
+		label string
+	}{
+		{"go.mod", "Go"},
+		{"tsconfig.json", "TypeScript"},
+		{"package.json", "Node.js"},
+		{"Cargo.toml", "Rust"},
+		{"pyproject.toml", "Python"},
+		{"requirements.txt", "Python"},
+	}
+
+	seen := make(map[string]bool)
+	for _, c := range checks {
+		if _, err := os.Stat(filepath.Join(workspace, c.file)); err == nil {
+			if c.label == "Node.js" && seen["TypeScript"] {
+				continue
+			}
+			if !seen[c.label] {
+				seen[c.label] = true
+				stacks = append(stacks, c.label)
+			}
+		}
+	}
+	if len(stacks) == 0 {
+		return "Go"
+	}
+	return strings.Join(stacks, " / ")
 }
 
 func (c *Config) applyDefaults() {

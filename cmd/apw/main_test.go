@@ -5,15 +5,37 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/apiwat/apw-agent/internal/architect"
 )
 
+func TestRun_InteractiveBannerAndCommands(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runWithStdin(nil, strings.NewReader("status\nexit\n"), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"▄▀█ █▀█ █░█░█",
+		"Brain 1 (Reflex) : Jev Engine [Active",
+		"Brain 2 (Deep)   : Architect  [Standby]",
+		"Daemon (Hermes)  : Running (PID:",
+		"Skills Loaded",
+		"Workspace        :",
+		"apw > ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("interactive output missing %q\ngot:\n%s", want, out)
+		}
+	}
+}
+
 func TestRun_PlanWithMockConfig(t *testing.T) {
 	wsDir := t.TempDir()
 
-	// Create a sample Go file in workspace to exercise buildCodebaseOverview
 	sampleGo := "package sample\n\ntype Service struct{}\n\nfunc (s *Service) Start() {}\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "sample.go"), []byte(sampleGo), 0644); err != nil {
 		t.Fatal(err)
