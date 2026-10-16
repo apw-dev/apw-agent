@@ -606,7 +606,8 @@ func runSingleLineSelector(title string, subtitleLines []string, items []selecto
 
 // RunInteractiveModelSelector opens the live model picker fetched from AGY CLI, Claude Sub/API, ChatGPT Sub/OpenAI API, and Ollama.
 func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cfg, statuses := LoadSyncedConfig(".", cfgPath, false)
+	cfg, statuses := LoadSyncedConfig(".", cfgPath, true)
+	_ = cfg.Save(cfgPath)
 
 	var allLiveModels []auth.DiscoveredModel
 	for _, st := range statuses {

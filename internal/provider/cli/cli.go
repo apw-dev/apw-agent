@@ -86,7 +86,11 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 
 	args := p.buildArgs(model, fullPrompt, tmpOutputFile)
 	cmd := exec.CommandContext(runCtx, p.binary, args...)
-	cmd.Stdin = strings.NewReader("") // Crucial: close stdin so CLI does not hang waiting for input
+	if p.backend == BackendCodex {
+		cmd.Stdin = strings.NewReader(fullPrompt)
+	} else {
+		cmd.Stdin = strings.NewReader("") // Crucial: close stdin so CLI does not hang waiting for input
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -149,7 +153,8 @@ func (p *Provider) buildArgs(model, prompt, tmpOutputFile string) []string {
 		if model != "" && model != "gpt-6.1-sol" {
 			args = append(args, "--model", model)
 		}
-		args = append(args, prompt)
+		// Instruct codex to read instructions from stdin via '-' to avoid Windows CLI length limit (32KB)
+		args = append(args, "-")
 		return args
 	default: // BackendAGY
 		args := []string{"-p", prompt, "--output-format", "text", "--disable-slash-commands"}

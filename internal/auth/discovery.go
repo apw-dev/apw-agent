@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/config"
@@ -48,7 +49,7 @@ func cacheFilePath(workspace string) string {
 }
 
 // DiscoverAll checks all authentication sources (AGY CLI, Claude Subscription/API, ChatGPT Subscription/OpenAI API, Ollama)
-// and returns their connection status and live models. Uses a short-lived cache unless forceRefresh is true.
+// concurrently and returns their connection status and live models. Uses a short-lived cache unless forceRefresh is true.
 func DiscoverAll(workspace string, forceRefresh bool) []ConnectionStatus {
 	if flag.Lookup("test.v") != nil && !forceRefresh {
 		return nil
@@ -60,19 +61,41 @@ func DiscoverAll(workspace string, forceRefresh bool) []ConnectionStatus {
 		}
 	}
 
-	statuses := []ConnectionStatus{
-		discoverAGY(),
-		discoverClaude(workspace),
-		discoverOpenAI(workspace),
-		discoverOllama(),
-	}
+	var (
+		agySt    ConnectionStatus
+		claudeSt ConnectionStatus
+		openaiSt ConnectionStatus
+		ollamaSt ConnectionStatus
+		wg       sync.WaitGroup
+	)
 
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		agySt = discoverAGY()
+	}()
+	go func() {
+		defer wg.Done()
+		claudeSt = discoverClaude(workspace)
+	}()
+	go func() {
+		defer wg.Done()
+		openaiSt = discoverOpenAI(workspace)
+	}()
+	go func() {
+		defer wg.Done()
+		ollamaSt = discoverOllama()
+	}()
+	wg.Wait()
+
+	statuses := []ConnectionStatus{agySt, claudeSt, openaiSt, ollamaSt}
 	writeCache(workspace, statuses)
 	return statuses
 }
 
 // SyncConfigWithDiscovered merges live discovered models into cfg.Providers and upgrades default roles
 // from apw-builtin to real authenticated models when available.
+// It also prunes obsolete discovered provider keys that are no longer valid.
 func SyncConfigWithDiscovered(workspace string, cfg *config.Config, forceRefresh bool) []ConnectionStatus {
 	statuses := DiscoverAll(workspace, forceRefresh)
 	if cfg == nil {
@@ -82,12 +105,25 @@ func SyncConfigWithDiscovered(workspace string, cfg *config.Config, forceRefresh
 		cfg.Providers = make(map[string]config.ProviderConfig)
 	}
 
+	activeKeys := make(map[string]bool)
+	connectedPrefixes := make(map[string]bool)
+
 	var firstFastModel, firstDeepModel string
 	for _, st := range statuses {
 		if !st.Connected {
 			continue
 		}
+		switch st.Source {
+		case "AGY CLI":
+			connectedPrefixes["agy:"] = true
+		case "Claude", "Claude Sub":
+			connectedPrefixes["claude-sub:"] = true
+		case "OpenAI", "ChatGPT Sub":
+			connectedPrefixes["chatgpt-sub:"] = true
+		}
+
 		for _, m := range st.Models {
+			activeKeys[m.ProviderKey] = true
 			cfg.Providers[m.ProviderKey] = config.ProviderConfig{
 				Type:       m.ProviderType,
 				Endpoint:   m.Endpoint,
@@ -99,18 +135,31 @@ func SyncConfigWithDiscovered(workspace string, cfg *config.Config, forceRefresh
 			if firstFastModel == "" && (strings.Contains(lower, "flash") || strings.Contains(lower, "haiku") || strings.Contains(lower, "mini")) {
 				firstFastModel = m.ProviderKey
 			}
-			if firstDeepModel == "" && (strings.Contains(lower, "argon-high") || strings.Contains(lower, "sonnet-5-5-high") || strings.Contains(lower, "opus") || strings.Contains(lower, "gpt-4.1") || strings.Contains(lower, "sonnet")) {
+			if firstDeepModel == "" && (strings.Contains(lower, "argon-high") || strings.Contains(lower, "sonnet-5-5-high") || strings.Contains(lower, "opus") || strings.Contains(lower, "gpt-6.1") || strings.Contains(lower, "sonnet")) {
 				firstDeepModel = m.ProviderKey
 			}
 		}
 	}
 
-	// If roles are still on apw-builtin (or unset) and real authenticated models exist, auto-upgrade!
-	if (cfg.Roles.Reflex == "" || cfg.Roles.Reflex == "apw-builtin") && firstFastModel != "" {
-		cfg.Roles.Reflex = firstFastModel
+	// Prune obsolete provider keys from connected CLI sources (e.g. removed agy:* or chatgpt-sub:*)
+	for k := range cfg.Providers {
+		for prefix := range connectedPrefixes {
+			if strings.HasPrefix(k, prefix) && !activeKeys[k] {
+				delete(cfg.Providers, k)
+			}
+		}
 	}
-	if (cfg.Roles.Architect == "" || cfg.Roles.Architect == "apw-builtin") && firstDeepModel != "" {
-		cfg.Roles.Architect = firstDeepModel
+
+	// If roles are unset, missing, or still on apw-builtin, upgrade to real models
+	if _, ok := cfg.Providers[cfg.Roles.Reflex]; !ok || cfg.Roles.Reflex == "" || cfg.Roles.Reflex == "apw-builtin" {
+		if firstFastModel != "" {
+			cfg.Roles.Reflex = firstFastModel
+		}
+	}
+	if _, ok := cfg.Providers[cfg.Roles.Architect]; !ok || cfg.Roles.Architect == "" || cfg.Roles.Architect == "apw-builtin" {
+		if firstDeepModel != "" {
+			cfg.Roles.Architect = firstDeepModel
+		}
 	}
 
 	return statuses
@@ -129,7 +178,7 @@ func discoverAGY() ConnectionStatus {
 		return st
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, agyPath, "models")
@@ -205,6 +254,9 @@ func discoverClaude(workspace string) ConnectionStatus {
 					id   string
 					name string
 				}{
+					{"claude-sonnet-5-5", "Claude Sonnet 5.5 (Subscription)"},
+					{"claude-opus-5-5", "Claude Opus 5.5 (Subscription)"},
+					{"claude-haiku-5-5", "Claude Haiku 5.5 (Subscription)"},
 					{"claude-sonnet-4-6", "Claude Sonnet 4.6 (Subscription)"},
 					{"claude-opus-4-6", "Claude Opus 4.6 (Subscription)"},
 					{"claude-haiku-4-5-20251001", "Claude Haiku 4.5 (Subscription)"},
@@ -316,24 +368,61 @@ func discoverOpenAI(workspace string) ConnectionStatus {
 	if _, err := exec.LookPath("codex"); err == nil {
 		st.Connected = true
 		st.AuthMethod = "ChatGPT Subscription (Codex CLI)"
-		codexModels := []struct {
-			id   string
-			name string
-		}{
-			{"gpt-6.1-sol", "GPT-6.1 Sol (ChatGPT Subscription)"},
-			{"gpt-5-codex", "GPT-5 Codex (ChatGPT Subscription)"},
-			{"o3-mini", "o3-mini (ChatGPT Subscription)"},
-			{"gpt-4.1", "GPT-4.1 (ChatGPT Subscription)"},
-			{"o4-mini", "o4-mini (ChatGPT Subscription)"},
+
+		// Attempt to read Codex CLI's live model catalog (~/.codex/models_cache.json)
+		if home, err := os.UserHomeDir(); err == nil {
+			codexCachePath := filepath.Join(home, ".codex", "models_cache.json")
+			if data, err := os.ReadFile(codexCachePath); err == nil {
+				var catalog struct {
+					Models []struct {
+						Slug        string `json:"slug"`
+						DisplayName string `json:"display_name"`
+						Visibility  string `json:"visibility"`
+					} `json:"models"`
+				}
+				if json.Unmarshal(data, &catalog) == nil && len(catalog.Models) > 0 {
+					for _, m := range catalog.Models {
+						if m.Visibility == "list" && m.Slug != "" {
+							disp := m.DisplayName
+							if disp == "" {
+								disp = m.Slug
+							}
+							st.Models = append(st.Models, DiscoveredModel{
+								ID:           m.Slug,
+								DisplayName:  disp + " (ChatGPT Subscription)",
+								ProviderKey:  "chatgpt-sub:" + m.Slug,
+								ProviderType: config.ProviderCodexCLI,
+								Source:       "ChatGPT Sub",
+							})
+						}
+					}
+				}
+			}
 		}
-		for _, m := range codexModels {
-			st.Models = append(st.Models, DiscoveredModel{
-				ID:           m.id,
-				DisplayName:  m.name,
-				ProviderKey:  "chatgpt-sub:" + m.id,
-				ProviderType: config.ProviderCodexCLI,
-				Source:       "ChatGPT Sub",
-			})
+
+		// Fallback to verified active Codex models if cache file was not present
+		if len(st.Models) == 0 {
+			codexModels := []struct {
+				id   string
+				name string
+			}{
+				{"gpt-6.1-sol", "GPT-6.1-Sol (ChatGPT Subscription)"},
+				{"gpt-6-astra", "GPT-6-Astra (ChatGPT Subscription)"},
+				{"gpt-6-sol", "GPT-6-Sol (ChatGPT Subscription)"},
+				{"gpt-6-luna", "GPT-6-Luna (ChatGPT Subscription)"},
+				{"gpt-5.6-sol", "GPT-5.6-Sol (ChatGPT Subscription)"},
+				{"gpt-5.6-terra", "GPT-5.6-Terra (ChatGPT Subscription)"},
+				{"gpt-5.6-luna", "GPT-5.6-Luna (ChatGPT Subscription)"},
+			}
+			for _, m := range codexModels {
+				st.Models = append(st.Models, DiscoveredModel{
+					ID:           m.id,
+					DisplayName:  m.name,
+					ProviderKey:  "chatgpt-sub:" + m.id,
+					ProviderType: config.ProviderCodexCLI,
+					Source:       "ChatGPT Sub",
+				})
+			}
 		}
 	}
 
@@ -487,7 +576,15 @@ func readCache(workspace string) ([]ConnectionStatus, bool) {
 	if err := json.Unmarshal(b, &c); err != nil || len(c.Statuses) == 0 {
 		return nil, false
 	}
-	if time.Since(c.UpdatedAt) > 30*time.Minute {
+	// Invalidate cache immediately if it contains legacy defunct model IDs
+	for _, st := range c.Statuses {
+		for _, m := range st.Models {
+			if strings.Contains(m.ID, "claude-opus-4-6-thinking") {
+				return nil, false
+			}
+		}
+	}
+	if time.Since(c.UpdatedAt) > 3*time.Minute {
 		return nil, false
 	}
 	return c.Statuses, true

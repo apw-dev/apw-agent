@@ -375,6 +375,9 @@ func runModelCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writ
 		fmt.Fprintln(stderr, "Error loading config")
 		return 1
 	}
+	if len(args) > 0 && strings.ToLower(args[0]) == "refresh" {
+		_ = cfg.Save(cfgPath)
+	}
 
 	if len(args) == 0 || strings.ToLower(args[0]) == "status" || strings.ToLower(args[0]) == "list" || strings.ToLower(args[0]) == "refresh" {
 		archProv := cfg.Providers[cfg.Roles.Architect]
