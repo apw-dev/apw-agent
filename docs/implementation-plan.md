@@ -185,7 +185,7 @@ Telegram / Discord / CLI
 
 1. ~~สร้าง Git repository และโครง `cmd/apw`, `cmd/apwd`, `internal/core`, `internal/provider`~~ (ทำแล้ว); เพิ่ม `internal/config`, `internal/gateway`, `internal/session`, `internal/task` และ `testdata`
 2. ~~Triad engine ขั้นต้น: Architect (`ExecutionPlan` + `Validate`), Surgeon (read-before-write, hash drift, AST symbols), Reflex (fmt/vet/build/test + diagnostics)~~ (ทำแล้ว)
-3. เขียนข้อสรุปสถาปัตยกรรมสั้น ๆ เรื่อง parser, provider รายแรก, patch format, verification และ task lifecycle
+3. ~~เขียนข้อสรุปสถาปัตยกรรมสั้น ๆ เรื่อง parser, provider รายแรก, patch format, verification และ task lifecycle~~ (ทำแล้ว — `docs/adr/0001-sqlite-driver.md`, `README.md`)
 4. ~~สร้าง config สำหรับ provider, model, endpoint, credential reference, timeout, workspace policy และ budget; แยก secret จาก config ที่ commit ได้~~ (ทำแล้ว — `internal/config`, `apw.example.json`)
 5. ~~เพิ่ม mock provider ที่ให้ผล deterministic สำหรับ integration test และ smoke test การเชื่อมต่อ provider จริงแบบ opt-in~~ (ทำแล้ว — `internal/provider/mock`, `internal/provider/api` พร้อม `APW_LIVE_TEST=1`)
 6. ~~ตั้ง build/test/vet และ format check ใน CI โดยไม่ต้องใช้ API key~~ (ทำแล้ว — `.github/workflows/ci.yml`)

@@ -147,8 +147,8 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error)
 | T4 API provider | ☑ | `46caa1b` |
 | T5 CLI plan | ☑ | `288e8ca` |
 | T6 Local provider (optional) | ☑ | `760c354` |
-| T7 Telegram PoC | ☑ | `feat(m0): add Telegram long-polling PoC and apwd integration (T7)` |
-| T8 SQLite spike | ☐ | |
+| T7 Telegram PoC | ☑ | `901465c` |
+| T8 SQLite spike | ☑ | `feat(m0): add SQLite store spike and ADR 0001 (T8)` |
 
 ## Prompt สำหรับเริ่ม session ใหม่
 
