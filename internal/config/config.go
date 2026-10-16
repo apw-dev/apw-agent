@@ -123,6 +123,20 @@ func LoadOrDefault(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// Save writes the configuration to path as formatted JSON.
+func (c *Config) Save(path string) error {
+	c.applyDefaults()
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0644)
+}
+
 // DetectStack inspects the workspace directory and returns detected languages/frameworks.
 func DetectStack(workspace string) string {
 	var stacks []string

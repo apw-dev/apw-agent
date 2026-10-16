@@ -81,6 +81,9 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	case "daemon":
 		return runDaemonCmd(args[1:], stdout, stderr)
 
+	case "model", "models", "config":
+		return runModelCmd(args[1:], stdout, stderr)
+
 	case "ui", "desktop":
 		return runDesktopApp(args[1:], stdout, stderr)
 
@@ -193,6 +196,13 @@ func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 			_ = runDaemonCmd(sub, stdout, stderr)
 
+		case "model", "models", "config":
+			var sub []string
+			if rest != "" {
+				sub = strings.Fields(rest)
+			}
+			_ = runModelCmd(sub, stdout, stderr)
+
 		case "ui", "desktop":
 			srv := desktop.NewServer("./apw.json", version)
 			url, err := srv.StartAndOpen(context.Background(), "127.0.0.1:0", true)
@@ -257,6 +267,80 @@ func runDaemonCmd(args []string, stdout, stderr io.Writer) int {
 		return 0
 	default:
 		fmt.Fprintln(stderr, "Usage: apw daemon [status|start|stop]")
+		return 2
+	}
+}
+
+func runModelCmd(args []string, stdout, stderr io.Writer) int {
+	cfgPath := "./apw.json"
+	cfg, err := config.LoadOrDefault(cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error loading config: %v\n", err)
+		return 1
+	}
+
+	if len(args) == 0 || strings.ToLower(args[0]) == "status" || strings.ToLower(args[0]) == "list" {
+		archProv := cfg.Providers[cfg.Roles.Architect]
+		reflexProv := cfg.Providers[cfg.Roles.Reflex]
+		fmt.Fprintln(stdout, "Active Dual-Brain Model Routing:")
+		fmt.Fprintf(stdout, "  Brain 1 (Reflex)    : %s -> %s (%s)\n", cfg.Roles.Reflex, reflexProv.Model, reflexProv.Type)
+		fmt.Fprintf(stdout, "  Brain 2 (Architect) : %s -> %s (%s)\n", cfg.Roles.Architect, archProv.Model, archProv.Type)
+		fmt.Fprintln(stdout, "\nConfigured Providers:")
+		for name, p := range cfg.Providers {
+			endpointInfo := p.Endpoint
+			if endpointInfo == "" {
+				endpointInfo = "built-in"
+			}
+			fmt.Fprintf(stdout, "  - %-15s | type=%-6s | model=%-24s | endpoint=%s\n", name, p.Type, p.Model, endpointInfo)
+		}
+		fmt.Fprintln(stdout, "\nCommands:")
+		fmt.Fprintln(stdout, "  apw model init                           Generate ./apw.json in current workspace")
+		fmt.Fprintln(stdout, "  apw model set <architect|reflex> <name>  Switch active provider for a brain role")
+		return 0
+	}
+
+	action := strings.ToLower(args[0])
+	switch action {
+	case "init":
+		if err := cfg.Save(cfgPath); err != nil {
+			fmt.Fprintf(stderr, "Error saving %s: %v\n", cfgPath, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Saved model configuration to %s\n", cfgPath)
+		return 0
+
+	case "set":
+		if len(args) < 3 {
+			fmt.Fprintln(stderr, "Usage: apw model set <architect|reflex|all> <provider_name>")
+			return 2
+		}
+		role := strings.ToLower(args[1])
+		provName := args[2]
+		if _, ok := cfg.Providers[provName]; !ok {
+			fmt.Fprintf(stderr, "Unknown provider %q. Run 'apw model' to see available providers.\n", provName)
+			return 1
+		}
+		switch role {
+		case "architect", "brain2":
+			cfg.Roles.Architect = provName
+		case "reflex", "brain1":
+			cfg.Roles.Reflex = provName
+		case "all", "both":
+			cfg.Roles.Architect = provName
+			cfg.Roles.Reflex = provName
+		default:
+			fmt.Fprintf(stderr, "Unknown role %q (use: architect, reflex, or all)\n", role)
+			return 2
+		}
+		if err := cfg.Save(cfgPath); err != nil {
+			fmt.Fprintf(stderr, "Error saving config: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Updated role %q -> %q in %s\n", role, provName, cfgPath)
+		return 0
+
+	default:
+		fmt.Fprintln(stderr, "Usage: apw model [status|init|set <architect|reflex|all> <provider>]")
 		return 2
 	}
 }
@@ -523,6 +607,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  plan [--config path] \"<task>\"  Generate an ExecutionPlan and save to .apw/plans/")
 	fmt.Fprintln(w, "  verify [dir]                   Run Reflex closed-loop verification (fmt -> vet -> build -> test)")
 	fmt.Fprintln(w, "  symbols <file.go>              Inspect AST code symbols using Surgeon inspector")
+	fmt.Fprintln(w, "  model [status|init|set ...]    View or configure Brain 1 (Reflex) & Brain 2 (Architect) models")
 	fmt.Fprintln(w, "  daemon [status|start|stop]     Manage apwd background agent daemon")
 	fmt.Fprintln(w, "  version                        Show version and architecture info")
 }
