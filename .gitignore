@@ -17,6 +17,7 @@ coverage.txt
 
 # Environment and local configs
 .env
+apw.json
 *.local.yaml
 
 # OS and IDE

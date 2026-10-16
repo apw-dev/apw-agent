@@ -1,0 +1,33 @@
+{
+  "workspace": ".",
+  "providers": {
+    "claude-sonnet": {
+      "type": "api",
+      "endpoint": "https://api.anthropic.com",
+      "model": "claude-sonnet-4-20250514",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "timeout_sec": 120
+    },
+    "claude-haiku": {
+      "type": "api",
+      "endpoint": "https://api.anthropic.com",
+      "model": "claude-3-5-haiku-latest",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "timeout_sec": 60
+    },
+    "ollama-local": {
+      "type": "local",
+      "endpoint": "http://127.0.0.1:11434",
+      "model": "qwen2.5-coder:7b",
+      "timeout_sec": 120
+    }
+  },
+  "roles": {
+    "architect": "claude-sonnet",
+    "reflex": "claude-haiku"
+  },
+  "budget": {
+    "max_repairs": 3,
+    "task_timeout_sec": 600
+  }
+}

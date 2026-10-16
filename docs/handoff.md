@@ -141,7 +141,7 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error)
 
 | งาน | สถานะ | commit |
 | --- | --- | --- |
-| T1 Config | ☐ | |
+| T1 Config | ☑ | `feat(m0): add config loader and validation (T1)` |
 | T2 Mock provider | ☐ | |
 | T3 Reflex repair loop | ☐ | |
 | T4 API provider | ☐ | |
