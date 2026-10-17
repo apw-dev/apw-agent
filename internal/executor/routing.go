@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apiwat/apw-agent/internal/architect"
 	"github.com/apiwat/apw-agent/internal/core"
 )
 
@@ -180,4 +181,109 @@ func (e *Executor) askDirective(ctx context.Context, prompt string) (*patchDirec
 		return nil, errors.New("no providers available for directive generation")
 	}
 	return nil, fmt.Errorf("all configured directive candidates unavailable: %w", errors.Join(failures...))
+}
+
+// errReviewIncomplete keeps the review error text stable while letting the
+// architect failover treat an unusable review as a reason to try a fallback.
+var errReviewIncomplete = errors.New("review response is incomplete")
+
+// architectCandidates returns the architect role followed by its explicit
+// fallbacks. Planning and review never borrow reflex-only providers.
+func (e *Executor) architectCandidates() []FailoverCandidate {
+	pool := e.ArchitectPool
+	if len(pool) == 0 && e.Architect != nil && e.Architect.Provider != nil {
+		pool = []FailoverCandidate{{Provider: e.Architect.Provider, Model: e.Architect.Model}}
+	}
+	var result []FailoverCandidate
+	seen := make(map[string]bool)
+	for _, c := range pool {
+		if c.Provider == nil || seen[candidateID(c)] {
+			continue
+		}
+		seen[candidateID(c)] = true
+		result = append(result, c)
+	}
+	return result
+}
+
+// withArchitectFailover runs attempt against the architect pool in order. It
+// moves to the next candidate only for failover-eligible errors (quota, rate
+// limit, timeout, empty or incomplete output) and shares cooldowns with
+// directive routing. Cancellation and fatal errors stop immediately.
+func (e *Executor) withArchitectFailover(ctx context.Context, stage string, attempt func(context.Context, FailoverCandidate) error) error {
+	candidates := e.architectCandidates()
+	if len(candidates) == 0 {
+		return errors.New("architect: model provider not configured")
+	}
+	if e.Failover.Models == nil {
+		e.Failover.Models = make(map[string]time.Time)
+	}
+	if e.Failover.Groups == nil {
+		e.Failover.Groups = make(map[string]time.Time)
+	}
+	// Skip cooled-down candidates, but never skip every candidate: a lone or
+	// fully paused pool still gets its attempt, matching single-provider behavior.
+	var eligible []FailoverCandidate
+	now := time.Now()
+	for _, c := range candidates {
+		until := e.Failover.Models[candidateID(c)]
+		if g := e.Failover.Groups[candidateGroup(c)]; g.After(until) {
+			until = g
+		}
+		if now.Before(until) {
+			e.emit(ProgressEvent{Stage: stage + "_fallback", Message: fmt.Sprintf("Skipping %s: paused until %s", c.Model, until.Format(time.RFC3339))})
+			continue
+		}
+		eligible = append(eligible, c)
+	}
+	if len(eligible) == 0 {
+		eligible = candidates
+	}
+	var failures []error
+	for i, cand := range eligible {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		started := time.Now()
+		err := attempt(ctx, cand)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, context.Canceled) || !(IsFailoverError(err) || errors.Is(err, errReviewIncomplete)) {
+			return err
+		}
+		failures = append(failures, err)
+		id, group := candidateID(cand), candidateGroup(cand)
+		if quotaFailure(err) {
+			e.Failover.Groups[group] = time.Now().Add(quotaCooldown(err))
+		} else {
+			e.Failover.Models[id] = time.Now().Add(5 * time.Minute)
+		}
+		if i < len(eligible)-1 {
+			e.emit(ProgressEvent{Stage: stage + "_fallback", Duration: time.Since(started), Message: fmt.Sprintf("%s failed after %v: %v; trying next configured architect", cand.Model, time.Since(started).Round(time.Millisecond), err)})
+		}
+	}
+	if len(failures) == 1 {
+		return failures[0]
+	}
+	return fmt.Errorf("all %d architect candidates failed: %w", len(failures), errors.Join(failures...))
+}
+
+// PlanTask asks the architect pool for an execution plan, failing over to the
+// explicitly configured architect fallbacks.
+func (e *Executor) PlanTask(ctx context.Context, task core.Task, overview string) (*architect.ExecutionPlan, error) {
+	var plan *architect.ExecutionPlan
+	err := e.withArchitectFailover(ctx, "planning", func(ctx context.Context, c FailoverCandidate) error {
+		a := architect.NewArchitect(c.Provider)
+		a.Model = c.Model
+		p, err := a.Plan(ctx, task, overview)
+		if err == nil {
+			plan = p
+		}
+		return err
+	})
+	return plan, err
 }

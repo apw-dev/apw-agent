@@ -47,7 +47,7 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	if e.Mode == core.ModeVerify {
 		plan = &architect.ExecutionPlan{PlanID: "plan-" + e.TaskID, TaskID: e.TaskID, Objective: "Verify project", Subtasks: []architect.Subtask{{ID: "verify", Action: architect.ActionVerify}}, AcceptanceCriteria: []string{"builds cleanly"}}
 	} else {
-		plan, err = e.Architect.Plan(ctx, core.Task{ID: e.TaskID, Workspace: e.Workspace, Instruction: instruction, Mode: string(e.Mode)}, contextText)
+		plan, err = e.PlanTask(ctx, core.Task{ID: e.TaskID, Workspace: e.Workspace, Instruction: instruction, Mode: string(e.Mode)}, contextText)
 	}
 
 	if err != nil {
@@ -82,27 +82,33 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 }
 
 func (e *Executor) review(ctx context.Context, instruction, overview string) (*ExecutionReport, error) {
-	if e.Architect == nil || e.Architect.Provider == nil {
+	if len(e.architectCandidates()) == 0 {
 		return nil, errors.New("review provider is not configured")
 	}
 	if e.Session != nil {
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})
-	response, err := e.Architect.Provider.Ask(ctx, core.ModelRequest{
-		RequestID: e.TaskID, Model: e.Architect.Model,
-		Prompt: "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + CodeContext(e.Workspace),
+	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + CodeContext(e.Workspace)
+	var summary string
+	err := e.withArchitectFailover(ctx, "review", func(ctx context.Context, c FailoverCandidate) error {
+		response, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: e.TaskID, Model: c.Model, Prompt: prompt})
+		if err != nil {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if response == nil || !response.Completed || strings.TrimSpace(response.Content) == "" {
+			return errReviewIncomplete
+		}
+		summary = response.Content
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if response == nil || !response.Completed || strings.TrimSpace(response.Content) == "" {
-		return nil, errors.New("review response is incomplete")
-	}
-	return &ExecutionReport{TaskID: e.TaskID, Mode: core.ModeReview, Passed: true, Summary: response.Content}, nil
+	return &ExecutionReport{TaskID: e.TaskID, Mode: core.ModeReview, Passed: true, Summary: summary}, nil
 }
 
 func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionReport, error) {

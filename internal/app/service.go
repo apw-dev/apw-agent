@@ -375,6 +375,13 @@ func (s *Service) run(j *store.Job) {
 				cancel()
 			}
 		}
+		if core.TaskMode(j.Mode) == core.ModeReview && j.Action != "apply" {
+			closeFallbacks, skipped := e.AddArchitectFallbacks(cfg)
+			defer closeFallbacks()
+			for _, skipErr := range skipped {
+				e.OnProgress(executor.ProgressEvent{Stage: "review_fallback", Message: "Unavailable fallback skipped: " + skipErr.Error()})
+			}
+		}
 		if j.Action == "apply" || j.Action == "resume" {
 			cp, loadErr := executor.CheckpointForTask(s.Config.Workspace, j.ID)
 			if loadErr != nil {
@@ -467,7 +474,9 @@ func (s *Service) Plan(ctx context.Context, owner, instruction string) (*archite
 		return nil, err
 	}
 	defer closeProvider()
-	return e.Architect.Plan(ctx, core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: instruction, Mode: "preview"}, executor.CodeContext(cfg.Workspace))
+	closeFallbacks, _ := e.AddArchitectFallbacks(cfg) // unusable fallbacks must not block planning
+	defer closeFallbacks()
+	return e.PlanTask(ctx, core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: instruction, Mode: "preview"}, executor.CodeContext(cfg.Workspace))
 }
 
 // taskConfig returns the effective per-task config. The parsed file and the
@@ -522,6 +531,8 @@ func (s *Service) loadTaskConfig() (*config.Config, error) {
 
 // readOnlyConfig only initializes the selected architect for review/planning.
 // Unused repair providers or their missing credentials must not block read-only work.
+// Architect fallbacks are added afterwards by Executor.AddArchitectFallbacks, which
+// skips any fallback that cannot be constructed.
 func readOnlyConfig(cfg *config.Config) *config.Config {
 	copyCfg := *cfg
 	copyCfg.Roles.Reflex = cfg.Roles.Architect

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
@@ -52,11 +53,40 @@ func CodeContext(root string) string {
 
 func (e *Executor) rememberRead(path, content string) {
 	entry := fmt.Sprintf("\nRead %s:\n```\n%s\n```\n", path, content)
-	if len(entry) > 32*1024 {
-		entry = entry[:32*1024] + "\n[read truncated]\n"
+	if len(entry) > maxReadEntry {
+		entry = headUTF8(entry, maxReadEntry) + "\n[read truncated]\n"
 	}
 	e.ReadContext += entry
-	if len(e.ReadContext) > 96*1024 {
-		e.ReadContext = e.ReadContext[len(e.ReadContext)-96*1024:]
+	if len(e.ReadContext) > maxReadContext {
+		e.ReadContext = tailUTF8(e.ReadContext, maxReadContext)
 	}
+}
+
+const (
+	maxReadEntry   = 32 * 1024
+	maxReadContext = 96 * 1024
+)
+
+// headUTF8 returns at most n bytes of s without splitting a multi-byte rune
+// (Thai text is 3 bytes per character; a byte cut would send invalid UTF-8).
+func headUTF8(s string, n int) string {
+	if n >= len(s) {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// tailUTF8 returns at most the last n bytes of s, starting on a rune boundary.
+func tailUTF8(s string, n int) string {
+	if n >= len(s) {
+		return s
+	}
+	start := len(s) - n
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
 }
