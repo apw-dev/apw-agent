@@ -114,6 +114,40 @@ type Config struct {
 	// WorktreeRoot is an absolute directory outside the workspace that holds task worktrees
 	// (one subdirectory per workspace). Empty selects APW_WORKTREE_ROOT, else the user cache directory.
 	WorktreeRoot string `json:"worktree_root,omitempty"`
+	// Sandbox isolates repository commands that verification runs (install, build, test).
+	Sandbox SandboxConfig `json:"sandbox,omitzero"`
+	// Research lets the Architect read allowlisted documentation before planning.
+	Research ResearchConfig `json:"research,omitzero"`
+	// Planning asks several architect models for plans and ranks them.
+	Planning PlanningConfig `json:"planning,omitzero"`
+}
+
+// SandboxConfig selects how verification commands are isolated. Mode "off" (default) runs them as
+// the current user; "restricted" uses a low-integrity Windows token with job limits or bubblewrap on
+// Linux; "docker" runs each stage in a container with only the worktree mounted.
+type SandboxConfig struct {
+	Mode     string   `json:"mode,omitempty"`      // off, restricted, docker
+	Image    string   `json:"image,omitempty"`     // docker image with the project toolchain
+	Network  string   `json:"network,omitempty"`   // install (default): only dependency install; none; all
+	MemoryMB int      `json:"memory_mb,omitempty"` // whole-stage memory cap; 0 = unlimited
+	PassEnv  []string `json:"pass_env,omitempty"`  // credential-like variables to pass anyway (e.g. NPM_TOKEN)
+}
+
+// ResearchConfig enables read-only documentation lookup for planning. Fetches are HTTPS GET requests
+// without credentials to allowlisted hosts only.
+type ResearchConfig struct {
+	Enabled      bool     `json:"enabled,omitempty"`
+	Hosts        []string `json:"hosts,omitempty"`          // added to the built-in documentation allowlist
+	Search       string   `json:"search,omitempty"`         // "" (none) or "brave"
+	SearchKeyEnv string   `json:"search_key_env,omitempty"` // default BRAVE_API_KEY
+	MaxSources   int      `json:"max_sources,omitempty"`    // default 4
+}
+
+// PlanningConfig controls multi-model planning. Proposals > 1 asks that many architect candidates
+// (the architect role and its failover list) in parallel and ranks the valid plans.
+type PlanningConfig struct {
+	Proposals int  `json:"proposals,omitempty"`
+	Judge     bool `json:"judge,omitempty"` // ask the primary architect to score the proposals too
 }
 
 // VerifyConfig overrides the detected verification pipeline. It is how a project in
@@ -121,6 +155,9 @@ type Config struct {
 // Stages run in order inside the isolated worktree and only after `apw trust`.
 type VerifyConfig struct {
 	Stages []VerifyStage `json:"stages,omitempty"`
+	// Browser controls the headless-browser page check for web projects: "auto" (default) runs it
+	// when Edge or Chrome is installed, "off" disables it.
+	Browser string `json:"browser,omitempty"`
 }
 
 // VerifyStage is one command; Run is an argument vector (no shell).
@@ -347,6 +384,44 @@ func (c *Config) Validate() error {
 		if filepath.Dir(filepath.Clean(root)) == filepath.Clean(root) {
 			return fmt.Errorf("config: worktree_root %q must not be a volume or file-system root", root)
 		}
+	}
+	switch c.Sandbox.Mode {
+	case "", "off", "restricted":
+	case "docker":
+		if strings.TrimSpace(c.Sandbox.Image) == "" {
+			return errors.New("config: sandbox.mode docker requires sandbox.image")
+		}
+	default:
+		return fmt.Errorf("config: sandbox.mode %q must be off, restricted or docker", c.Sandbox.Mode)
+	}
+	switch c.Sandbox.Network {
+	case "", "install", "none", "all":
+	default:
+		return fmt.Errorf("config: sandbox.network %q must be install, none or all", c.Sandbox.Network)
+	}
+	if c.Sandbox.MemoryMB < 0 {
+		return errors.New("config: sandbox.memory_mb must not be negative")
+	}
+	switch c.Verify.Browser {
+	case "", "auto", "off":
+	default:
+		return fmt.Errorf("config: verify.browser %q must be auto or off", c.Verify.Browser)
+	}
+	switch c.Research.Search {
+	case "", "brave":
+	default:
+		return fmt.Errorf("config: research.search %q must be empty or brave", c.Research.Search)
+	}
+	for _, h := range c.Research.Hosts {
+		if h == "" || strings.ContainsAny(h, "/:@ ") {
+			return fmt.Errorf("config: research.hosts entry %q must be a bare host name", h)
+		}
+	}
+	if c.Research.MaxSources < 0 || c.Research.MaxSources > 10 {
+		return errors.New("config: research.max_sources must be between 0 and 10")
+	}
+	if c.Planning.Proposals < 0 || c.Planning.Proposals > 5 {
+		return errors.New("config: planning.proposals must be between 0 and 5")
 	}
 	seenStage := map[string]bool{}
 	for i, s := range c.Verify.Stages {

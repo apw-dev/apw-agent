@@ -52,12 +52,27 @@ func (b *Buffer) Truncated() bool {
 	return b.truncated
 }
 
+// Limits restricts a sandboxed process tree. They are enforced through the Windows job object;
+// other platforms rely on the sandbox wrapper (bubblewrap or Docker) instead.
+type Limits struct {
+	// MemoryBytes caps the committed memory of the whole job; 0 means unlimited.
+	MemoryBytes uint64
+	// RestrictUI denies desktop, clipboard, global atom and foreign USER handle access.
+	RestrictUI bool
+}
+
 // Run owns a process group/job until exit. Cancel and normal parent exit kill descendants.
 func Run(ctx context.Context, cmd *exec.Cmd) error {
+	return RunLimited(ctx, cmd, Limits{})
+}
+
+// RunLimited is Run with additional job limits. A SysProcAttr already set on cmd (for example a
+// restricted Windows token) is kept.
+func RunLimited(ctx context.Context, cmd *exec.Cmd, limits Limits) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	job, err := prepare(cmd)
+	job, err := prepare(cmd, limits)
 	if err != nil {
 		return err
 	}

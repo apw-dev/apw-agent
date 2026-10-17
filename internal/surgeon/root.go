@@ -55,7 +55,7 @@ func AllowedPath(rel string) error {
 	}
 	for _, p := range strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/") {
 		p = strings.ToLower(p)
-		if p == ".git" || p == ".apw" || p == ".worktrees" || p == ".env" || strings.HasPrefix(p, ".env.") || strings.HasSuffix(p, ".pem") || strings.HasSuffix(p, ".key") {
+		if p == ".git" || p == ".apw" || p == ".apw-sandbox" || p == ".worktrees" || p == ".env" || strings.HasPrefix(p, ".env.") || strings.HasSuffix(p, ".pem") || strings.HasSuffix(p, ".key") {
 			return fmt.Errorf("protected workspace path %q", rel)
 		}
 	}

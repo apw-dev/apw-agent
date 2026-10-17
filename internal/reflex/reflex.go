@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"github.com/apiwat/apw-agent/internal/process"
 	"github.com/apiwat/apw-agent/internal/project"
+	"github.com/apiwat/apw-agent/internal/sandbox"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 	"go/format"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -36,7 +36,12 @@ type VerificationResult struct {
 	Diagnostics []Diagnostic  `json:"diagnostics,omitempty"`
 	RawOutput   string        `json:"raw_output,omitempty"`
 	Duration    time.Duration `json:"duration"`
+	// Sandbox describes the isolation repository commands ran under ("" when off).
+	Sandbox string `json:"sandbox,omitempty"`
 }
+
+// StageSandbox is the FailedStage of a result whose sandbox could not be prepared.
+const StageSandbox = "sandbox"
 
 // Verifier manages the multi-stage verification pipeline
 type Verifier struct {
@@ -46,6 +51,9 @@ type Verifier struct {
 	// Profile selects the pipeline. Nil detects it from Workspace; a Go module
 	// without a configured override keeps gofmt -> go vet -> go build -> go test.
 	Profile *project.Profile
+	// Sandbox isolates repository commands (see package sandbox); the zero value runs them directly.
+	Sandbox sandbox.Policy
+	session *sandbox.Session
 }
 
 // NewVerifierForProfile creates a Verifier that runs the given project pipeline.
@@ -105,19 +113,32 @@ func ParseGoErrors(stage, raw string) []Diagnostic {
 
 // RunCommand executes a command inside workspace directory with timeout
 func (v *Verifier) RunCommand(ctx context.Context, name string, args ...string) (string, error) {
-	cmdCtx, cancel := context.WithTimeout(ctx, v.Timeout)
+	return v.run(ctx, v.Timeout, sandbox.Spec{Args: append([]string{name}, args...)})
+}
+
+// run executes spec in the workspace under the verifier's sandbox session (or directly when none is
+// open), bounded by timeout and the process runner.
+func (v *Verifier) run(ctx context.Context, timeout time.Duration, spec sandbox.Spec) (string, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, name, args...)
-	cmd.Dir = v.Workspace
-
+	sess := v.session
+	if sess == nil {
+		var err error
+		if sess, err = sandbox.Open(sandbox.Policy{}, v.Workspace); err != nil {
+			return "", err
+		}
+	}
+	prepared, err := sess.Command(cmdCtx, spec)
+	if err != nil {
+		return "", err
+	}
+	defer prepared.Cleanup()
 	var outBuf process.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
-
-	err := process.Run(cmdCtx, cmd)
-	if err != nil && cmdCtx.Err() == context.DeadlineExceeded {
-		err = fmt.Errorf("%s %s: timed out after %v: %w", name, strings.Join(args, " "), v.Timeout, err)
+	prepared.Cmd.Stdout = &outBuf
+	prepared.Cmd.Stderr = &outBuf
+	err = process.RunLimited(cmdCtx, prepared.Cmd, prepared.Limits)
+	if err != nil && cmdCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		err = fmt.Errorf("%s: timed out after %v: %w", strings.Join(spec.Args, " "), timeout, err)
 	}
 	return outBuf.String(), err
 }
@@ -217,6 +238,22 @@ func (v *Verifier) checkFormat(ctx context.Context) (string, error) {
 // override runs gofmt -> go vet -> go build -> go test; any other project runs its
 // detected or configured stages (see package project).
 func (v *Verifier) Verify(ctx context.Context) *VerificationResult {
+	if v.Sandbox.Active() {
+		start := time.Now()
+		sess, err := sandbox.Open(v.Sandbox, v.Workspace)
+		if err != nil {
+			return failed(StageSandbox, err.Error(), err, start)
+		}
+		v.session = sess
+		defer func() { sess.Close(); v.session = nil }()
+		res := v.verify(ctx)
+		res.Sandbox = sess.Describe()
+		return res
+	}
+	return v.verify(ctx)
+}
+
+func (v *Verifier) verify(ctx context.Context) *VerificationResult {
 	profile := v.Profile
 	if profile == nil {
 		detected := project.Detect(v.Workspace, nil)
@@ -339,6 +376,9 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error) {
 	for retry := 1; retry <= e.MaxRetries; retry++ {
 		if err := ctx.Err(); err != nil {
 			return attempts, err
+		}
+		if res.FailedStage == StageSandbox {
+			return attempts, fmt.Errorf("verification sandbox could not be prepared; source repair was not attempted: %s", strings.TrimSpace(res.RawOutput))
 		}
 		if e.Verifier.isInstallStage(res.FailedStage) {
 			// A failing dependency install is an environment problem (registry, network,

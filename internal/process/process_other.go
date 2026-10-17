@@ -9,8 +9,11 @@ import (
 
 type processJob struct{ pid int }
 
-func prepare(cmd *exec.Cmd) (*processJob, error) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+func prepare(cmd *exec.Cmd, _ Limits) (*processJob, error) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
 	return &processJob{}, nil
 }
 func (j *processJob) attach(cmd *exec.Cmd) error { j.pid = cmd.Process.Pid; return nil }

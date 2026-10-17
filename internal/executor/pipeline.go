@@ -77,7 +77,9 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	}
 	if e.Mode == core.ModeExecute {
 		e.emit(ProgressEvent{Stage: "baseline", Message: "Checking baseline before editing"})
-		e.VerificationBaseline = reflex.NewVerifierForProfile(wt.Path, e.Profile(wt.Path)).Verify(ctx)
+		baseline := reflex.NewVerifierForProfile(wt.Path, e.Profile(wt.Path))
+		baseline.Sandbox = e.Sandbox
+		e.VerificationBaseline = baseline.Verify(ctx)
 	}
 	return e.runPreparedPlan(ctx, plan, wt, 0, nil, instruction)
 }
@@ -218,6 +220,7 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 	} else {
 		e.emit(ProgressEvent{Stage: "verifying", Message: "Verifying isolated changes"})
 		engine := reflex.NewReflexEngineForProfile(wt.Path, e.Reflex.MaxRetries, e.Profile(wt.Path))
+		engine.Verifier.Sandbox = e.Sandbox
 		attempts, err := engine.Run(ctx, func(ctx context.Context, diagnostics string) error {
 			if e.Mode == core.ModeVerify {
 				return errors.New("verification failed; verification mode does not repair files")
@@ -252,6 +255,9 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 				label = "FAIL"
 			}
 			report.Summary += "\nAcceptance " + label + ": " + check.Criterion + " — " + check.Evidence
+		}
+		if last := attempts[len(attempts)-1].Result; last != nil && last.Sandbox != "" {
+			report.Summary += "\nSandbox: " + last.Sandbox
 		}
 		if report.Diagnostics != nil {
 			d := report.Diagnostics

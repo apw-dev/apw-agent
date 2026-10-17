@@ -21,6 +21,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/executor"
 	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/provider/factory"
+	"github.com/apiwat/apw-agent/internal/sandbox"
 	"github.com/apiwat/apw-agent/internal/store"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 	"github.com/apiwat/apw-agent/internal/workspace"
@@ -352,6 +353,7 @@ func (s *Service) run(j *store.Job) {
 		e.Session = sess
 		e.VerifyOverride = project.FromConfig(cfg.Verify)
 		e.WorktreeRoot = cfg.WorktreeRoot
+		e.Sandbox = sandbox.FromConfig(cfg.Sandbox)
 
 		e.TaskID = j.ID
 		e.Mode = core.TaskMode(j.Mode)

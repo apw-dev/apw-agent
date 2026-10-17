@@ -18,8 +18,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/apiwat/apw-agent/internal/process"
 	"github.com/apiwat/apw-agent/internal/project"
+	"github.com/apiwat/apw-agent/internal/sandbox"
 )
 
 // maxPromptOutput bounds the raw tool output sent back to the repair model.
@@ -64,7 +64,7 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 			err := fmt.Errorf("unknown builtin verification stage %q", s.Builtin)
 			return failed(s.Name, err.Error(), err, start)
 		}
-		if s.SkipIfMissing && !project.Available(s) {
+		if s.SkipIfMissing && v.Sandbox.Mode != sandbox.ModeDocker && !project.Available(s) {
 			continue
 		}
 		stamp := ""
@@ -91,30 +91,18 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 }
 
 // runStage runs one command stage with its environment and timeout, bounded by
-// the process runner (job object / process group, output limits).
+// the process runner (job object / process group, output limits) and the sandbox.
 func (v *Verifier) runStage(ctx context.Context, s project.Stage) (string, error) {
 	if len(s.Command) == 0 {
 		return "", fmt.Errorf("stage %s has no command", s.Name)
 	}
 	timeout := project.TimeoutOf(s)
-	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, s.Command[0], s.Command[1:]...)
-	cmd.Dir = v.Workspace
-	cmd.Env = append(os.Environ(), s.Env...)
-	var out process.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := process.Run(cmdCtx, cmd)
-	if err != nil && errors.Is(cmdCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-		err = fmt.Errorf("%s: timed out after %v: %w", strings.Join(s.Command, " "), timeout, err)
-	} else if err != nil {
-		var notFound *exec.Error
-		if errors.As(err, &notFound) {
-			err = fmt.Errorf("%s is not installed or not on PATH: %w", s.Command[0], err)
-		}
+	out, err := v.run(ctx, timeout, sandbox.Spec{Args: s.Command, Env: s.Env, Install: s.Once, Optional: s.SkipIfMissing})
+	var notFound *exec.Error
+	if err != nil && errors.As(err, &notFound) {
+		err = fmt.Errorf("%s is not installed or not on PATH: %w", s.Command[0], err)
 	}
-	return out.String(), err
+	return out, err
 }
 
 // stampValue hashes the stage command and its input files; "" disables stamping.

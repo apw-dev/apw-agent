@@ -15,6 +15,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/provider"
 	"github.com/apiwat/apw-agent/internal/reflex"
+	"github.com/apiwat/apw-agent/internal/sandbox"
 	"github.com/apiwat/apw-agent/internal/session"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
@@ -91,6 +92,8 @@ type Executor struct {
 	VerifyOverride []project.Stage
 	// WorktreeRoot overrides where task worktrees are created (apw.json worktree_root).
 	WorktreeRoot string
+	// Sandbox isolates the repository commands verification runs (apw.json sandbox).
+	Sandbox sandbox.Policy
 }
 
 // Profile detects the project at root, applying any configured verification override.

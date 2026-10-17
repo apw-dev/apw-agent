@@ -229,6 +229,7 @@ func CreateWorktree(ctx context.Context, workspace string, opts WorktreeOptions)
 		return nil, ErrWorktreeExists
 	}
 	ensureGitExclude(abs, ".apw/")
+	ensureGitExclude(abs, SandboxDir+"/")
 	paths, err := workspaceFiles(ctx, abs)
 	if err != nil {
 		return nil, err
@@ -444,6 +445,14 @@ func copyFile(src, dst string) error {
 	}
 	return WriteFileAtomic(dst, data, fi.Mode().Perm())
 }
+
+// SandboxDir is the per-worktree directory holding sandboxed verification caches and temp files.
+// It is excluded from Git and protected like .apw, so it never counts as a task change.
+const SandboxDir = ".apw-sandbox"
+
+// EnsureGitExclude adds pattern to the repository's info/exclude when it is not listed yet.
+func EnsureGitExclude(workspace, pattern string) { ensureGitExclude(workspace, pattern) }
+
 func ensureGitExclude(workspace, pattern string) {
 	out, err := gitOutput(context.Background(), workspace, "rev-parse", "--git-path", "info/exclude")
 	if err != nil {
