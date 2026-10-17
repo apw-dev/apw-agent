@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/apiwat/apw-agent/internal/browser"
 	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/sandbox"
 )
@@ -57,6 +58,11 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 					raw.WriteString(d.RawError + "\n")
 				}
 				return &VerificationResult{FailedStage: s.Name, Diagnostics: diags, RawOutput: raw.String(), Duration: time.Since(start)}
+			}
+			continue
+		case project.BuiltinBrowser:
+			if res := v.browserResult(ctx, s, start); res != nil {
+				return res
 			}
 			continue
 		case "":
@@ -334,4 +340,50 @@ func longPathHint(workspace, out string) string {
 		return ""
 	}
 	return fmt.Sprintf("likely Windows path length limit: the isolated worktree path is %d characters and dependency paths below it exceed 260; set a short worktree_root in apw.json (for example D:\\apw-wt) or enable Windows long paths", len(workspace))
+}
+
+// BrowserScreenshot is where the browser stage stores its screenshot, relative to the worktree.
+var BrowserScreenshot = filepath.Join(".apw", "browser", "index.png")
+
+// browserResult renders the build output's index page headlessly. It fails on uncaught page errors
+// or a page with no visible content; it is skipped when the build produced no index.html (for
+// example a library build) or no browser is installed. Under an active sandbox the page cannot
+// reach hosts other than APW's local server.
+func (v *Verifier) browserResult(ctx context.Context, s project.Stage, start time.Time) *VerificationResult {
+	dir := filepath.Join(v.Workspace, filepath.FromSlash(s.Dir))
+	if fi, err := os.Stat(filepath.Join(dir, "index.html")); err != nil || !fi.Mode().IsRegular() {
+		return nil
+	}
+	exe, ok := browser.Find()
+	if !ok {
+		return nil
+	}
+	timeout := project.TimeoutOf(s)
+	page, err := browser.Visit(ctx, browser.Options{Browser: exe, Dir: dir, Screenshot: filepath.Join(v.Workspace, BrowserScreenshot), Offline: v.Sandbox.Active(), Timeout: timeout})
+	if err != nil {
+		return failed(s.Name, err.Error(), err, start)
+	}
+	var diags []Diagnostic
+	for _, msg := range page.Errors {
+		text := "uncaught error while rendering " + s.Dir + "/index.html in a headless browser: " + msg
+		diags = append(diags, Diagnostic{Stage: s.Name, File: filepath.ToSlash(filepath.Join(s.Dir, "index.html")), Message: text, RawError: text})
+	}
+	if page.Blank {
+		text := "the built page " + s.Dir + "/index.html rendered no visible content in a headless browser (blank page)"
+		diags = append(diags, Diagnostic{Stage: s.Name, File: filepath.ToSlash(filepath.Join(s.Dir, "index.html")), Message: text, RawError: text})
+	}
+	if len(diags) == 0 {
+		return nil
+	}
+	var raw strings.Builder
+	for _, d := range diags {
+		raw.WriteString(d.RawError + "\n")
+	}
+	for _, r := range page.Rejections {
+		raw.WriteString("unhandled promise rejection (not counted as a failure): " + r + "\n")
+	}
+	if len(page.Console) > 0 {
+		raw.WriteString("console: " + strings.Join(page.Console, " | ") + "\n")
+	}
+	return &VerificationResult{FailedStage: s.Name, Diagnostics: diags, RawOutput: raw.String(), Duration: time.Since(start)}
 }

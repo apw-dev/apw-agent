@@ -217,3 +217,20 @@ func TestVerificationCheckAcceptsProjectStageNames(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserCheckValidation(t *testing.T) {
+	base := `{"objective":"x","subtasks":[{"id":"1","action":"verify"}],"acceptance_criteria":["ok"],"checks":[{"criterion":"ok","kind":"browser"%s}]}`
+	for extra, ok := range map[string]bool{
+		`,"value":"Count is 10"`:                   true,
+		`,"file":"/about","value":"About us"`:      true,
+		`,"file":"/"`:                              false,
+		`,"file":"about","value":"x"`:              false,
+		`,"file":"https://evil.test/","value":"x"`: false,
+		`,"file":"/../secret","value":"x"`:         false,
+	} {
+		_, err := ParsePlan("task-1", strings.Replace(base, "%s", extra, 1))
+		if (err == nil) != ok {
+			t.Fatalf("%s: err=%v want ok=%v", extra, err, ok)
+		}
+	}
+}

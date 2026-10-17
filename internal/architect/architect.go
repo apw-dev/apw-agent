@@ -84,7 +84,7 @@ func (p *ExecutionPlan) Validate() error {
 		}
 	}
 	for _, c := range p.Checks {
-		if c.Kind != "verification" && c.Kind != "only_changes" && (!filepath.IsLocal(c.File) || c.File == ".") {
+		if c.Kind != "verification" && c.Kind != "only_changes" && c.Kind != "browser" && (!filepath.IsLocal(c.File) || c.File == ".") {
 			return errors.New("acceptance check requires a workspace file")
 		}
 		switch c.Kind {
@@ -101,6 +101,13 @@ func (p *ExecutionPlan) Validate() error {
 				if !filepath.IsLocal(file) || filepath.Clean(file) == "." {
 					return errors.New("only_changes requires local file paths")
 				}
+			}
+		case "browser":
+			if strings.TrimSpace(c.Value) == "" {
+				return errors.New("browser check requires value (text the rendered page must show)")
+			}
+			if c.File != "" && (!strings.HasPrefix(c.File, "/") || strings.Contains(c.File, "..") || strings.Contains(c.File, "://") || len(c.File) > 200) {
+				return errors.New(`browser check file must be a page path such as "/" or "/about"`)
 			}
 		case "contains", "not_contains", "go_symbol":
 			if c.Value == "" {
@@ -158,6 +165,7 @@ Rules:
    - unchanged: use file; APW compares its state with the original snapshot.
    - only_changes: use files (an array of allowed relative paths); APW compares all snapshot changes.
    - verification: use value "all" or a stage name from the Verification pipeline in the Project profile; APW runs only that detected or configured pipeline, never commands you propose.
+   - browser (only when the Project profile lists a Browser check): file is the page path ("/" by default), value is text the rendered page must visibly show; APW renders the built page headlessly.
    Example scope check: {"criterion":"Only src/App.tsx changes","kind":"only_changes","files":["src/App.tsx"]}.
    Example test check: {"criterion":"Tests pass","kind":"verification","value":"test"}.
    Checks must use source evidence; do not substitute a generic build-pass criterion for requested behavior.

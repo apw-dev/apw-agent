@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
@@ -119,8 +120,17 @@ func CodeContext(root string) string {
 
 // ProjectOverview prefixes the source context with the detected project profile
 // and verification pipeline, so plans name real stages and conventions.
-func ProjectOverview(root string, override []project.Stage) string {
-	return project.Detect(root, override).Describe() + "\n" + CodeContext(root)
+func ProjectOverview(root string, profile project.Profile) string {
+	return profile.Describe() + "\n" + CodeContext(root)
+}
+
+// ConfiguredProfile detects root's project with apw.json verify settings applied.
+func ConfiguredProfile(root string, v config.VerifyConfig) project.Profile {
+	p := project.Detect(root, project.FromConfig(v))
+	if v.Browser == "off" {
+		p = p.WithoutBrowser()
+	}
+	return p
 }
 
 func (e *Executor) rememberRead(path, content string) {

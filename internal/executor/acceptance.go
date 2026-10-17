@@ -3,11 +3,14 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/apiwat/apw-agent/internal/architect"
+	"github.com/apiwat/apw-agent/internal/browser"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
@@ -17,10 +20,27 @@ type CheckResult struct {
 	Evidence  string `json:"evidence"`
 }
 
+// pageVisitor renders one page of the worktree's build output for "browser" acceptance checks and
+// returns its visible text, or nil when the project has no browser stage.
+type pageVisitor func(path string) (*browser.Page, error)
+
 func acceptance(root string, plan *architect.ExecutionPlan, verified bool) ([]CheckResult, bool) {
-	return acceptanceSnapshot(root, plan, verified, nil)
+	return acceptanceSnapshot(root, plan, verified, nil, nil)
 }
-func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified bool, wt *surgeon.Worktree) ([]CheckResult, bool) {
+
+// pageVisitor returns a visitor for root's browser stage, or nil when there is none.
+func (e *Executor) pageVisitor(ctx context.Context, root string) pageVisitor {
+	stage, ok := e.Profile(root).BrowserStage()
+	if !ok {
+		return nil
+	}
+	dir := filepath.Join(root, filepath.FromSlash(stage.Dir))
+	return func(path string) (*browser.Page, error) {
+		return browser.Visit(ctx, browser.Options{Dir: dir, Path: path, Offline: e.Sandbox.Active()})
+	}
+}
+
+func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified bool, wt *surgeon.Worktree, visit pageVisitor) ([]CheckResult, bool) {
 	var results []CheckResult
 	all := true
 	for _, criterion := range plan.AcceptanceCriteria {
@@ -32,7 +52,11 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 				continue
 			}
 			count++
-			data, _, err := surgeon.ReadInRoot(root, check.File)
+			var data []byte
+			var err error
+			if check.Kind != "browser" {
+				data, _, err = surgeon.ReadInRoot(root, check.File)
+			}
 			ok := false
 			evidence := ""
 			switch check.Kind {
@@ -59,6 +83,30 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 					evidence = "actual changed files: " + strings.Join(changes, ", ")
 				}
 
+			case "browser":
+				page := check.File
+				if page == "" {
+					page = "/"
+				}
+				evidence = "headless browser render of " + page
+				switch {
+				case !verified:
+					evidence += ": skipped because verification did not pass"
+				case visit == nil:
+					evidence += ": unavailable (no browser stage for this project)"
+				default:
+					rendered, visitErr := visit(page)
+					if visitErr != nil {
+						evidence += ": " + visitErr.Error()
+						break
+					}
+					ok = strings.Contains(rendered.Text, strings.Join(strings.Fields(check.Value), " "))
+					evidence += fmt.Sprintf(": visible text %q", clip(rendered.Text, 160))
+					if len(rendered.Errors) > 0 {
+						ok = false
+						evidence += "; uncaught errors: " + strings.Join(rendered.Errors, " | ")
+					}
+				}
 			case "file_exists":
 				ok = err == nil
 			case "file_absent":
@@ -104,4 +152,12 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 		results = append(results, result)
 	}
 	return results, all
+}
+
+// clip shortens s to at most n runes for evidence text.
+func clip(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n]) + "..."
 }

@@ -354,6 +354,7 @@ func (s *Service) run(j *store.Job) {
 		e.VerifyOverride = project.FromConfig(cfg.Verify)
 		e.WorktreeRoot = cfg.WorktreeRoot
 		e.Sandbox = sandbox.FromConfig(cfg.Sandbox)
+		e.BrowserCheck = cfg.Verify.Browser
 
 		e.TaskID = j.ID
 		e.Mode = core.TaskMode(j.Mode)
@@ -481,7 +482,7 @@ func (s *Service) Plan(ctx context.Context, owner, instruction string) (*archite
 	defer closeProvider()
 	closeFallbacks, _ := e.AddArchitectFallbacks(cfg) // unusable fallbacks must not block planning
 	defer closeFallbacks()
-	return e.PlanTask(ctx, core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: instruction, Mode: "preview"}, executor.ProjectOverview(cfg.Workspace, project.FromConfig(cfg.Verify)))
+	return e.PlanTask(ctx, core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: instruction, Mode: "preview"}, executor.ProjectOverview(cfg.Workspace, executor.ConfiguredProfile(cfg.Workspace, cfg.Verify)))
 }
 
 // taskConfig returns the effective per-task config. The parsed file and the

@@ -91,7 +91,7 @@ func TestCodeContextListsFilesBeyondBudget(t *testing.T) {
 func TestProjectOverviewAndExecutorProfile(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{"package.json": `{"scripts":{"test":"vitest"},"devDependencies":{"vitest":"2","typescript":"5"}}`, "bun.lock": ""})
-	overview := ProjectOverview(root, nil)
+	overview := ProjectOverview(root, project.Detect(root, nil))
 	if !strings.Contains(overview, "package manager bun") || !strings.Contains(overview, "Verification pipeline: install -> test") {
 		t.Fatalf("overview: %s", overview[:200])
 	}

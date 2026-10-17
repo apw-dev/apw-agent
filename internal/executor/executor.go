@@ -94,11 +94,17 @@ type Executor struct {
 	WorktreeRoot string
 	// Sandbox isolates the repository commands verification runs (apw.json sandbox).
 	Sandbox sandbox.Policy
+	// BrowserCheck is apw.json verify.browser: "off" drops the headless page check.
+	BrowserCheck string
 }
 
 // Profile detects the project at root, applying any configured verification override.
 func (e *Executor) Profile(root string) project.Profile {
-	return project.Detect(root, e.VerifyOverride)
+	p := project.Detect(root, e.VerifyOverride)
+	if e.BrowserCheck == "off" {
+		p = p.WithoutBrowser()
+	}
+	return p
 }
 
 func (e *Executor) emit(ev ProgressEvent) {

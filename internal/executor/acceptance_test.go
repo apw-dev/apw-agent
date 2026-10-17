@@ -14,16 +14,16 @@ func TestAcceptanceUsesSnapshotScopeAndFixedVerification(t *testing.T) {
 		{Criterion: "preserved", Kind: "unchanged", File: "helper.go"},
 		{Criterion: "tests", Kind: "verification", Value: "test"},
 	}}
-	if _, ok := acceptanceSnapshot(wt.Path, plan, true, wt); !ok {
+	if _, ok := acceptanceSnapshot(wt.Path, plan, true, wt, nil); !ok {
 		t.Fatal("valid scope/verification failed")
 	}
-	if _, ok := acceptanceSnapshot(wt.Path, plan, false, wt); ok {
+	if _, ok := acceptanceSnapshot(wt.Path, plan, false, wt, nil); ok {
 		t.Fatal("failed tests accepted")
 	}
 	if err := os.WriteFile(filepath.Join(wt.Path, "helper.go"), []byte("changed"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	results, ok := acceptanceSnapshot(wt.Path, plan, true, wt)
+	results, ok := acceptanceSnapshot(wt.Path, plan, true, wt, nil)
 	if ok || results[0].Passed || results[1].Passed {
 		t.Fatal("unexpected or changed file was accepted")
 	}

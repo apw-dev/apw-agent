@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apiwat/apw-agent/internal/browser"
 	"github.com/apiwat/apw-agent/internal/config"
 )
 
@@ -20,6 +21,8 @@ import (
 const (
 	BuiltinGoFmt     = "gofmt"
 	BuiltinHTMLLinks = "html-links"
+	// BuiltinBrowser renders the build output in a headless browser (see package browser).
+	BuiltinBrowser = "browser"
 )
 
 // Stage is one verification step. Exactly one of Command or Builtin is set.
@@ -37,6 +40,8 @@ type Stage struct {
 	StampDir   string
 	// SkipIfMissing skips the stage when Command[0] is not installed.
 	SkipIfMissing bool
+	// Dir is the directory a builtin browser stage serves (relative to the root).
+	Dir string
 }
 
 // Profile describes the detected project and its verification pipeline.
@@ -64,7 +69,33 @@ func (p Profile) Describe() string {
 	if pipeline == "" {
 		pipeline = "none (configure verify.stages in apw.json)"
 	}
-	return "Project profile: " + p.Summary + "\nVerification pipeline: " + pipeline
+	out := "Project profile: " + p.Summary + "\nVerification pipeline: " + pipeline
+	if s, ok := p.BrowserStage(); ok {
+		out += "\nBrowser check: the " + s.Name + " stage renders " + s.Dir + "/index.html headlessly and fails on uncaught page errors or a blank page; acceptance checks of kind \"browser\" can assert visible page text"
+	}
+	return out
+}
+
+// BrowserStage returns the profile's headless browser stage, if any.
+func (p Profile) BrowserStage() (Stage, bool) {
+	for _, s := range p.Stages {
+		if s.Builtin == BuiltinBrowser {
+			return s, true
+		}
+	}
+	return Stage{}, false
+}
+
+// WithoutBrowser returns the profile without its browser stage (verify.browser "off").
+func (p Profile) WithoutBrowser() Profile {
+	var stages []Stage
+	for _, s := range p.Stages {
+		if s.Builtin != BuiltinBrowser {
+			stages = append(stages, s)
+		}
+	}
+	p.Stages = stages
+	return p
 }
 
 const (
@@ -107,9 +138,9 @@ func detect(root string) Profile {
 	case exists(root, "pyproject.toml") || exists(root, "requirements.txt") || exists(root, "setup.py"):
 		return detectPython(root)
 	case exists(root, "index.html") || len(globHTML(root)) > 0:
-		return Profile{Kind: "static-html", Summary: "Static HTML/CSS/JS site", Stages: []Stage{
+		return Profile{Kind: "static-html", Summary: "Static HTML/CSS/JS site", Stages: withBrowser([]Stage{
 			{Name: "links", Builtin: BuiltinHTMLLinks},
-		}}
+		}, ".")}
 	}
 	return Profile{Kind: "unknown", Summary: "Unrecognized project type"}
 }
@@ -172,6 +203,15 @@ func detectNode(root string) Profile {
 	}
 	if s := script("build"); s != "" {
 		run("build", s)
+		// A client-side web app gets its built page rendered; server frameworks (Next.js) do not
+		// produce a static index.html.
+		if !pkg.has("next") && (pkg.has("vite") || pkg.has("react-scripts") || pkg.has("react") || pkg.has("vue") || pkg.has("svelte") || pkg.has("preact") || pkg.has("solid-js")) {
+			dir := "dist"
+			if pkg.has("react-scripts") {
+				dir = "build"
+			}
+			stages = withBrowser(stages, dir)
+		}
 	}
 	if s := script("test"); s != "" && !strings.Contains(pkg.Scripts[s], "no test specified") {
 		run("test", s, "CI=true")
@@ -270,6 +310,14 @@ func detectPython(root string) Profile {
 		p.Summary += " (pytest)"
 	}
 	return p
+}
+
+// withBrowser appends the headless browser stage when a supported browser is installed.
+func withBrowser(stages []Stage, dir string) []Stage {
+	if _, ok := browser.Find(); !ok {
+		return stages
+	}
+	return append(stages, Stage{Name: "browser", Builtin: BuiltinBrowser, Dir: dir, Timeout: 2 * time.Minute})
 }
 
 func exists(root, name string) bool {

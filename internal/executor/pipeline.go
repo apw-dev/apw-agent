@@ -39,7 +39,7 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	if !surgeon.IsGitRepo(e.Workspace) {
 		return nil, errors.New("preview/execute requires a Git repository with an initial commit")
 	}
-	contextText := overview + "\n" + ProjectOverview(e.Workspace, e.VerifyOverride)
+	contextText := overview + "\n" + ProjectOverview(e.Workspace, e.Profile(e.Workspace))
 	if e.Session != nil {
 		contextText = e.Session.BuildContextSummary() + "\n" + contextText
 	}
@@ -92,7 +92,7 @@ func (e *Executor) review(ctx context.Context, instruction, overview string) (*E
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})
-	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + ProjectOverview(e.Workspace, e.VerifyOverride)
+	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + ProjectOverview(e.Workspace, e.Profile(e.Workspace))
 	var summary string
 	err := e.withArchitectFailover(ctx, "review", func(ctx context.Context, c FailoverCandidate) error {
 		response, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: e.TaskID, Model: c.Model, Prompt: prompt})
@@ -240,7 +240,7 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		}
 		verified := len(attempts) > 0 && attempts[len(attempts)-1].Result.Passed
 		var accepted bool
-		report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, verified, wt)
+		report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, verified, wt, e.pageVisitor(ctx, wt.Path))
 		report.Passed = verified && accepted
 		if report.Passed {
 			e.Phase = "ready"
