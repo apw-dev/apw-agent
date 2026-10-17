@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -268,10 +269,11 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 	}
 	allowed := map[string]bool{}
 	for _, path := range modified {
-		allowed[path] = true
+		// Plans use forward slashes; the worktree scan uses the OS separator.
+		allowed[filepath.Clean(filepath.FromSlash(path))] = true
 	}
 	for _, path := range changed {
-		if !allowed[path] {
+		if !allowed[filepath.Clean(filepath.FromSlash(path))] {
 			report.Passed = false
 			e.Phase = "failed"
 			return report, errors.Join(fmt.Errorf("unplanned worktree change: %s; refusing to mark task verified", path), save())
