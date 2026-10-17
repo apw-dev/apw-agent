@@ -20,7 +20,11 @@ import (
 func New(cfg config.ProviderConfig) (provider.Provider, error) {
 	timeout := time.Duration(cfg.TimeoutSec) * time.Second
 	if timeout <= 0 {
-		timeout = 120 * time.Second
+		timeout = 300 * time.Second
+	} else if (cfg.Type == config.ProviderClaudeCLI || cfg.Type == config.ProviderCodexCLI) && timeout < 300*time.Second {
+		// CLI subscription providers frequently execute deep reasoning models (e.g. Claude Opus 5.5 High, Codex)
+		// which require at least 300s to avoid getting killed mid-stream during deep planning.
+		timeout = 300 * time.Second
 	}
 	switch cfg.Type {
 	case config.ProviderAPI:
@@ -40,7 +44,7 @@ func New(cfg config.ProviderConfig) (provider.Provider, error) {
 	}
 }
 
-// builtinEngineProvider provides an intelligent built-in local heuristic planner when no external LLM API is configured.
+// builtinEngineProvider provides a deterministic offline workflow without a model service.
 type builtinEngineProvider struct {
 	model string
 }
@@ -52,6 +56,12 @@ func (b *builtinEngineProvider) Name() string {
 func (b *builtinEngineProvider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if strings.HasPrefix(req.Prompt, "Review the supplied source only.") {
+		return &core.ModelResponse{RequestID: req.RequestID, Provider: b.Name(), ModelObserved: b.model,
+			Completed: true, Timestamp: time.Now(),
+			Content: "Offline built-in mode: no model review was performed. Configure an external provider for code findings. Source files supplied: " + strings.Join(extractWorkspaceFiles(req.Prompt), ", ")}, nil
 	}
 
 	instruction := extractLineValue(req.Prompt, "Instruction:")

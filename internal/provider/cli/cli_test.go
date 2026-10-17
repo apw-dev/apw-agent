@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,10 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("APW_CLI_TEST_BLOCK") == "1" {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	if os.Getenv(codexFixtureEnv) == "1" {
 		if err := runCodexFixture(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -31,22 +36,38 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestAskReportsParentDeadlineWithoutClaimingLongerProviderTimeout(t *testing.T) {
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APW_CLI_TEST_BLOCK", "1")
+	p := New(BackendCodex, "fixture", 5*time.Minute)
+	p.binary = bin
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = p.Ask(ctx, core.ModelRequest{Prompt: "test"})
+	if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "after 5m") {
+		t.Fatalf("misleading timeout: %v", err)
+	}
+}
+
 func codexFixturePrompt() string {
 	return " \t\r\n" + strings.Repeat("ข้อความภาษาไทย 🌏\nบรรทัดถัดไป\n", 2048) + " \t\r\n"
 }
 
 func runCodexFixture() error {
 	args := os.Args[1:]
-	if len(args) != 6 {
-		return fmt.Errorf("fixture: expected exactly 6 arguments without prompt, got %q", args)
+	if len(args) != 11 {
+		return fmt.Errorf("fixture: expected exactly 11 arguments without prompt, got %q", args)
 	}
-	wantArgs := []string{"exec", "--ephemeral", "--skip-git-repo-check", "-o", args[4], "-"}
+	wantArgs := []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--ignore-user-config", "-o", args[7], "--model", "gpt-6.1-sol", "-"}
 	for i, want := range wantArgs {
 		if args[i] != want {
 			return fmt.Errorf("fixture: unexpected arg[%d]: got %q, want %q", i, args[i], want)
 		}
 	}
-	if args[4] == "" {
+	if args[7] == "" {
 		return fmt.Errorf("fixture: missing output path after -o")
 	}
 
@@ -64,10 +85,10 @@ func runCodexFixture() error {
 	if string(input) != wantPrompt {
 		return fmt.Errorf("fixture: stdin differs from trimmed prompt (got %d bytes, want %d)", len(input), len(wantPrompt))
 	}
-	if err := os.WriteFile(args[4], []byte(codexFixtureAnswer), 0600); err != nil {
+	if err := os.WriteFile(args[7], []byte(codexFixtureAnswer), 0600); err != nil {
 		return fmt.Errorf("fixture: write output: %w", err)
 	}
-	if err := os.WriteFile(os.Getenv(codexFixtureReportEnv), []byte(args[4]), 0600); err != nil {
+	if err := os.WriteFile(os.Getenv(codexFixtureReportEnv), []byte(args[7]), 0600); err != nil {
 		return fmt.Errorf("fixture: report output path: %w", err)
 	}
 	_, err = fmt.Fprintln(os.Stdout, "different fixture stdout response")
@@ -134,7 +155,7 @@ func TestBuildArgs(t *testing.T) {
 			model:        "",
 			prompt:       "test prompt",
 			tmpFile:      "out.tmp",
-			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "-o", "out.tmp", "-"},
+			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--ignore-user-config", "-o", "out.tmp", "-"},
 		},
 		{
 			name:         "codex backend default model",
@@ -142,7 +163,7 @@ func TestBuildArgs(t *testing.T) {
 			model:        "gpt-6.1-sol",
 			prompt:       "test prompt",
 			tmpFile:      "out.tmp",
-			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "-o", "out.tmp", "-"},
+			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--ignore-user-config", "-o", "out.tmp", "--model", "gpt-6.1-sol", "-"},
 		},
 		{
 			name:         "codex backend custom model",
@@ -150,42 +171,42 @@ func TestBuildArgs(t *testing.T) {
 			model:        "o3-mini",
 			prompt:       "test prompt",
 			tmpFile:      "output dir/out.tmp",
-			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "-o", "output dir/out.tmp", "--model", "o3-mini", "-"},
+			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--ignore-user-config", "-o", "output dir/out.tmp", "--model", "o3-mini", "-"},
 		},
 		{
 			name:         "codex backend without output file",
 			backend:      BackendCodex,
 			model:        "o3-mini",
 			prompt:       "test prompt",
-			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "--model", "o3-mini", "-"},
+			expectedArgs: []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--ignore-user-config", "--model", "o3-mini", "-"},
 		},
 		{
 			name:         "agy backend empty model",
 			backend:      BackendAGY,
 			model:        "",
 			prompt:       "hello world",
-			expectedArgs: []string{"-p", "hello world", "--output-format", "text", "--disable-slash-commands"},
+			expectedArgs: []string{"--output-format", "text", "--disable-slash-commands", "--mode", "plan", "--sandbox"},
 		},
 		{
 			name:         "agy backend with model",
 			backend:      BackendAGY,
 			model:        "gemini-3.8-flash-high",
 			prompt:       "hello world",
-			expectedArgs: []string{"-p", "hello world", "--output-format", "text", "--disable-slash-commands", "--model", "gemini-3.8-flash-high"},
+			expectedArgs: []string{"--output-format", "text", "--disable-slash-commands", "--mode", "plan", "--sandbox", "--model", "gemini-3.8-flash-high"},
 		},
 		{
 			name:         "claude backend empty model",
 			backend:      BackendClaude,
 			model:        "",
 			prompt:       "hello claude",
-			expectedArgs: []string{"-p", "hello claude", "--output-format", "text", "--tools", ""},
+			expectedArgs: []string{"-p", "--output-format", "text", "--tools", ""},
 		},
 		{
 			name:         "claude backend with model",
 			backend:      BackendClaude,
 			model:        "claude-sonnet-4-6",
 			prompt:       "hello claude",
-			expectedArgs: []string{"-p", "hello claude", "--output-format", "text", "--tools", "", "--model", "claude-sonnet-4-6"},
+			expectedArgs: []string{"-p", "--output-format", "text", "--tools", "", "--model", "claude-sonnet-4-6"},
 		},
 	}
 
@@ -223,4 +244,18 @@ func TestAskEmptyPrompt(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for empty prompt, got nil")
 	}
+}
+
+func TestLiveAskAGY(t *testing.T) {
+	if os.Getenv("APW_TEST_LIVE_AGY") != "1" {
+		t.Skip("skipping live AGY test; set APW_TEST_LIVE_AGY=1 to run")
+	}
+	p := New(BackendAGY, "gemini-3.8-flash-high", 45*time.Second)
+	res, err := p.Ask(context.Background(), core.ModelRequest{
+		Prompt: "Provide surgical patch for hello.go.\nRespond ONLY with JSON: {\"old_content\": \"a\", \"new_content\": \"b\"}",
+	})
+	if err != nil {
+		t.Fatalf("Ask AGY failed: %v", err)
+	}
+	t.Logf("AGY Content: %s", res.Content)
 }

@@ -1,12 +1,12 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 	"strings"
 	"time"
 
@@ -14,6 +14,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/core"
 	"github.com/apiwat/apw-agent/internal/provider"
 	"github.com/apiwat/apw-agent/internal/reflex"
+	"github.com/apiwat/apw-agent/internal/session"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
@@ -28,13 +29,21 @@ type StepReport struct {
 
 // ExecutionReport summarizes the full Triad loop (Architect -> Surgeon -> Reflex).
 type ExecutionReport struct {
-	TaskID         string                   `json:"task_id"`
-	Plan           *architect.ExecutionPlan `json:"plan"`
-	Steps          []StepReport             `json:"steps"`
-	ReflexAttempts []reflex.Attempt         `json:"reflex_attempts,omitempty"`
-	Passed         bool                     `json:"passed"`
-	Duration       time.Duration            `json:"duration"`
-	Summary        string                   `json:"summary,omitempty"`
+	TaskID         string                     `json:"task_id"`
+	Plan           *architect.ExecutionPlan   `json:"plan"`
+	Steps          []StepReport               `json:"steps"`
+	ReflexAttempts []reflex.Attempt           `json:"reflex_attempts,omitempty"`
+	Passed         bool                       `json:"passed"`
+	Duration       time.Duration              `json:"duration"`
+	Summary        string                     `json:"summary,omitempty"`
+	Mode           core.TaskMode              `json:"mode"`
+	WorktreePath   string                     `json:"worktree_path,omitempty"`
+	ModifiedFiles  []string                   `json:"modified_files,omitempty"`
+	Diff           string                     `json:"diff,omitempty"`
+	Baseline       *reflex.VerificationResult `json:"baseline,omitempty"`
+	Acceptance     []CheckResult              `json:"acceptance,omitempty"`
+	Applied        bool                       `json:"applied"`
+	Diagnostics    *DiagnosticComparison      `json:"diagnostic_comparison,omitempty"`
 }
 
 // ProgressEvent describes a real-time progress update during Triad execution.
@@ -53,14 +62,30 @@ type ProgressCallback func(event ProgressEvent)
 
 // Executor coordinates Architect planning, Surgeon patching, and Reflex self-healing verification.
 type Executor struct {
-	Workspace         string
-	Architect         *architect.Architect
-	Surgeon           *surgeon.Surgeon
-	Reflex            *reflex.ReflexEngine
-	ReflexProvider    provider.Provider
-	ReflexModel       string
-	SkipReflexOnEmpty bool
-	OnProgress        ProgressCallback
+	Pending              *MutationIntent
+	mutation             func(string, surgeon.FileState, surgeon.FileState) error
+	RecoveredSteps       []StepReport
+	TaskID               string
+	Mode                 core.TaskMode
+	Trusted              bool
+	ReadContext          string
+	Phase                string
+	VerificationBaseline *reflex.VerificationResult
+	VerifiedFiles        map[string]surgeon.FileState
+	CurrentReport        *ExecutionReport
+	Workspace            string
+	Architect            *architect.Architect
+	Surgeon              *surgeon.Surgeon
+	Reflex               *reflex.ReflexEngine
+	ReflexProvider       provider.Provider
+	ReflexModel          string
+	ArchitectPool        []FailoverCandidate
+	ReflexPool           []FailoverCandidate
+	DirectiveTimeout     time.Duration
+	Failover             FailoverSnapshot
+	Session              *session.Session
+	SkipReflexOnEmpty    bool
+	OnProgress           ProgressCallback
 }
 
 func (e *Executor) emit(ev ProgressEvent) {
@@ -80,6 +105,14 @@ func New(workspace string, archProv, reflexProv provider.Provider, archModel, re
 	if reflexProv == nil {
 		reflexProv = archProv
 	}
+	var archPool []FailoverCandidate
+	if archProv != nil {
+		archPool = append(archPool, FailoverCandidate{Provider: archProv, Model: archModel})
+	}
+	var refPool []FailoverCandidate
+	if reflexProv != nil {
+		refPool = append(refPool, FailoverCandidate{Provider: reflexProv, Model: reflexModel})
+	}
 	return &Executor{
 		Workspace:      workspace,
 		Architect:      arch,
@@ -87,6 +120,8 @@ func New(workspace string, archProv, reflexProv provider.Provider, archModel, re
 		Reflex:         reflex.NewReflexEngine(workspace, maxRepairs),
 		ReflexProvider: reflexProv,
 		ReflexModel:    reflexModel,
+		ArchitectPool:  archPool,
+		ReflexPool:     refPool,
 	}
 }
 
@@ -97,128 +132,33 @@ type patchDirective struct {
 	TargetFile  string `json:"target_file,omitempty"`
 }
 
-// Execute runs the full Triad pipeline: Plan -> Apply Subtasks -> Verify & Self-Heal.
-func (e *Executor) Execute(ctx context.Context, instruction string, codebaseOverview string) (*ExecutionReport, error) {
-	start := time.Now()
-
-	task := core.Task{
-		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		Workspace:   e.Workspace,
-		Instruction: instruction,
-		Mode:        "execute",
-		Status:      core.StatusPlanning,
-		CreatedAt:   start,
-		UpdatedAt:   start,
-	}
-
-	archModel := "Architect"
-	if e.Architect != nil && e.Architect.Model != "" {
-		archModel = e.Architect.Model
-	}
-	e.emit(ProgressEvent{Stage: "planning", Message: fmt.Sprintf("Formulating ExecutionPlan using %s...", archModel)})
-
-	plan, err := e.Architect.Plan(ctx, task, codebaseOverview)
-	if err != nil {
-		return nil, fmt.Errorf("architect planning failed: %w", err)
-	}
-
-	e.emit(ProgressEvent{
-		Stage:      "plan_ready",
-		Message:    plan.Objective,
-		TotalSteps: len(plan.Subtasks),
-		Duration:   time.Since(start),
-	})
-
-	report := &ExecutionReport{
-		TaskID: task.ID,
-		Plan:   plan,
-	}
-
-	var modifiedFiles []string
-	for i, st := range plan.Subtasks {
-		if err := ctx.Err(); err != nil {
-			return report, err
+func (e *Executor) formatPartialReportSummary(instruction string, plan *architect.ExecutionPlan, steps []StepReport, lastStep, totalSteps int, taskErr error) string {
+	var sb strings.Builder
+	sb.WriteString("### ⚠️ สรุปผลการปฏิบัติการ (การทำงานหยุดชั่วคราว / Partial Execution)\n\n")
+	sb.WriteString(fmt.Sprintf("**ภารกิจ:** %s\n\n", instruction))
+	sb.WriteString(fmt.Sprintf("**เป้าหมายของแผน:** %s\n\n", plan.Objective))
+	sb.WriteString(fmt.Sprintf("**ความคืบหน้า:** ดำเนินการสำเร็จ %d จาก %d ขั้นตอน\n\n", lastStep, totalSteps))
+	sb.WriteString("#### 🛠️ ขั้นตอนที่ดำเนินการไปแล้ว:\n")
+	for _, s := range steps {
+		status := "✅"
+		if !s.Success {
+			status = "❌"
 		}
-
-		e.emit(ProgressEvent{
-			Stage:      "step_start",
-			StepIndex:  i + 1,
-			TotalSteps: len(plan.Subtasks),
-			Message:    fmt.Sprintf("[%s] %s — %s", st.Action, st.ID, st.TargetFile),
-		})
-
-		sr, modFile, stepErr := e.executeSubtask(ctx, st)
-		report.Steps = append(report.Steps, sr)
-
-		e.emit(ProgressEvent{
-			Stage:      "step_done",
-			StepIndex:  i + 1,
-			TotalSteps: len(plan.Subtasks),
-			Step:       &sr,
-			Message:    sr.Message,
-		})
-
-		if stepErr != nil {
-			return report, stepErr
-		}
-		if modFile != "" {
-			modifiedFiles = append(modifiedFiles, modFile)
-		}
+		sb.WriteString(fmt.Sprintf("- %s `[%s]` %s: %s\n", status, s.Action, s.SubtaskID, s.Message))
 	}
-
-	// Run Reflex verification and autonomous repair loop
-	e.emit(ProgressEvent{Stage: "verifying", Message: "Running Reflex closed-loop verification (gofmt, vet, build, test)..."})
-	attempts, err := e.Reflex.Run(ctx, func(ctx context.Context, diagnostics string) error {
-		return e.repairWithReflex(ctx, diagnostics, modifiedFiles)
-	})
-	report.ReflexAttempts = attempts
-	report.Duration = time.Since(start)
-	if err != nil {
-		return report, err
-	}
-	if len(attempts) > 0 && attempts[len(attempts)-1].Result.Passed {
-		report.Passed = true
-	}
-	e.emit(ProgressEvent{
-		Stage:    "verified",
-		Passed:   report.Passed,
-		Duration: report.Duration,
-		Message:  fmt.Sprintf("Closed-loop verification complete (%d attempt(s))", len(attempts)),
-	})
-
-	// Synthesize final summary and findings report for the user
-	baseSummary := e.formatReportSummary(instruction, plan, report.Steps, report.Passed, report.Duration)
-	report.Summary = baseSummary
-
-	if e.Architect != nil && e.Architect.Provider != nil {
-		e.emit(ProgressEvent{Stage: "synthesizing", Message: "Synthesizing executive summary in Thai..."})
-		var stepSummaries []string
-		for _, s := range report.Steps {
-			stepSummaries = append(stepSummaries, fmt.Sprintf("- [%s] %s: %s", s.Action, s.SubtaskID, s.Message))
-		}
-		summaryPrompt := fmt.Sprintf(
-			"You are the APW Agent Triad Core.\nThe user gave the following instruction: %q\n\nExecution Plan Objective: %s\nSteps executed:\n%s\nReflex Closed-Loop Verification: passed=%v (duration: %v)\n\nProvide a concise 2-4 paragraph explanation in Thai summarizing your key code findings, architecture quality, and what was achieved.",
-			instruction, plan.Objective, strings.Join(stepSummaries, "\n"), report.Passed, report.Duration.Round(time.Millisecond),
-		)
-		sumCtx, sumCancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer sumCancel()
-		if sumResp, sumErr := e.Architect.Provider.Ask(sumCtx, core.ModelRequest{
-			RequestID: fmt.Sprintf("sum-%d", time.Now().UnixNano()),
-			Prompt:    summaryPrompt,
-			Model:     e.Architect.Model,
-		}); sumErr == nil && sumResp != nil && strings.TrimSpace(sumResp.Content) != "" {
-			report.Summary = strings.TrimSpace(sumResp.Content) + "\n\n" + baseSummary
-		}
-	}
-
-	return report, nil
+	sb.WriteString(fmt.Sprintf("\n#### ❌ สาเหตุที่หยุดทำงาน:\n`%v`\n\n", taskErr))
+	sb.WriteString("#### 💡 คำแนะนำในการทำงานต่อ:\n")
+	sb.WriteString("- โค้ดที่ทำสำเร็จได้รับการปกป้องไว้ใน Git Worktree และบันทึก Checkpoint เรียบร้อยแล้ว\n")
+	sb.WriteString("- สามารถพิมพ์คำสั่ง `/resume` หรือ `apw resume` เพื่อทำงานต่อจากขั้นตอนที่ค้างไว้ได้ทันทีโดยไม่ต้องเริ่มต้นใหม่\n")
+	return sb.String()
 }
 
 func (e *Executor) formatReportSummary(instruction string, plan *architect.ExecutionPlan, steps []StepReport, passed bool, duration time.Duration) string {
 	var sb strings.Builder
+	sb.WriteString("### 📊 รายละเอียดขั้นตอนการทำงานและสถิติ (Execution Details)\n\n")
 	sb.WriteString(fmt.Sprintf("**ภารกิจ:** %s\n\n", instruction))
 	sb.WriteString(fmt.Sprintf("**เป้าหมายของแผน:** %s\n\n", plan.Objective))
-	sb.WriteString("**ขั้นตอนที่ดำเนินการ:**\n")
+	sb.WriteString("#### 🛠️ ขั้นตอนที่ดำเนินการ:\n")
 	reads := 0
 	patches := 0
 	creates := 0
@@ -233,9 +173,9 @@ func (e *Executor) formatReportSummary(instruction string, plan *architect.Execu
 		}
 		sb.WriteString(fmt.Sprintf("- `[%s]` %s: %s\n", s.Action, s.SubtaskID, s.Message))
 	}
-	sb.WriteString("\n**ผลการตรวจสอบด้วย Reflex (Closed-Loop Verification):**\n")
+	sb.WriteString("\n#### ⚡ ผลการตรวจสอบด้วย Reflex (Closed-Loop Verification):\n")
 	if passed {
-		sb.WriteString(fmt.Sprintf("- ✅ ตรวจสอบสำเร็จสมบูรณ์ (`gofmt`, `go vet`, `go build`, `go test -race`) ในเวลา %v\n", duration.Round(time.Millisecond)))
+		sb.WriteString(fmt.Sprintf("- ✅ ตรวจสอบสำเร็จสมบูรณ์ (`gofmt`, `go vet`, `go build`, `go test`) ในเวลา %v\n", duration.Round(time.Millisecond)))
 		sb.WriteString(fmt.Sprintf("- 📊 สถิติการทำงาน: อ่านบริบท %d จุด, ผ่าตัดโค้ด %d จุด, สร้างไฟล์ใหม่ %d จุด\n", reads, patches, creates))
 	} else {
 		sb.WriteString(fmt.Sprintf("- ❌ การตรวจสอบไม่ผ่านหลังจากใช้เวลา %v\n", duration.Round(time.Millisecond)))
@@ -243,176 +183,156 @@ func (e *Executor) formatReportSummary(instruction string, plan *architect.Execu
 	return sb.String()
 }
 
-func (e *Executor) executeSubtask(ctx context.Context, st architect.Subtask) (StepReport, string, error) {
-	sr := StepReport{
-		SubtaskID:  st.ID,
-		Action:     st.Action,
-		TargetFile: st.TargetFile,
+func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeon.Surgeon, st architect.Subtask) (StepReport, string, error) {
+	sr := StepReport{SubtaskID: st.ID, Action: st.Action, TargetFile: st.TargetFile}
+	if st.Action == architect.ActionVerify {
+		sr.Success = true
+		sr.Message = "verification scheduled"
+		return sr, "", nil
 	}
-
+	if err := surgeon.AllowedPath(st.TargetFile); err != nil {
+		return sr, "", err
+	}
+	if e.Mode == core.ModeReview && st.Action != architect.ActionRead {
+		return sr, "", errors.New("review mode forbids mutations")
+	}
 	switch st.Action {
-	case architect.ActionVerify:
-		sr.Success = true
-		sr.Message = "verification scheduled for Reflex stage"
-		return sr, "", nil
-
 	case architect.ActionRead:
-		fullPath, err := e.safePath(st.TargetFile)
+		content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
 		if err != nil {
 			return sr, "", err
 		}
-		_, hash, err := e.Surgeon.ReadFile(fullPath)
-		if err != nil {
-			return sr, "", fmt.Errorf("subtask %s read failed: %w", st.ID, err)
-		}
+		e.rememberRead(st.TargetFile, content)
 		sr.Success = true
-		sr.Message = fmt.Sprintf("read file (sha256: %s...)", shortHash(hash))
+		sr.Message = fmt.Sprintf("read %s (sha256 %s)", st.TargetFile, shortHash(hash))
 		return sr, "", nil
-
 	case architect.ActionCreate:
-		fullPath, err := e.safePath(st.TargetFile)
+		dir, err := e.askDirective(ctx, fmt.Sprintf("Create file %s.\nInstruction: %s\nRespond ONLY with JSON: {\"file_content\":\"...\"}", st.TargetFile, st.Instruction))
 		if err != nil {
 			return sr, "", err
-		}
-		dir, err := e.askDirective(ctx, fmt.Sprintf(
-			"Create file %s.\nInstruction: %s\nRespond with JSON: {\"file_content\": \"...\"}",
-			st.TargetFile, st.Instruction,
-		))
-		if err != nil {
-			return sr, "", fmt.Errorf("subtask %s create query failed: %w", st.ID, err)
 		}
 		content := dir.FileContent
 		if content == "" {
 			content = dir.NewContent
 		}
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		if err = ctx.Err(); err != nil {
 			return sr, "", err
 		}
-		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		before, err := surgeon.StateInRoot(base, st.TargetFile)
+		if err != nil {
 			return sr, "", err
 		}
-		_, _, _ = e.Surgeon.ReadFile(fullPath)
-		sr.Success = true
-		sr.Message = "created file"
-		return sr, fullPath, nil
-
+		if before.Exists {
+			return sr, "", errors.New("create target already exists")
+		}
+		if e.mutation != nil {
+			if err = e.mutation(st.TargetFile, before, surgeon.FileState{Exists: true, Hash: surgeon.CalculateHash(content), Mode: 0644}); err != nil {
+				return sr, "", err
+			}
+		}
+		if err = surgeon.WriteInRoot(base, st.TargetFile, []byte(content), 0644, true); err != nil {
+			return sr, "", err
+		}
 	case architect.ActionPatch:
-		fullPath, err := e.safePath(st.TargetFile)
+		content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
 		if err != nil {
 			return sr, "", err
 		}
-		currentContent, baseHash, err := e.Surgeon.ReadFile(fullPath)
+		e.rememberRead(st.TargetFile, content)
+		dir, err := e.askDirective(ctx, fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, content))
 		if err != nil {
-			return sr, "", fmt.Errorf("subtask %s read before patch failed: %w", st.ID, err)
+			return sr, "", err
 		}
-
-		dir, err := e.askDirective(ctx, fmt.Sprintf(
-			"Provide surgical patch for %s.\nInstruction: %s\nCurrent File Content:\n```\n%s\n```\nRespond ONLY with JSON: {\"old_content\": \"...\", \"new_content\": \"...\"}",
-			st.TargetFile, st.Instruction, currentContent,
-		))
-		if err != nil {
-			return sr, "", fmt.Errorf("subtask %s patch query failed: %w", st.ID, err)
+		if err = ctx.Err(); err != nil {
+			return sr, "", err
 		}
-
-		newHash, err := e.Surgeon.ApplyPatch(surgeon.PatchOperation{
-			Path:       fullPath,
-			BaseHash:   baseHash,
-			OldContent: dir.OldContent,
-			NewContent: dir.NewContent,
-		})
-		if err != nil {
-			return sr, "", fmt.Errorf("subtask %s ApplyPatch failed: %w", st.ID, err)
+		if _, err = surg.PatchWorkspaceFile(base, st.TargetFile, surgeon.PatchOperation{BaseHash: hash, OldContent: dir.OldContent, NewContent: dir.NewContent}, func(before, after surgeon.FileState) error {
+			if e.mutation != nil {
+				return e.mutation(st.TargetFile, before, after)
+			}
+			return nil
+		}); err != nil {
+			return sr, "", err
 		}
-		sr.Success = true
-		sr.Message = fmt.Sprintf("patched file (new sha256: %s...)", shortHash(newHash))
-		return sr, fullPath, nil
-
 	case architect.ActionDelete:
-		fullPath, err := e.safePath(st.TargetFile)
+		if err := ctx.Err(); err != nil {
+			return sr, "", err
+		}
+		before, err := surgeon.StateInRoot(base, st.TargetFile)
 		if err != nil {
 			return sr, "", err
 		}
-		if err := os.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return sr, "", fmt.Errorf("subtask %s delete failed: %w", st.ID, err)
+		if e.mutation != nil {
+			if err = e.mutation(st.TargetFile, before, surgeon.FileState{}); err != nil {
+				return sr, "", err
+			}
 		}
-		sr.Success = true
-		sr.Message = "deleted file"
-		return sr, fullPath, nil
-
+		if err := surgeon.RemoveInRoot(base, st.TargetFile); err != nil {
+			return sr, "", err
+		}
 	default:
-		return sr, "", fmt.Errorf("unsupported subtask action: %s", st.Action)
+		return sr, "", fmt.Errorf("unsupported action %s", st.Action)
 	}
+	sr.Success = true
+	sr.Message = fmt.Sprintf("%s %s", st.Action, st.TargetFile)
+	return sr, st.TargetFile, nil
 }
 
-func (e *Executor) repairWithReflex(ctx context.Context, diagnostics string, modifiedFiles []string) error {
-	if e.ReflexProvider == nil {
-		return errors.New("reflex provider not configured")
+func (e *Executor) repairWithReflex(ctx context.Context, base string, surg *surgeon.Surgeon, diagnostics string, files *[]string) error {
+	target := ""
+	if len(*files) > 0 {
+		target = (*files)[len(*files)-1]
 	}
-
-	targetPath := ""
-	if len(modifiedFiles) > 0 {
-		targetPath = modifiedFiles[len(modifiedFiles)-1]
+	var content string
+	if target != "" {
+		content, _, _ = surg.ReadWorkspaceFile(base, target)
 	}
-
-	var fileContext string
-	var baseHash string
-	if targetPath != "" {
-		content, h, err := e.Surgeon.ReadFile(targetPath)
-		if err == nil {
-			fileContext = content
-			baseHash = h
-		}
-	}
-
-	prompt := fmt.Sprintf(
-		"You are Brain 1 (Reflex) in the APW Triad Engine.\nFix the verification failure surgically.\n\n%s\n\nCurrent file (%s):\n```\n%s\n```\nRespond ONLY with JSON: {\"target_file\": \"...\", \"old_content\": \"...\", \"new_content\": \"...\"}",
-		diagnostics, targetPath, fileContext,
-	)
-
-	dir, err := e.askDirectiveWithProvider(ctx, e.ReflexProvider, e.ReflexModel, prompt)
+	dir, err := e.askDirective(ctx, fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, content))
 	if err != nil {
 		return err
 	}
-
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if dir.TargetFile != "" {
-		resolved, err := e.safePath(dir.TargetFile)
-		if err != nil {
-			return err
-		}
-		targetPath = resolved
-		_, baseHash, err = e.Surgeon.ReadFile(targetPath)
-		if err != nil {
-			return err
-		}
+		target = dir.TargetFile
 	}
-	if targetPath == "" {
-		return errors.New("reflex repair: no target file identified for patch")
+	if target == "" {
+		return errors.New("repair target missing")
 	}
-
-	_, err = e.Surgeon.ApplyPatch(surgeon.PatchOperation{
-		Path:       targetPath,
-		BaseHash:   baseHash,
-		OldContent: dir.OldContent,
-		NewContent: dir.NewContent,
+	_, hash, err := surg.ReadWorkspaceFile(base, target)
+	if err != nil {
+		return err
+	}
+	_, err = surg.PatchWorkspaceFile(base, target, surgeon.PatchOperation{BaseHash: hash, OldContent: dir.OldContent, NewContent: dir.NewContent}, func(before, after surgeon.FileState) error {
+		if e.mutation != nil {
+			return e.mutation(target, before, after)
+		}
+		return nil
 	})
+	if err == nil {
+		appendModifiedFile(files, target)
+	}
 	return err
 }
 
-func (e *Executor) askDirective(ctx context.Context, prompt string) (*patchDirective, error) {
-	return e.askDirectiveWithProvider(ctx, e.Architect.Provider, e.Architect.Model, prompt)
+func decodeDirective(raw []byte, dir *patchDirective) error {
+	if len(raw) > 512*1024 {
+		return errors.New("directive exceeds response limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dir); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("trailing directive content")
+	}
+	return nil
 }
 
-func (e *Executor) askDirectiveWithProvider(ctx context.Context, p provider.Provider, model, prompt string) (*patchDirective, error) {
-	res, err := p.Ask(ctx, core.ModelRequest{
-		RequestID: fmt.Sprintf("req-%d", time.Now().UnixNano()),
-		Prompt:    prompt,
-		Model:     model,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	raw := res.Content
+func parsePatchDirective(raw string) (*patchDirective, error) {
 	jsonStr := raw
 	if idx := strings.Index(raw, "```json"); idx != -1 {
 		rest := raw[idx+7:]
@@ -428,17 +348,124 @@ func (e *Executor) askDirectiveWithProvider(ctx context.Context, p provider.Prov
 	jsonStr = strings.TrimSpace(jsonStr)
 
 	var dir patchDirective
-	if err := json.Unmarshal([]byte(jsonStr), &dir); err != nil {
-		return nil, fmt.Errorf("parse patch directive JSON: %w", err)
+	if err := decodeDirective([]byte(jsonStr), &dir); err != nil {
+		// Robust fallback 1: sanitize invalid escape sequences (e.g. "\ ", "\.", raw newlines)
+		sanitized := sanitizeJSONEscapes(jsonStr)
+		if errSan := decodeDirective([]byte(sanitized), &dir); errSan == nil {
+			return &dir, nil
+		}
+
+		// Robust fallback 2: try extracting outermost JSON object if model wrapped output in conversational text
+		if start := strings.Index(raw, "{"); start != -1 {
+			if end := strings.LastIndex(raw, "}"); end != -1 && end > start {
+				extracted := strings.TrimSpace(raw[start : end+1])
+				if err2 := decodeDirective([]byte(extracted), &dir); err2 == nil {
+					return &dir, nil
+				}
+				if err3 := decodeDirective([]byte(sanitizeJSONEscapes(extracted)), &dir); err3 == nil {
+					return &dir, nil
+				}
+			}
+		}
+		preview := raw
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		return nil, fmt.Errorf("parse patch directive JSON: %w (raw: %q)", err, preview)
 	}
 	return &dir, nil
 }
 
-func (e *Executor) safePath(rel string) (string, error) {
-	if !filepath.IsLocal(rel) {
-		return "", fmt.Errorf("executor: target_file %q escapes workspace", rel)
+func sanitizeJSONEscapes(input string) string {
+	var sb strings.Builder
+	sb.Grow(len(input) + 32)
+	inString := false
+	runes := []rune(input)
+	n := len(runes)
+
+	for i := 0; i < n; i++ {
+		ch := runes[i]
+		if ch == '"' {
+			backslashes := 0
+			for j := i - 1; j >= 0 && runes[j] == '\\'; j-- {
+				backslashes++
+			}
+			if backslashes%2 == 0 {
+				inString = !inString
+			}
+			sb.WriteRune(ch)
+			continue
+		}
+
+		if inString {
+			if ch == '\\' {
+				if i+1 < n {
+					next := runes[i+1]
+					switch next {
+					case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+						sb.WriteRune('\\')
+						sb.WriteRune(next)
+						i++
+						continue
+					case 'u':
+						if i+5 < n {
+							isHex := true
+							for k := i + 2; k <= i+5; k++ {
+								h := runes[k]
+								if !((h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F')) {
+									isHex = false
+									break
+								}
+							}
+							if isHex {
+								sb.WriteString("\\u")
+								for k := i + 2; k <= i+5; k++ {
+									sb.WriteRune(runes[k])
+								}
+								i += 5
+								continue
+							}
+						}
+						sb.WriteString("\\\\")
+						continue
+					default:
+						// Invalid escape sequence in JSON string (e.g. \  or \( or \' or \s or \.)
+						// Escape the backslash so it parses cleanly as literal backslash
+						sb.WriteString("\\\\")
+						sb.WriteRune(next)
+						i++
+						continue
+					}
+				} else {
+					sb.WriteString("\\\\")
+					continue
+				}
+			} else if ch == '\n' {
+				sb.WriteString("\\n")
+				continue
+			} else if ch == '\r' {
+				sb.WriteString("\\r")
+				continue
+			} else if ch == '\t' {
+				sb.WriteString("\\t")
+				continue
+			}
+		}
+
+		sb.WriteRune(ch)
 	}
-	return filepath.Join(e.Workspace, rel), nil
+
+	return sb.String()
+}
+
+func (e *Executor) safePath(baseDir, rel string) (string, error) {
+	if err := surgeon.AllowedPath(rel); err != nil {
+		return "", err
+	}
+	if baseDir == "" {
+		baseDir = e.Workspace
+	}
+	return surgeon.ResolveInRoot(baseDir, rel)
 }
 
 func shortHash(h string) string {

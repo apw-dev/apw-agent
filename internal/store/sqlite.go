@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 // Store wraps a SQLite database connection for persisting agent tasks (M0 spike).
 type Store struct {
 	db *sql.DB
+	// ro is a read-only handle pool so polling reads never queue behind the single writer connection.
+	ro *sql.DB
 }
 
 // Open opens or creates a SQLite database at path with WAL mode and busy_timeout enabled.
@@ -22,12 +25,31 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
+	db.SetMaxOpenConns(1)
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.JobSchema(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// The ro handle is opened after migrations so the database file and WAL exist.
+	roDSN := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)", path)
+	ro, err := sql.Open("sqlite", roDSN)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open sqlite read pool %q: %w", path, err)
+	}
+	ro.SetMaxOpenConns(4)
+	if err := ro.Ping(); err != nil {
+		_ = ro.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("open sqlite read pool %q: %w", path, err)
+	}
+	s.ro = ro
 	return s, nil
 }
 
@@ -101,7 +123,7 @@ func (s *Store) GetTask(ctx context.Context, id string) (*core.Task, error) {
 		createdNs int64
 		updatedNs int64
 	)
-	err := s.db.QueryRowContext(ctx, q, id).Scan(
+	err := s.ro.QueryRowContext(ctx, q, id).Scan(
 		&t.ID,
 		&t.Workspace,
 		&t.Instruction,
@@ -122,16 +144,20 @@ func (s *Store) GetTask(ctx context.Context, id string) (*core.Task, error) {
 // CountTasks returns the total number of rows in the tasks table.
 func (s *Store) CountTasks(ctx context.Context) (int, error) {
 	var count int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks;").Scan(&count); err != nil {
+	if err := s.ro.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks;").Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
-// Close closes the underlying database connection.
+// Close closes the writer and read-only database handles.
 func (s *Store) Close() error {
-	if s.db != nil {
-		return s.db.Close()
+	var errs []error
+	if s.ro != nil {
+		errs = append(errs, s.ro.Close())
 	}
-	return nil
+	if s.db != nil {
+		errs = append(errs, s.db.Close())
+	}
+	return errors.Join(errs...)
 }

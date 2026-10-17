@@ -49,8 +49,19 @@ func DefaultCommands() []SlashCommand {
 	return []SlashCommand{
 		{Name: "/model", Usage: "/model", Description: "Select live models for Brain 1 (Reflex) & Brain 2 (Architect) from connected accounts", TakesArgs: false},
 		{Name: "/auth", Usage: "/auth", Description: "Connect & authenticate ChatGPT Sub/API, Claude Sub/API, and AGY CLI", TakesArgs: false},
+		{Name: "/review", Usage: "/review <instruction>", Description: "Read source and report findings without repository commands", TakesArgs: true},
+		{Name: "/preview", Usage: "/preview <instruction>", Description: "Prepare an isolated diff without running repository code", TakesArgs: true},
+		{Name: "/tasks", Usage: "/tasks", Description: "List persisted tasks and statuses"},
+		{Name: "/task", Usage: "/task <id>", Description: "Inspect a saved task report", TakesArgs: true},
+		{Name: "/diff", Usage: "/diff <id>", Description: "Show the task's source diff", TakesArgs: true},
+		{Name: "/watch", Usage: "/watch <id>", Description: "Reattach to task progress; Ctrl+C detaches", TakesArgs: true},
+		{Name: "/recover", Usage: "/recover <legacy-task-id>", Description: "Export legacy work for review without applying", TakesArgs: true},
+		{Name: "/apply", Usage: "/apply <id>", Description: "Apply verified changes after conflict checks", TakesArgs: true},
+		{Name: "/cancel", Usage: "/cancel <id>", Description: "Cancel a task and its process tree", TakesArgs: true},
+		{Name: "/trust", Usage: "/trust", Description: "Allow repository build/test in this workspace"},
 		{Name: "/plan", Usage: "/plan <instruction>", Description: "Spec-First Planning: create ExecutionPlan (.apw/plans/) before touching code", TakesArgs: true},
 		{Name: "/run", Usage: "/run <instruction>", Description: "Execute full Triad loop (Architect -> Surgeon -> Reflex) on a task", TakesArgs: true},
+		{Name: "/resume", Usage: "/resume [task-id]", Description: "Resume interrupted task from checkpoint in isolated worktree without losing completed work", TakesArgs: false},
 		{Name: "/verify", Usage: "/verify [dir]", Description: "Run Reflex closed-loop verification (gofmt -> go vet -> go build -> go test)", TakesArgs: false},
 		{Name: "/symbols", Usage: "/symbols <file.go>", Description: "Inspect Go AST symbols (functions, structs, methods) using Surgeon", TakesArgs: true},
 		{Name: "/skills", Usage: "/skills", Description: "List all loaded skills and Triad engines by category", TakesArgs: false},
@@ -91,11 +102,13 @@ func FilterCommands(input string) []SlashCommand {
 
 // Session holds the interactive TUI state.
 type Session struct {
-	Workspace string
-	Version   string
-	SessionID string
-	ModeIndex int // 0 = auto-triad, 1 = plan-first, 2 = fast-reflex
-	History   []string
+	input      keyDecoder
+	ConfigPath string
+	Workspace  string
+	Version    string
+	SessionID  string
+	ModeIndex  int // 0 = auto-triad, 1 = plan-first, 2 = fast-reflex
+	History    []string
 
 	lastInterrupt time.Time
 }
@@ -103,7 +116,7 @@ type Session struct {
 var modeNames = []string{
 	"auto-triad (Architect -> Surgeon -> Reflex)",
 	"plan-only (Spec-First Architect)",
-	"fast-reflex (Brain 1 Verify & Repair)",
+	"verify-only (fmt/vet/build/test)",
 }
 
 // ctrlCExitWindow is the time window in which a second Ctrl+C confirms exiting the CLI.
@@ -146,19 +159,29 @@ func (s *Session) ClearInterrupt() {
 }
 
 // LoadSyncedConfig loads apw.json (or default) and merges live authenticated models.
-func LoadSyncedConfig(workspace, cfgPath string, forceRefresh bool) (*config.Config, []auth.ConnectionStatus) {
+func LoadSyncedConfig(workspace, cfgPath string, forceRefresh bool) (*config.Config, []auth.ConnectionStatus, error) {
 	cfg, err := config.LoadOrDefault(cfgPath)
 	if err != nil {
-		cfg, _ = config.LoadOrDefault("")
+		return nil, nil, err
 	}
-	statuses := auth.SyncConfigWithDiscovered(workspace, cfg, forceRefresh)
-	return cfg, statuses
+	root := cfg.Workspace
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(filepath.Dir(cfgPath), root)
+	}
+	statuses := auth.SyncConfigWithDiscovered(root, cfg, forceRefresh)
+	return cfg, statuses, nil
 }
 
 // RenderDashboard draws the two-column framed APW header box with emblem, brains, daemon, and categorized skills.
 func RenderDashboard(w io.Writer, workspace, version, sessionID string) {
+	RenderDashboardConfig(w, workspace, filepath.Join(workspace, "apw.json"), version, sessionID)
+}
+func RenderDashboardConfig(w io.Writer, workspace, cfgPath, version, sessionID string) {
 	dState := daemon.EnsureRunning(workspace)
-	cfg, statuses := LoadSyncedConfig(workspace, "./apw.json", false)
+	cfg, statuses, loadErr := LoadSyncedConfig(workspace, cfgPath, false)
+	if loadErr != nil {
+		fmt.Fprintf(w, "Configuration error: %v\n", loadErr)
+	}
 	stack := config.DetectStack(workspace)
 	wsPath := formatWorkspace(workspace)
 
@@ -270,7 +293,14 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 		width = 92
 	}
 
-	cfg, _ := LoadSyncedConfig(s.Workspace, "./apw.json", false)
+	cfgPath := s.ConfigPath
+	if cfgPath == "" {
+		cfgPath = filepath.Join(s.Workspace, "apw.json")
+	}
+	cfg, _, err := LoadSyncedConfig(s.Workspace, cfgPath, false)
+	if err != nil {
+		return "", err
+	}
 	dState := daemon.Status(s.Workspace)
 	reflexModel := "APW Engine"
 	archModel := "APW Engine"
@@ -284,7 +314,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 	}
 
 	hr := fmt.Sprintf("%s%s%s", cDim+cGray, strings.Repeat("─", width), cReset)
-	pill := fmt.Sprintf(" %s ⚡ %s %s│%s 🧠 %s %s│%s ctx [░░░░░░░░░░] %s│%s ⏱ %dms %s",
+	pill := fmt.Sprintf(" %s ⚡ %s %s│%s 🧠 %s %s│%s ctx unavailable %s│%s daemon ping %dms %s",
 		bgPill+cGold, truncatePlain(reflexModel, 22), cGray, cCyan, truncatePlain(archModel, 22), cGray, cWhite, cGray, cGreen, dState.LatencyMs, cReset)
 
 	fmt.Fprintln(stdout)
@@ -351,7 +381,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 
 			leftHint := fmt.Sprintf(" %s↑/↓%s Navigate · %senter%s Select · %stab%s Complete · %sesc%s Cancel",
 				cBold+cCyan, cGray, cBold+cCyan, cGray, cBold+cCyan, cGray, cBold+cCyan, cGray)
-			rightHint := fmt.Sprintf("%saccept-edits%s · %s%s%s", cGreen, cGray, cWhite, truncatePlain(archModel, 18), cReset)
+			rightHint := fmt.Sprintf("%sexplicit-apply%s · %s%s%s", cGreen, cGray, cWhite, truncatePlain(archModel, 18), cReset)
 			fmt.Fprint(stdout, leftHint+"   "+rightHint)
 		} else {
 			if s.InterruptPending(time.Now()) {
@@ -374,11 +404,19 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 
 	var inBuf [32]byte
 	for {
-		n, rErr := os.Stdin.Read(inBuf[:])
-		if rErr != nil || n == 0 {
-			return "", io.EOF
+		b := s.input.pop()
+		for b == nil {
+			n, rErr := os.Stdin.Read(inBuf[:])
+			if n > 0 {
+				s.input.push(inBuf[:n])
+				b = s.input.pop()
+			}
+			if b == nil && (rErr != nil || n == 0) {
+				return "", io.EOF
+			}
 		}
-		b := inBuf[:n]
+		n := len(b)
+
 		if b[0] != 3 && s.InterruptPending(time.Now()) {
 			s.ClearInterrupt()
 		}
@@ -659,8 +697,15 @@ func runSingleLineSelector(title string, subtitleLines []string, items []selecto
 
 // RunInteractiveModelSelector opens the live model picker fetched from AGY CLI, Claude Sub/API, ChatGPT Sub/OpenAI API, and Ollama.
 func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cfg, statuses := LoadSyncedConfig(".", cfgPath, true)
-	_ = cfg.Save(cfgPath)
+	cfg, statuses, err := LoadSyncedConfig(".", cfgPath, true)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := cfg.Save(cfgPath); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	var allLiveModels []auth.DiscoveredModel
 	for _, st := range statuses {
@@ -680,7 +725,7 @@ func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr
 						Endpoint:   mod.Endpoint,
 						Model:      mod.ID,
 						APIKeyEnv:  mod.APIKeyEnv,
-						TimeoutSec: 120,
+						TimeoutSec: 300,
 					}
 					if roleName == "reflex" {
 						cfg.Roles.Reflex = mod.ProviderKey
@@ -755,8 +800,13 @@ func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr
 			Detail: "Re-fetch models from AGY CLI, Claude Sub/API, ChatGPT/OpenAI, Ollama",
 			Action: func() (bool, error) {
 				fmt.Fprintln(stdout, "Fetching live models from connected accounts...")
-				cfg, statuses = LoadSyncedConfig(".", cfgPath, true)
-				_ = cfg.Save(cfgPath)
+				cfg, statuses, err = LoadSyncedConfig(".", cfgPath, true)
+				if err != nil {
+					return true, err
+				}
+				if err := cfg.Save(cfgPath); err != nil {
+					return true, err
+				}
 				total := 0
 				for _, st := range statuses {
 					if st.Connected {
@@ -785,7 +835,11 @@ func RunInteractiveModelSelector(cfgPath string, stdin io.Reader, stdout, stderr
 
 // RunInteractiveAuthMenu opens the authentication & account connection manager (/auth).
 func RunInteractiveAuthMenu(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cfg, statuses := LoadSyncedConfig(".", cfgPath, true)
+	cfg, statuses, err := LoadSyncedConfig(".", cfgPath, true)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	var subtitles []string
 	for _, st := range statuses {
@@ -802,8 +856,13 @@ func RunInteractiveAuthMenu(cfgPath string, stdin io.Reader, stdout, stderr io.W
 			Detail: "Fetch live Gemini 4 / 3.8 & Claude 5.5 models from agy CLI",
 			Action: func() (bool, error) {
 				fmt.Fprintln(stdout, "Checking AGY CLI connection and fetching live models (`agy models`)...")
-				cfg, statuses = LoadSyncedConfig(".", cfgPath, true)
-				_ = cfg.Save(cfgPath)
+				cfg, statuses, err = LoadSyncedConfig(".", cfgPath, true)
+				if err != nil {
+					return true, err
+				}
+				if err := cfg.Save(cfgPath); err != nil {
+					return true, err
+				}
 				for _, st := range statuses {
 					if st.Source == "AGY CLI" {
 						if st.Connected {
@@ -833,9 +892,16 @@ func RunInteractiveAuthMenu(cfgPath string, stdin io.Reader, stdout, stderr io.W
 				cmd.Stdin = os.Stdin
 				cmd.Stdout = stdout
 				cmd.Stderr = stderr
-				_ = cmd.Run()
-				cfg, _ = LoadSyncedConfig(".", cfgPath, true)
-				_ = cfg.Save(cfgPath)
+				if err := cmd.Run(); err != nil {
+					return true, err
+				}
+				cfg, _, err = LoadSyncedConfig(".", cfgPath, true)
+				if err != nil {
+					return true, err
+				}
+				if err := cfg.Save(cfgPath); err != nil {
+					return true, err
+				}
 				fmt.Fprintf(stdout, "%s✓ Claude Subscription synced with APW!%s\n", cGreen, cReset)
 				return true, nil
 			},
@@ -868,9 +934,16 @@ func RunInteractiveAuthMenu(cfgPath string, stdin io.Reader, stdout, stderr io.W
 				cmd.Stdin = os.Stdin
 				cmd.Stdout = stdout
 				cmd.Stderr = stderr
-				_ = cmd.Run()
-				cfg, _ = LoadSyncedConfig(".", cfgPath, true)
-				_ = cfg.Save(cfgPath)
+				if err := cmd.Run(); err != nil {
+					return true, err
+				}
+				cfg, _, err = LoadSyncedConfig(".", cfgPath, true)
+				if err != nil {
+					return true, err
+				}
+				if err := cfg.Save(cfgPath); err != nil {
+					return true, err
+				}
 				fmt.Fprintf(stdout, "%s✓ ChatGPT Subscription synced with APW!%s\n", cGreen, cReset)
 				return true, nil
 			},
@@ -879,8 +952,13 @@ func RunInteractiveAuthMenu(cfgPath string, stdin io.Reader, stdout, stderr io.W
 			Label:  "6. Refresh & Sync All Live Models",
 			Detail: "Re-scan AGY CLI, Claude, ChatGPT/OpenAI, and Ollama and update apw.json",
 			Action: func() (bool, error) {
-				cfg, statuses = LoadSyncedConfig(".", cfgPath, true)
-				_ = cfg.Save(cfgPath)
+				cfg, statuses, err = LoadSyncedConfig(".", cfgPath, true)
+				if err != nil {
+					return true, err
+				}
+				if err := cfg.Save(cfgPath); err != nil {
+					return true, err
+				}
 				fmt.Fprintf(stdout, "%s✓ Refreshed all providers and updated %s%s\n", cGreen, cfgPath, cReset)
 				return true, nil
 			},
@@ -899,12 +977,25 @@ func promptAndSaveAPIKey(envName, label, cfgPath string, stdin io.Reader, stdout
 		fmt.Fprintln(stdout, "Cancelled (empty key).")
 		return true, nil
 	}
-	if err := config.SaveAuthKey(".", envName, key); err != nil {
+	cfgBefore, err := config.LoadOrDefault(cfgPath)
+	if err != nil {
+		return true, err
+	}
+	credentialRoot := cfgBefore.Workspace
+	if !filepath.IsAbs(credentialRoot) {
+		credentialRoot = filepath.Join(filepath.Dir(cfgPath), credentialRoot)
+	}
+	if err := config.SaveAuthKey(credentialRoot, envName, key); err != nil {
 		return true, err
 	}
 	_ = os.Setenv(envName, key)
-	cfg, statuses := LoadSyncedConfig(".", cfgPath, true)
-	_ = cfg.Save(cfgPath)
+	cfg, statuses, err := LoadSyncedConfig(".", cfgPath, true)
+	if err != nil {
+		return true, err
+	}
+	if err := cfg.Save(cfgPath); err != nil {
+		return true, err
+	}
 	total := 0
 	for _, st := range statuses {
 		total += len(st.Models)

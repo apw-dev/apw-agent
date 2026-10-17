@@ -82,28 +82,55 @@ func toCRLF(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
 }
 
-// ReadFile reads a file from disk, records snapshot in memory, and returns content
+// ReadFile reads a file from disk, records snapshot in memory, and returns content.
+// If the path targets a directory, it gracefully returns a directory listing instead of failing.
 func (s *Surgeon) ReadFile(path string) (string, string, error) {
 	key, err := snapshotKey(path)
 	if err != nil {
 		return "", "", err
 	}
 
-	data, err := os.ReadFile(path)
+	fi, err := os.Stat(path)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to read file: %w", err)
+		return "", "", fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	content := string(data)
+	var content string
+	var lineCount int
+
+	if fi.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to read directory: %w", err)
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Directory listing for %s:\n", path))
+		for _, e := range entries {
+			typeStr := "file"
+			if e.IsDir() {
+				typeStr = "dir"
+			}
+			sb.WriteString(fmt.Sprintf("  [%s] %s\n", typeStr, e.Name()))
+		}
+		content = sb.String()
+		lineCount = len(entries)
+	} else {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to read file: %w", err)
+		}
+		content = string(data)
+		lineCount = len(strings.Split(content, "\n"))
+	}
+
 	hash := CalculateHash(content)
-	lines := strings.Split(content, "\n")
 
 	s.mu.Lock()
 	s.snapshots[key] = FileSnapshot{
 		Path:      path,
 		Content:   content,
 		Hash:      hash,
-		LineCount: len(lines),
+		LineCount: lineCount,
 	}
 	s.mu.Unlock()
 
@@ -127,6 +154,15 @@ func (s *Surgeon) ApplyPatch(op PatchOperation) (string, error) {
 	snap, exists := s.snapshots[key]
 	if !exists {
 		return "", ErrReadRequired
+	}
+
+	// Verify target is not a directory
+	fi, err := os.Stat(op.Path)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat target file: %w", err)
+	}
+	if fi.IsDir() {
+		return "", fmt.Errorf("cannot apply patch to a directory: %s", op.Path)
 	}
 
 	// Verify current file on disk hasn't drifted
@@ -171,7 +207,11 @@ func (s *Surgeon) ApplyPatch(op PatchOperation) (string, error) {
 	}
 
 	// Write back surgically to disk
-	err = os.WriteFile(op.Path, []byte(newContent), 0644)
+	perm := fi.Mode().Perm()
+	if perm == 0 {
+		perm = 0644
+	}
+	err = WriteFileAtomic(op.Path, []byte(newContent), perm)
 	if err != nil {
 		return "", fmt.Errorf("failed to write patched file: %w", err)
 	}

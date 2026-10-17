@@ -1,7 +1,10 @@
 package desktop
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/apiwat/apw-agent/internal/app"
+	"github.com/apiwat/apw-agent/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,12 +28,33 @@ func TestServer_Endpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := app.Open(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
 	srv := NewServer(cfgPath, "0.1.0-alpha")
+	srv.Backend = backend
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
+	get := func(path string) (*http.Response, error) {
+		req, _ := http.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer "+srv.Token)
+		return http.DefaultClient.Do(req)
+	}
+	post := func(path, body string) (*http.Response, error) {
+		req, _ := http.NewRequest("POST", path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+srv.Token)
+		req.Header.Set("Content-Type", "application/json")
+		return http.DefaultClient.Do(req)
+	}
 
 	// 1. Index HTML
-	resp, err := http.Get(ts.URL + "/")
+	resp, err := get(ts.URL + "/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +64,7 @@ func TestServer_Endpoints(t *testing.T) {
 	}
 
 	// 2. Status API
-	resp, err = http.Get(ts.URL + "/api/status")
+	resp, err = get(ts.URL + "/api/status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,12 +73,12 @@ func TestServer_Endpoints(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
-	if st.Brain1Name != "Reflex Engine" || !st.DaemonRunning {
+	if st.Brain1Name != "Reflex Engine" || st.DaemonRunning {
 		t.Errorf("unexpected status payload: %+v", st)
 	}
 
 	// 3. Plan API
-	resp2, err := http.Post(ts.URL+"/api/plan", "application/json", strings.NewReader(`{"instruction":"add feature"}`))
+	resp2, err := post(ts.URL+"/api/plan", `{"instruction":"add feature"}`)
 	if err != nil {
 		t.Fatal(err)
 	}

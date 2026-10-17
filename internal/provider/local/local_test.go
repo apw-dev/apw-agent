@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -173,5 +174,24 @@ func TestProvider_Ask_LiveOptIn(t *testing.T) {
 	}
 	if res.Content == "" {
 		t.Fatal("expected non-empty live local response")
+	}
+}
+
+func TestProviderRequiresExplicitCompletedResponse(t *testing.T) {
+	for _, reason := range []string{"", "length", "tool_calls", "function_call", "content_filter", "stop"} {
+		t.Run(reason, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "partial"}, "finish_reason": reason}}})
+			}))
+			defer server.Close()
+			provider := newTestLocalProvider(t, server.URL)
+			response, err := provider.Ask(context.Background(), core.ModelRequest{Prompt: "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Completed != (reason == "stop") {
+				t.Fatalf("finish_reason=%q was accepted as completed", reason)
+			}
+		})
 	}
 }

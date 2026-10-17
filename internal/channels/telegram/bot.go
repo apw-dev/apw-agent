@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/apiwat/apw-agent/internal/app"
+	"github.com/apiwat/apw-agent/internal/store"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,13 +25,19 @@ const (
 
 // Bot implements the M0 Telegram long-polling proof-of-concept adapter.
 type Bot struct {
+	Backend      app.API
+	Store        *store.Store
 	token        string
 	allowedUsers map[int64]bool
 	BaseURL      string
 	Version      string
 	PollTimeout  int
 	Client       *http.Client
-	offset       int64
+	offset       atomic.Int64
+	acctOnce     sync.Once
+	acct         string
+	// seen holds the per-user UpdatedAt watermark of already queued terminal jobs; only the runDurable goroutine touches it.
+	seen map[int64]int64
 }
 
 // New creates a Telegram Bot with an explicit token and allowlist of user IDs.
@@ -126,11 +136,14 @@ type sendMessageRequest struct {
 
 // Offset returns the next update offset to be requested.
 func (b *Bot) Offset() int64 {
-	return b.offset
+	return b.offset.Load()
 }
 
 // Run starts the long-polling loop until ctx is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
+	if b.Backend != nil && b.Store != nil {
+		return b.runDurable(ctx)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -150,8 +163,8 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 
 		for _, u := range updates {
-			if u.UpdateID >= b.offset {
-				b.offset = u.UpdateID + 1
+			if u.UpdateID >= b.offset.Load() {
+				b.offset.Store(u.UpdateID + 1)
 			}
 			if u.Message == nil || u.Message.From == nil {
 				continue
@@ -185,7 +198,7 @@ func (b *Bot) apiURL(method string) string {
 }
 
 func (b *Bot) getUpdates(ctx context.Context) ([]update, error) {
-	url := fmt.Sprintf("%s?timeout=%d&offset=%d", b.apiURL("getUpdates"), b.PollTimeout, b.offset)
+	url := fmt.Sprintf("%s?timeout=%d&offset=%d", b.apiURL("getUpdates"), b.PollTimeout, b.offset.Load())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, b.sanitizeErr(err)
@@ -197,7 +210,7 @@ func (b *Bot) getUpdates(ctx context.Context) ([]update, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
 		return nil, b.sanitizeErr(err)
 	}
@@ -208,6 +221,9 @@ func (b *Bot) getUpdates(ctx context.Context) ([]update, error) {
 	var parsed getUpdatesResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("telegram decode getUpdates: %w", err)
+	}
+	if !parsed.OK {
+		return nil, errors.New("telegram getUpdates returned ok=false")
 	}
 	return parsed.Result, nil
 }
@@ -231,11 +247,26 @@ func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) error 
 	if err != nil {
 		return b.sanitizeErr(err)
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+	}()
+	var result struct {
+		OK         bool `json:"ok"`
+		Parameters struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&result)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if result.Parameters.RetryAfter > 0 {
+			return &retryError{delay: time.Duration(result.Parameters.RetryAfter) * time.Second}
+		}
 		return fmt.Errorf("telegram sendMessage status %d", resp.StatusCode)
+	}
+	if decodeErr != nil || !result.OK {
+		return errors.New("telegram sendMessage did not confirm delivery")
 	}
 	return nil
 }

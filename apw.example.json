@@ -26,8 +26,16 @@
     "architect": "claude-sonnet",
     "reflex": "claude-haiku"
   },
+  "failover": {
+    "reflex": [],
+    "architect": [],
+    "directive_timeout_sec": 90
+  },
   "budget": {
     "max_repairs": 3,
     "task_timeout_sec": 600
+  },
+  "policy": {
+    "trusted": false
   }
 }

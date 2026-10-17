@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/config"
+	"github.com/apiwat/apw-agent/internal/process"
 )
 
 // DiscoveredModel represents a real model fetched from an authenticated CLI or API account.
@@ -93,13 +93,16 @@ func DiscoverAll(workspace string, forceRefresh bool) []ConnectionStatus {
 	return statuses
 }
 
-// SyncConfigWithDiscovered merges live discovered models into cfg.Providers and upgrades default roles
-// from apw-builtin to real authenticated models when available.
-// It also prunes obsolete discovered provider keys that are no longer valid.
+// SyncConfigWithDiscovered updates selectable models without changing authorized roles or fallbacks.
 func SyncConfigWithDiscovered(workspace string, cfg *config.Config, forceRefresh bool) []ConnectionStatus {
 	statuses := DiscoverAll(workspace, forceRefresh)
+	mergeDiscovered(cfg, statuses)
+	return statuses
+}
+
+func mergeDiscovered(cfg *config.Config, statuses []ConnectionStatus) {
 	if cfg == nil {
-		return statuses
+		return
 	}
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]config.ProviderConfig)
@@ -108,7 +111,6 @@ func SyncConfigWithDiscovered(workspace string, cfg *config.Config, forceRefresh
 	activeKeys := make(map[string]bool)
 	connectedPrefixes := make(map[string]bool)
 
-	var firstFastModel, firstDeepModel string
 	for _, st := range statuses {
 		if !st.Connected {
 			continue
@@ -124,25 +126,37 @@ func SyncConfigWithDiscovered(workspace string, cfg *config.Config, forceRefresh
 
 		for _, m := range st.Models {
 			activeKeys[m.ProviderKey] = true
+			timeoutSec := 300
+			if existing, exists := cfg.Providers[m.ProviderKey]; exists && existing.TimeoutSec > 0 {
+				timeoutSec = existing.TimeoutSec
+			} else {
+				lower := strings.ToLower(m.ID)
+				if strings.Contains(lower, "flash") || strings.Contains(lower, "haiku") || strings.Contains(lower, "mini") {
+					timeoutSec = 60
+				} else if strings.Contains(lower, "sol") || strings.Contains(lower, "opus") || strings.Contains(lower, "high") {
+					timeoutSec = 600
+				}
+			}
 			cfg.Providers[m.ProviderKey] = config.ProviderConfig{
 				Type:       m.ProviderType,
 				Endpoint:   m.Endpoint,
 				Model:      m.ID,
 				APIKeyEnv:  m.APIKeyEnv,
-				TimeoutSec: 120,
+				TimeoutSec: timeoutSec,
 			}
-			lower := strings.ToLower(m.ID)
-			if firstFastModel == "" && (strings.Contains(lower, "flash") || strings.Contains(lower, "haiku") || strings.Contains(lower, "mini")) {
-				firstFastModel = m.ProviderKey
-			}
-			if firstDeepModel == "" && (strings.Contains(lower, "argon-high") || strings.Contains(lower, "sonnet-5-5-high") || strings.Contains(lower, "opus") || strings.Contains(lower, "gpt-6.1") || strings.Contains(lower, "sonnet")) {
-				firstDeepModel = m.ProviderKey
-			}
+
 		}
 	}
 
 	// Prune obsolete provider keys from connected CLI sources (e.g. removed agy:* or chatgpt-sub:*)
+	referenced := map[string]bool{cfg.Roles.Architect: true, cfg.Roles.Reflex: true}
+	for _, key := range append(append([]string{}, cfg.Failover.Reflex...), cfg.Failover.Architect...) {
+		referenced[key] = true
+	}
 	for k := range cfg.Providers {
+		if referenced[k] {
+			continue
+		}
 		for prefix := range connectedPrefixes {
 			if strings.HasPrefix(k, prefix) && !activeKeys[k] {
 				delete(cfg.Providers, k)
@@ -150,19 +164,6 @@ func SyncConfigWithDiscovered(workspace string, cfg *config.Config, forceRefresh
 		}
 	}
 
-	// If roles are unset, missing, or still on apw-builtin, upgrade to real models
-	if _, ok := cfg.Providers[cfg.Roles.Reflex]; !ok || cfg.Roles.Reflex == "" || cfg.Roles.Reflex == "apw-builtin" {
-		if firstFastModel != "" {
-			cfg.Roles.Reflex = firstFastModel
-		}
-	}
-	if _, ok := cfg.Providers[cfg.Roles.Architect]; !ok || cfg.Roles.Architect == "" || cfg.Roles.Architect == "apw-builtin" {
-		if firstDeepModel != "" {
-			cfg.Roles.Architect = firstDeepModel
-		}
-	}
-
-	return statuses
 }
 
 func discoverAGY() ConnectionStatus {
@@ -182,10 +183,10 @@ func discoverAGY() ConnectionStatus {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, agyPath, "models")
-	var out bytes.Buffer
+	var out process.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
+	if err := process.Run(ctx, cmd); err != nil {
 		st.Connected = false
 		st.AuthMethod = "CLI found, auth required"
 		st.Detail = "Run 'agy' to sign in"
@@ -240,14 +241,14 @@ func discoverClaude(workspace string) ConnectionStatus {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, claudePath, "auth", "status")
-		var out bytes.Buffer
+		var out process.Buffer
 		cmd.Stdout = &out
-		if err := cmd.Run(); err == nil {
+		if err := process.Run(ctx, cmd); err == nil {
 			var statusObj struct {
 				LoggedIn   bool   `json:"loggedIn"`
 				AuthMethod string `json:"authMethod"`
 			}
-			if json.Unmarshal(out.Bytes(), &statusObj) == nil && statusObj.LoggedIn {
+			if json.Unmarshal([]byte(out.String()), &statusObj) == nil && statusObj.LoggedIn {
 				st.Connected = true
 				st.AuthMethod = "Claude Subscription (" + statusObj.AuthMethod + ")"
 				subModels := []struct {
@@ -325,7 +326,7 @@ func fetchAnthropicAPIModels(apiKey string) []DiscoveredModel {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
 		Data []struct {
 			ID          string `json:"id"`
@@ -476,7 +477,7 @@ func fetchOpenAIAPIModels(apiKey string) []DiscoveredModel {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
 		Data []struct {
 			ID string `json:"id"`
@@ -540,7 +541,7 @@ func discoverOllama() ConnectionStatus {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
 		Models []struct {
 			Name string `json:"name"`

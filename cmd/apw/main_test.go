@@ -2,16 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/apiwat/apw-agent/internal/architect"
+	"github.com/apiwat/apw-agent/internal/daemon"
 )
 
 func TestRun_InteractiveBannerAndCommands(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var stdout, stderr bytes.Buffer
 	code := runWithStdin(nil, strings.NewReader("status\nexit\n"), &stdout, &stderr)
 	if code != 0 {
@@ -20,9 +24,9 @@ func TestRun_InteractiveBannerAndCommands(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"▄▀█ █▀█ █░█░█",
-		"Brain 1 (Reflex) : Reflex Engine [Active",
+		"Brain 1 (Reflex) : Reflex Engine [Available",
 		"Brain 2 (Deep)   : Architect     [Standby]",
-		"Daemon (apwd)    : Running (PID:",
+		"Daemon (apwd)    : Stopped (PID:",
 		"Skills Loaded",
 		"Workspace        :",
 		"apw > ",
@@ -59,6 +63,22 @@ func TestRun_PlanWithMockConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- daemon.Run(ctx, cfgPath, "test") }()
+	t.Cleanup(func() {
+		stop()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for !daemon.Status(wsDir).Running {
+		if time.Now().After(deadline) {
+			t.Fatal("plan backend did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"plan", "--config", cfgPath, "Add healthcheck endpoint"}, &stdout, &stderr)
 	if code != 0 {

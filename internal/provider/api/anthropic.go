@@ -181,7 +181,10 @@ func (p *Provider) doOnce(ctx context.Context, requestID string, payload []byte)
 	}
 	defer resp.Body.Close()
 
-	rawBytes, err := io.ReadAll(resp.Body)
+	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024+1))
+	if len(rawBytes) > 2*1024*1024 {
+		return nil, 0, false, errors.New("provider response exceeds size limit")
+	}
 	if err != nil {
 		return nil, 0, true, fmt.Errorf("read response body: %w", err)
 	}

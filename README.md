@@ -1,6 +1,12 @@
 # apw — Apiwat Agent
 
+ลำดับงานปัจจุบัน: **Core CLI → ทดสอบ provider จริงและเตรียม release → Desktop ตามภาพอ้างอิงเป็นเฟสสุดท้าย** ดู [roadmap](docs/roadmap.md).
+
 **ระบบปฏิบัติการ AI สำหรับนักพัฒนาซอฟต์แวร์ (Ground-Up AI Developer OS)** ที่สร้างขึ้นใหม่ตั้งแต่ศูนย์ด้วยภาษา Go โดยไม่พึ่งพาเฟรมเวิร์กสำเร็จรูปที่เทอะทะ ผสานสมองสองระบบ (**System 1: Reflex** และ **System 2: Architect**), ศัลยแพทย์โค้ดความแม่นยำสูง (**Surgeon**), บริการเบื้องหลัง 24/7 (**`apwd` Daemon**) และระบบความจำ/ทักษะอัตโนมัติเข้าเป็นเนื้อเดียวกัน
+
+
+คู่มือขั้นตอนทำงานและข้อจำกัดปัจจุบัน: [Task lifecycle and operations](docs/task-lifecycle.md).
+
 
 ---
 
@@ -100,9 +106,9 @@ go install ./cmd/...
   ▄▀█ █▀█ █░█░█
   █▀█ █▀▀ ▀▄▀▄▀   v0.1.0-alpha (Apiwat Agent)
  ───────────────────────────────────────────────────────
-  Brain 1 (Reflex) : Reflex Engine [Active - 1ms]
+  Brain 1 (Reflex) : Reflex Engine [Available]
   Brain 2 (Deep)   : Architect     [Standby]
-  Daemon (apwd)    : Running (PID: 48760) | 17 Skills Loaded
+  Daemon (apwd)    : Stopped (PID: 0) | 17 Skills Loaded
  ───────────────────────────────────────────────────────
   Workspace        : D:/APW_Project/apw-agent (Go)
 
@@ -116,9 +122,41 @@ apw desktop
 
 ### 3) คำสั่งบรรทัดคำสั่งโดยตรง (Direct CLI Commands)
 ```bash
-apw run "อธิบายหรือสั่งงานที่ต้องการ"      # รันวงจร Triad (Architect -> Surgeon -> Reflex)
+apw review "ตรวจโค้ดและรายงานปัญหา"       # อ่าน source เพื่อ review
+apw preview "เตรียมการเปลี่ยนแปลง"         # สร้าง diff ใน worktree
+apw trust                               # อนุญาต build/test สำหรับ repo นี้
+apw run "อธิบายหรือสั่งงานที่ต้องการ"       # เตรียมและ verify จากนั้นรอ apply
 apw plan "วางแผนงานก่อนแก้ไขจริง"        # สร้างแผน ExecutionPlan (.apw/plans/<id>.json)
 apw verify .                           # รัน Reflex ตรวจสอบโค้ด (fmt -> vet -> build -> test)
 apw symbols internal/surgeon/surgeon.go # สกัดโครงสร้าง AST Symbols ในไฟล์
 apw daemon status                      # ตรวจสอบสถานะบริการเบื้องหลัง apwd
 ```
+
+### การสลับโมเดลและโควตา
+
+การค้นพบโมเดลทำให้เลือกใช้ได้ แต่ไม่ได้เพิ่มทุกโมเดลเป็น fallback อัตโนมัติ
+ค่าเริ่มต้นของการสร้าง patch คือ `roles.reflex` ตามด้วย `roles.architect`
+ถ้าต้องการตัวสำรองเพิ่มเติม ให้ระบุชื่อ provider จาก `providers` ใน config ตามลำดับ:
+
+```json
+"failover": {
+  "reflex": [],
+  "architect": ["claude-sub:claude-haiku-5-5"],
+  "directive_timeout_sec": 90
+}
+```
+
+ตัวอย่างนี้ต้องมี `claude-sub:claude-haiku-5-5` อยู่ใน `providers` ก่อน
+ลำดับคือ Reflex ที่เลือก → Reflex สำรองที่ระบุ → Architect ที่เลือก → Architect สำรองที่ระบุ
+หากเลือก Gemini Flash ระบบจะไม่ลอง Argon เอง เว้นแต่เลือกเป็น role หรือระบุเป็น fallback
+เวลารอ patch ต่อครั้งมีค่าเริ่มต้น 90 วินาที แยกจากเวลารวมของงานและ timeout ภายใน provider
+เมื่อ fallback สำเร็จ จะใช้ตัวนั้นก่อนในขั้นถัดไปของงานเดียวกัน
+
+AGY แบ่ง cooldown เป็นสามกลุ่ม: Gemini Flash/Pro, Gemini Argon และ Claude/GPT-OSS
+เมื่อพบ quota error จะพักเฉพาะกลุ่มนั้นตาม `Resets in ...` ที่บริการแจ้ง
+หากไม่แจ้งเวลาจะพัก 5 นาที ส่วน timeout จะพักเฉพาะโมเดล 5 นาที และไม่ถือว่าโควตาทั้งกลุ่มหมด
+การเชื่อมต่อ Claude CLI, Codex CLI และ API ใช้ cooldown แยกจาก AGY
+
+งานใน Git worktree บันทึกแผน ขั้นที่สำเร็จ และ cooldown หลังแต่ละขั้นเพื่อใช้ `apw resume`
+เมื่อ verification หรือนำผลกลับไม่สำเร็จ จะเก็บ worktree ไว้
+checkpoint ต้องตรงกับ task, plan และ snapshot manifest ของ worktree; งานเก่าที่ไม่มี manifest จะหยุดเพื่อป้องกันการเขียนทับ ให้เก็บ worktree เดิมไว้ตรวจและนำ diff มาทบทวนก่อนเริ่มงานใหม่

@@ -1,11 +1,63 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestConfigRejectsTrailingJSONAndPreservesPreviousFile(t *testing.T) {
+	path := writeTempConfig(t, `{"providers":{"m":{"type":"mock"}},"roles":{"architect":"m","reflex":"m"}}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := os.ReadFile(path)
+	cfg.Roles.Architect = "missing"
+	if err := cfg.Save(path); err == nil {
+		t.Fatal("invalid configuration was saved")
+	}
+	actual, _ := os.ReadFile(path)
+	if !bytes.Equal(original, actual) {
+		t.Fatal("failed save changed the previous configuration")
+	}
+	if err := os.WriteFile(path, append(original, []byte(" {}")...), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("trailing JSON was accepted")
+	}
+}
+
+func TestSavedCredentialsResolveAgainstConfiguredWorkspace(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "project with spaces")
+	if err := os.MkdirAll(workspace, 0755); err != nil {
+		t.Fatal(err)
+	}
+	const envName = "APW_CONFIG_CREDENTIAL_ROOT_TEST"
+	t.Setenv(envName, "")
+	if err := SaveAuthKey(workspace, envName, "fixture-key"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "settings.json")
+	content := `{"workspace":"project with spaces","providers":{"m":{"type":"openai","model":"fixture","api_key_env":"` + envName + `"}},"roles":{"architect":"m","reflex":"m"}}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	key, err := cfg.Providers["m"].APIKey()
+	if err != nil || key != "fixture-key" {
+		t.Fatal("provider did not resolve credentials from configured workspace")
+	}
+}
 
 func writeTempConfig(t *testing.T, content string) string {
 	t.Helper()
@@ -134,5 +186,33 @@ func TestExampleConfigIsValid(t *testing.T) {
 	}
 	if cfg.Roles.Architect == "" || cfg.Roles.Reflex == "" {
 		t.Fatal("expected roles to be populated in apw.example.json")
+	}
+}
+
+func TestFailoverConfigValidationAndRoundTrip(t *testing.T) {
+	base := `{"providers":{"flash":{"type":"mock","model":"flash"},"gpt":{"type":"mock","model":"gpt"}},"roles":{"reflex":"flash","architect":"gpt"},"failover":%s}`
+	for _, tc := range []struct {
+		failover string
+		wantErr  bool
+	}{
+		{`{"architect":["gpt"],"directive_timeout_sec":45}`, false},
+		{`{"reflex":["missing"]}`, true},
+		{`{"directive_timeout_sec":-1}`, true},
+	} {
+		p := writeTempConfig(t, fmt.Sprintf(base, tc.failover))
+		cfg, err := Load(p)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("failover %s: %v", tc.failover, err)
+		}
+		if err != nil {
+			continue
+		}
+		if err := cfg.Save(p); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load(p)
+		if err != nil || loaded.Failover.DirectiveTimeoutSec != 45 || len(loaded.Failover.Architect) != 1 || loaded.Failover.Architect[0] != "gpt" {
+			t.Fatalf("failover configuration did not survive save: %+v %v", loaded, err)
+		}
 	}
 }

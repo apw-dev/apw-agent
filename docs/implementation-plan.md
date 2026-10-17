@@ -1,5 +1,7 @@
 # แผนพัฒนา apw — Apiwat Agent
 
+> ปรับลำดับงาน 2026-10-17: ทำ core CLI และตรวจ release gates ก่อน แล้วจึงทำ Desktop ตามภาพอ้างอิง ดู [roadmap ปัจจุบัน](roadmap.md). รายละเอียดสถานะ M0 ด้านล่างเป็นแผนเดิมและอาจไม่ตรงกับโค้ดปัจจุบัน
+
 สถานะ: แผนเสนอ revision 6 — ตัด browser model provider (Gemini/Argon, go-rod/CDP) ออกจากขอบเขตทั้งหมด เหลือ provider แบบ API และ local; รับคำสั่งผ่าน Telegram/Discord Gateway; แกน Triad Engine (Architect, Surgeon, Reflex) มีโค้ดขั้นต้นแล้วใน M0
 
 ## 1. เป้าหมายและขอบเขต

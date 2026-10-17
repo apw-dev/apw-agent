@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,7 @@ const (
 
 // ProviderConfig defines connection and model settings for a single provider.
 type ProviderConfig struct {
+	Workspace  string       `json:"-"` // resolved credential root; never stored as provider config
 	Type       ProviderType `json:"type"`
 	Endpoint   string       `json:"endpoint,omitempty"`
 	Model      string       `json:"model"`
@@ -41,7 +43,11 @@ func (p ProviderConfig) APIKey() (string, error) {
 	if val := os.Getenv(envName); val != "" {
 		return val, nil
 	}
-	if val := LoadSavedKey(".", envName); val != "" {
+	root := p.Workspace
+	if root == "" {
+		root = "."
+	}
+	if val := LoadSavedKey(root, envName); val != "" {
 		return val, nil
 	}
 	return "", fmt.Errorf("config: environment variable %q is not set or empty", envName)
@@ -56,14 +62,21 @@ func SaveAuthKey(workspace, envName, secret string) error {
 	authPath := filepath.Join(dir, "auth.json")
 	keys := make(map[string]string)
 	if data, err := os.ReadFile(authPath); err == nil {
-		_ = json.Unmarshal(data, &keys)
+		if err := json.Unmarshal(data, &keys); err != nil {
+			return fmt.Errorf("read saved credentials: %w", err)
+		}
+		if keys == nil {
+			return errors.New("saved credentials must contain a JSON object")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	keys[strings.TrimSpace(envName)] = strings.TrimSpace(secret)
 	out, err := json.MarshalIndent(keys, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(authPath, out, 0600)
+	return writeAtomic(authPath, out, 0600)
 }
 
 // LoadSavedKey reads a saved API key from .apw/auth.json if present.
@@ -84,7 +97,11 @@ func LoadSavedKey(workspace, envName string) string {
 type Config struct {
 	Workspace string                    `json:"workspace"`
 	Providers map[string]ProviderConfig `json:"providers"`
-	Roles     struct {
+	Failover  FailoverConfig            `json:"failover,omitempty"`
+	Policy    struct {
+		Trusted bool `json:"trusted"`
+	} `json:"policy"`
+	Roles struct {
 		Architect string `json:"architect"` // key in Providers
 		Reflex    string `json:"reflex"`
 	} `json:"roles"`
@@ -92,6 +109,14 @@ type Config struct {
 		MaxRepairs     int `json:"max_repairs"`      // default 3
 		TaskTimeoutSec int `json:"task_timeout_sec"` // default 600
 	} `json:"budget"`
+}
+
+// FailoverConfig lists explicitly allowed fallback providers, in priority order.
+// Discovery makes models selectable; it does not authorize using every model.
+type FailoverConfig struct {
+	Reflex              []string `json:"reflex,omitempty"`
+	Architect           []string `json:"architect,omitempty"`
+	DirectiveTimeoutSec int      `json:"directive_timeout_sec,omitempty"`
 }
 
 // Load reads a JSON config file, applies defaults, and validates the configuration.
@@ -107,8 +132,12 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("parse config %q: trailing JSON content", path)
+	}
 
 	cfg.applyDefaults()
+	cfg.bindProviders(path)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -119,6 +148,8 @@ func Load(path string) (*Config, error) {
 func LoadOrDefault(path string) (*Config, error) {
 	if _, err := os.Stat(path); err == nil {
 		return Load(path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
 
 	cfg := &Config{
@@ -159,6 +190,7 @@ func LoadOrDefault(path string) (*Config, error) {
 		cfg.Roles.Reflex = "apw-builtin"
 	}
 	cfg.applyDefaults()
+	cfg.bindProviders(path)
 	return cfg, nil
 }
 
@@ -173,7 +205,44 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0644)
+	return writeAtomic(path, data, 0644)
+}
+
+// bindProviders keeps saved credentials relative to the configured workspace, not cwd.
+func (c *Config) bindProviders(path string) {
+	root := c.Workspace
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(filepath.Dir(path), root)
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	for key, provider := range c.Providers {
+		provider.Workspace = root
+		c.Providers[key] = provider
+	}
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".apw-config-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err = f.Chmod(mode); err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // DetectStack inspects the workspace directory and returns detected languages/frameworks.
@@ -229,6 +298,14 @@ func (c *Config) applyDefaults() {
 
 // Validate checks that roles reference valid providers and provider settings are complete.
 func (c *Config) Validate() error {
+	if c.Failover.DirectiveTimeoutSec < 0 {
+		return errors.New("config: failover.directive_timeout_sec must not be negative")
+	}
+	for _, key := range append(append([]string{}, c.Failover.Reflex...), c.Failover.Architect...) {
+		if _, ok := c.Providers[key]; !ok {
+			return fmt.Errorf("config: failover references unknown provider %q", key)
+		}
+	}
 	if len(c.Providers) == 0 {
 		return errors.New("config: at least one provider must be configured")
 	}

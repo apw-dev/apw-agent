@@ -2,7 +2,8 @@ package desktop
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"net"
@@ -13,93 +14,102 @@ import (
 	"strings"
 	"time"
 
-	"github.com/apiwat/apw-agent/internal/architect"
+	"github.com/apiwat/apw-agent/internal/app"
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/core"
 	"github.com/apiwat/apw-agent/internal/daemon"
-	"github.com/apiwat/apw-agent/internal/executor"
-	"github.com/apiwat/apw-agent/internal/provider/factory"
-	"github.com/apiwat/apw-agent/internal/reflex"
 	"github.com/apiwat/apw-agent/internal/surgeon"
+	"github.com/apiwat/apw-agent/internal/transport"
 )
 
-// Server serves the Claude Code Desktop-style Windows UI and API endpoints.
 type Server struct {
-	ConfigPath string
-	Version    string
+	ConfigPath, Version, Token string
+	Backend                    app.API
+
+	cache   backendCache
+	connect func(context.Context) (app.API, error) // defaults to daemon.Connect(ConfigPath)
 }
 
-// NewServer creates a new Desktop UI server.
-func NewServer(configPath, version string) *Server {
-	if configPath == "" {
-		configPath = "./apw.json"
+func NewServer(path, version string) *Server {
+	if path == "" {
+		path = "./apw.json"
 	}
 	if version == "" {
 		version = "0.1.0-alpha"
 	}
-	return &Server{
-		ConfigPath: configPath,
-		Version:    version,
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		panic(err)
 	}
+	return &Server{ConfigPath: path, Version: version, Token: hex.EncodeToString(secret[:])}
 }
-
-// Handler returns the HTTP handler for the Desktop UI and REST API.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/verify", s.handleVerify)
-	mux.HandleFunc("/api/symbols", s.handleSymbols)
-	mux.HandleFunc("/api/plan", s.handlePlan)
-	mux.HandleFunc("/api/run", s.handleRun)
-	return mux
+	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/symbols", s.handleSymbols)
+	mux.HandleFunc("POST /api/plan", s.handlePlan)
+	mux.HandleFunc("POST /api/run", s.handleRun)
+	mux.HandleFunc("POST /api/verify", s.handleVerify)
+	mux.Handle("/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend, err := s.backend(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), 503)
+			return
+		}
+		transport.Handler(backend, s.Token, map[string]string{"protocol": transport.Version}, nil).ServeHTTP(w, r)
+	}))
+	guarded := transport.Guard(s.Token, mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			if r.Method != "GET" {
+				http.Error(w, "method not allowed", 405)
+				return
+			}
+			if !transport.LocalRequest(r) {
+				http.Error(w, "local origin required", 403)
+				return
+			}
+			s.handleIndex(w, r)
+			return
+		}
+		guarded.ServeHTTP(w, r)
+	})
 }
-
-// StartAndOpen starts the local desktop server, opens a native Windows app window, and blocks until ctx is done.
-func (s *Server) StartAndOpen(ctx context.Context, addr string, openWindow bool) (string, error) {
+func (s *Server) StartAndOpen(ctx context.Context, addr string, open bool) (string, error) {
 	if addr == "" {
 		addr = "127.0.0.1:0"
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return "", fmt.Errorf("desktop must bind a loopback address")
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return "", err
 	}
-
-	url := fmt.Sprintf("http://%s", ln.Addr().String())
-	httpSrv := &http.Server{
-		Handler: s.Handler(),
-	}
-
+	server := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, IdleTimeout: 30 * time.Second}
 	go func() {
 		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpSrv.Shutdown(shutCtx)
+		_ = server.Shutdown(shutdown)
 	}()
-
-	go func() {
-		_ = httpSrv.Serve(ln)
-	}()
-
-	if openWindow {
+	go server.Serve(ln)
+	url := "http://" + ln.Addr().String()
+	if open {
 		OpenAppWindow(url)
 	}
 	return url, nil
 }
-
-// OpenAppWindow launches a frameless native-like Windows App window (using Edge --app mode on Windows).
 func OpenAppWindow(url string) {
 	if runtime.GOOS == "windows" {
-		// Try Microsoft Edge in standalone app window mode first (looks like a native desktop app)
-		cmd := exec.Command("cmd", "/c", "start", "", "msedge", "--app="+url, "--window-size=1220,820")
-		if err := cmd.Start(); err == nil {
+		cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		if cmd.Start() == nil {
 			_ = cmd.Process.Release()
-			return
-		}
-		// Fallback to default browser on Windows
-		fallback := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-		if err := fallback.Start(); err == nil {
-			_ = fallback.Process.Release()
 		}
 	}
 }
@@ -119,47 +129,13 @@ type statusPayload struct {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadOrDefault(s.ConfigPath)
+	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 500)
 		return
 	}
-	dState := daemon.EnsureRunning(cfg.Workspace)
-	absWS, err := filepath.Abs(cfg.Workspace)
-	if err != nil {
-		absWS = cfg.Workspace
-	}
-
-	writeJSON(w, statusPayload{
-		Version:       s.Version,
-		Brain1Name:    "Reflex Engine",
-		Brain1State:   "Active",
-		Brain1Latency: dState.LatencyMs,
-		Brain2Name:    "Architect",
-		Brain2State:   "Standby",
-		DaemonRunning: dState.Running,
-		DaemonPID:     dState.PID,
-		SkillsLoaded:  dState.SkillsLoaded,
-		Workspace:     filepath.ToSlash(absWS),
-		Stack:         config.DetectStack(cfg.Workspace),
-	})
-}
-
-func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadOrDefault(s.ConfigPath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	v := reflex.NewVerifier(cfg.Workspace)
-	res := v.Verify(r.Context())
-	writeJSON(w, map[string]any{
-		"passed":       res.Passed,
-		"failed_stage": res.FailedStage,
-		"diagnostics":  res.Diagnostics,
-		"duration_ms":  res.Duration.Milliseconds(),
-		"formatted":    reflex.FormatDiagnostics(res),
-	})
+	state := daemon.Status(cfg.Workspace)
+	writeJSON(w, statusPayload{Version: s.Version, Brain1Name: "Reflex Engine", Brain1State: "Available", Brain2Name: "Architect", Brain2State: "Standby", Brain1Latency: state.LatencyMs, DaemonRunning: state.Running, DaemonPID: state.PID, SkillsLoaded: daemon.CountSkills(cfg.Workspace), Workspace: cfg.Workspace, Stack: config.DetectStack(cfg.Workspace)})
 }
 
 type fileSymbols struct {
@@ -168,126 +144,93 @@ type fileSymbols struct {
 }
 
 func (s *Server) handleSymbols(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadOrDefault(s.ConfigPath)
+	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 500)
 		return
 	}
-	sg := surgeon.NewSurgeon()
 	var list []fileSymbols
 	_ = filepath.WalkDir(cfg.Workspace, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			n := d.Name()
-			if n == ".git" || n == "vendor" || n == "testdata" || n == ".apw" || n == ".worktrees" {
+			switch d.Name() {
+			case ".git", ".apw", ".worktrees", "vendor", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(d.Name(), ".go") {
+		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		rel, relErr := filepath.Rel(cfg.Workspace, path)
-		if relErr != nil {
-			rel = path
-		}
-		syms, symErr := sg.InspectGoSymbols(path)
-		if symErr == nil && len(syms) > 0 {
-			list = append(list, fileSymbols{
-				File:    filepath.ToSlash(rel),
-				Symbols: syms,
-			})
+		rel, _ := filepath.Rel(cfg.Workspace, path)
+		symbols, err := surgeon.InspectWorkspaceSymbols(cfg.Workspace, rel)
+		if err == nil {
+			list = append(list, fileSymbols{File: filepath.ToSlash(rel), Symbols: symbols})
 		}
 		return nil
 	})
 	writeJSON(w, list)
 }
-
-type taskPromptRequest struct {
-	Instruction string `json:"instruction"`
-}
-
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
-	var req taskPromptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Instruction) == "" {
-		http.Error(w, "instruction is required", http.StatusBadRequest)
+	var request struct {
+		Instruction string `json:"instruction"`
+	}
+	if err := transport.Decode(r, &request); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
-
-	cfg, err := config.LoadOrDefault(s.ConfigPath)
+	backend, err := s.backend(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 503)
 		return
 	}
-	provCfg := cfg.Providers[cfg.Roles.Architect]
-	prov, err := factory.New(provCfg)
+	plan, err := backend.Plan(r.Context(), "local", request.Instruction)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer prov.Close()
-
-	arch := architect.NewArchitect(prov)
-	arch.Model = provCfg.Model
-	plan, err := arch.Plan(r.Context(), core.Task{
-		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		Workspace:   cfg.Workspace,
-		Instruction: req.Instruction,
-	}, "Workspace stack: "+config.DetectStack(cfg.Workspace))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 400)
 		return
 	}
 	writeJSON(w, plan)
 }
-
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
-	var req taskPromptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Instruction) == "" {
-		http.Error(w, "instruction is required", http.StatusBadRequest)
+	var request app.Request
+	if err := transport.Decode(r, &request); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
-
-	cfg, err := config.LoadOrDefault(s.ConfigPath)
+	backend, err := s.backend(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 503)
 		return
 	}
-	archCfg := cfg.Providers[cfg.Roles.Architect]
-	archProv, err := factory.New(archCfg)
+	job, err := backend.Submit(r.Context(), "local", request)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 400)
 		return
 	}
-	defer archProv.Close()
-
-	reflexCfg := cfg.Providers[cfg.Roles.Reflex]
-	reflexProv, err := factory.New(reflexCfg)
-	if err != nil {
-		reflexProv = archProv
-	} else {
-		defer reflexProv.Close()
-	}
-
-	ex := executor.New(cfg.Workspace, archProv, reflexProv, archCfg.Model, reflexCfg.Model, cfg.Budget.MaxRepairs)
-	rep, err := ex.Execute(r.Context(), req.Instruction, "Workspace stack: "+config.DetectStack(cfg.Workspace))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, rep)
+	writeJSON(w, job)
 }
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(v)
+func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	backend, err := s.backend(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 503)
+		return
+	}
+	job, err := backend.Submit(r.Context(), "local", app.Request{RequestID: app.NewID(), Instruction: "Verify project without repairs", Mode: core.ModeVerify})
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	writeJSON(w, job)
 }
-
+func writeJSON(w http.ResponseWriter, value any) { transport.WriteJSON(w, value) }
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(desktopHTML))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors "+string(rune(39))+"none"+string(rune(39))+"; base-uri "+string(rune(39))+"none"+string(rune(39)))
+	_, _ = w.Write([]byte(strings.ReplaceAll(desktopHTML, "__APW_TOKEN__", s.Token)))
 }
 
 const desktopHTML = `<!DOCTYPE html>
@@ -537,7 +480,7 @@ const desktopHTML = `<!DOCTYPE html>
   <div class="status-pills">
     <div class="pill"><span class="dot"></span><span id="pill-brain1">Brain 1 (Reflex): Reflex Engine</span></div>
     <div class="pill"><span class="dot standby" id="dot-brain2"></span><span id="pill-brain2">Brain 2 (Deep): Architect [Standby]</span></div>
-    <div class="pill"><span class="dot"></span><span id="pill-daemon">Daemon (apwd): Running</span></div>
+    <div class="pill"><span class="dot"></span><span id="pill-daemon">Daemon (apwd): Checking…</span></div>
   </div>
 </header>
 
@@ -556,7 +499,9 @@ const desktopHTML = `<!DOCTYPE html>
     <div class="composer">
       <span class="prompt-prefix">apw &gt;</span>
       <input type="text" id="task-input" placeholder="สั่งงานเป็นภาษาธรรมชาติ หรือพิมพ์คำสั่ง เช่น เพิ่มฟีเจอร์ / ตรวจสอบโค้ด..." onkeydown="if(event.key==='Enter') runTask('run')" />
-      <button onclick="runTask('run')">Execute (Triad)</button>
+      <button onclick="runTask('review')">Review</button>
+      <button class="secondary" onclick="runTask('preview')">Preview changes</button>
+      <button class="secondary" onclick="runTask('execute')">Execute in worktree</button>
       <button class="secondary" onclick="runTask('plan')">Plan Only</button>
       <button class="secondary" onclick="runVerify()">Verify (Reflex)</button>
     </div>
@@ -564,37 +509,114 @@ const desktopHTML = `<!DOCTYPE html>
 </div>
 
 <script>
+const apiToken = "__APW_TOKEN__";
+async function apiFetch(path, options = {}) {
+ if (!path.startsWith("/")) throw new Error("Local API path required");
+ const headers = { ...(options.headers || {}), Authorization: "Bearer " + apiToken };
+ if (options.method === "POST") headers["Content-Type"] = "application/json";
+ const request = { ...options, headers };
+ try { return await window.fetch(path, request); }
+ catch (error) { return window.fetch(path, request); }
+}
+const watchedTasks = new Set();
+const activeStates = new Set(["queued","planning","analyzing","patching","verifying","applying"]);
+function jobActions(job) {
+ const rowID = "actions-" + job.id;
+ const previous = document.getElementById(rowID);
+ if (previous) previous.remove();
+ const row = document.createElement("div");
+ row.id = rowID;
+ const actions = activeStates.has(job.status) ? ["cancel"] :
+   job.status === "ready_to_apply" ? ["apply"] :
+   ["preview_ready","failed","interrupted","cancelled"].includes(job.status) ? ["resume"] : [];
+ actions.forEach(action => {
+  const button = document.createElement("button");
+  button.textContent = action === "apply" ? "Apply verified changes" : action === "resume" ? "Resume / verify" : "Cancel task";
+  button.onclick = async () => {
+   const res = await apiFetch("/v1/tasks/" + encodeURIComponent(job.id) + "/" + action, {method:"POST",body:"{}"});
+   if (!res.ok) { appendCard("Task request failed", await res.text(), "ERROR", "#f85149"); return; }
+   watchTask(await res.json());
+  };
+  row.appendChild(button);
+ });
+ document.getElementById("feed").appendChild(row);
+}
+async function watchTask(initial) {
+ if (watchedTasks.has(initial.id)) return;
+ watchedTasks.add(initial.id);
+ let job = initial, cursor = 0;
+ appendCard(job.id, job.instruction, job.status, "#d29922");
+ if (activeStates.has(job.status)) jobActions(job);
+ try {
+  while (true) {
+   const eventResponse = await apiFetch("/v1/tasks/" + encodeURIComponent(job.id) + "/events?after=" + cursor);
+   if (!eventResponse.ok) throw new Error(await eventResponse.text());
+   for (const event of await eventResponse.json() || []) {
+    cursor = event.seq;
+    appendCard(event.stage, event.message, job.id, "#262c36");
+   }
+   const response = await apiFetch("/v1/tasks/" + encodeURIComponent(job.id));
+   if (!response.ok) throw new Error(await response.text());
+   job = await response.json();
+   if (!activeStates.has(job.status)) {
+    if (job.report) {
+     appendExecutionReport(job.report);
+     if (job.report.summary) appendCard("Summary", job.report.summary, job.status, "#262c36");
+     if (job.report.diff) appendCard("Changes for review", job.report.diff, "DIFF", "#262c36");
+     if (job.report.acceptance) appendCard("Acceptance evidence", job.report.acceptance, job.status, "#262c36");
+    }
+    if (job.error) appendCard("Task stopped", job.error, job.status, "#f85149");
+    jobActions(job);
+    break;
+   }
+   await new Promise(resolve => setTimeout(resolve, 500));
+  }
+ } catch (error) { appendCard("Connection interrupted", error.message + " — task remains tracked by the daemon.", "ERROR", "#f85149"); }
+ finally { watchedTasks.delete(initial.id); }
+}
+async function loadTasks() {
+ const response = await apiFetch("/v1/tasks");
+ if (response.ok) { loadStatus(); for (const job of (await response.json() || []).slice(0, 10)) watchTask(job); }
+}
+
 async function loadStatus() {
-  const r = await fetch('/api/status');
+  const r = await apiFetch('/api/status');
   const s = await r.json();
   document.getElementById('hdr-workspace').textContent = s.workspace + ' (' + s.stack + ')';
-  document.getElementById('pill-brain1').textContent = 'Brain 1 (Reflex): ' + s.brain1_name + ' [' + s.brain1_state + ' - ' + s.brain1_latency_ms + 'ms]';
+  document.getElementById('pill-brain1').textContent = 'Brain 1 (Reflex): ' + s.brain1_name + ' [' + s.brain1_state + ']';
   document.getElementById('pill-brain2').textContent = 'Brain 2 (Deep): ' + s.brain2_name + ' [' + s.brain2_state + ']';
-  document.getElementById('pill-daemon').textContent = 'Daemon (apwd): Running (PID: ' + s.daemon_pid + ') | ' + s.skills_loaded + ' Skills';
+  document.getElementById('pill-daemon').textContent = 'Daemon (apwd): ' + (s.daemon_running ? 'Running (PID: ' + s.daemon_pid + ')' : 'Stopped') + ' | ping ' + s.brain1_latency_ms + 'ms';
   document.getElementById('banner-box').textContent =
     "  ▄▀█ █▀█ █░█░█\n" +
     "  █▀█ █▀▀ ▀▄▀▄▀   v" + s.version + " (Apiwat Agent)\n" +
     " ───────────────────────────────────────────────────────\n" +
-    "  Brain 1 (Reflex) : " + s.brain1_name + " [" + s.brain1_state + " - " + s.brain1_latency_ms + "ms]\n" +
+    "  Brain 1 (Reflex) : " + s.brain1_name + " [" + s.brain1_state + "]\n" +
     "  Brain 2 (Deep)   : " + s.brain2_name + "     [" + s.brain2_state + "]\n" +
-    "  Daemon (apwd)    : Running (PID: " + s.daemon_pid + ") | " + s.skills_loaded + " Skills Loaded\n" +
+    "  Daemon (apwd)    : " + (s.daemon_running ? "Running (PID: " + s.daemon_pid + ")" : "Stopped") + " | ping " + s.brain1_latency_ms + "ms | " + s.skills_loaded + " Skills Loaded\n" +
     " ───────────────────────────────────────────────────────\n" +
     "  Workspace        : " + s.workspace + " (" + s.stack + ")";
 }
 
 async function loadSymbols() {
-  const r = await fetch('/api/symbols');
+  const r = await apiFetch('/api/symbols');
   const files = await r.json();
   const el = document.getElementById('symbol-list');
   if (!files || files.length === 0) {
     el.textContent = 'No Go symbols found.';
     return;
   }
-  el.innerHTML = files.map(f =>
-    '<div class="file-group"><div class="file-name">' + f.file + '</div>' +
-    f.symbols.map(sym => '<div class="sym-item"><span>[' + sym.Kind + '] ' + sym.Name + '</span><span>L' + sym.StartLine + '-' + sym.EndLine + '</span></div>').join('') +
-    '</div>'
-  ).join('');
+  el.replaceChildren();
+  for (const file of files) {
+   const group = document.createElement("div"); group.className = "file-group";
+   const title = document.createElement("div"); title.className = "file-name"; title.textContent = file.file; group.appendChild(title);
+   for (const symbol of file.symbols || []) {
+    const item = document.createElement("div"); item.className = "sym-item";
+    const name = document.createElement("span"); name.textContent = "[" + symbol.Kind + "] " + symbol.Name;
+    const location = document.createElement("span"); location.textContent = "L" + symbol.StartLine + "-" + symbol.EndLine;
+    item.append(name,location); group.appendChild(item);
+   }
+   el.appendChild(group);
+  }
 }
 
 function appendCard(title, body, badgeText, badgeColor) {
@@ -655,8 +677,8 @@ function appendExecutionReport(data) {
   appendCard(
     'Triad Execution Report — ' + (plan.plan_id || data.task_id),
     summary,
-    data.passed ? 'PASS · ' + formatNs(data.duration) : 'FAIL · ' + formatNs(data.duration),
-    data.passed ? '#2ea043' : '#f85149'
+    data.mode === 'preview' ? 'PREVIEW · ' + formatNs(data.duration) : data.passed ? 'PASS · ' + formatNs(data.duration) : 'FAIL · ' + formatNs(data.duration),
+    data.mode === 'preview' ? '#d29922' : data.passed ? '#2ea043' : '#f85149'
   );
 }
 
@@ -675,51 +697,30 @@ function appendPlanCard(plan) {
 }
 
 async function runVerify() {
-  appendCard('Reflex Engine — กำลังตรวจสอบโค้ด...', 'gofmt -> go vet -> go build -> go test', 'RUNNING', '#d29922');
-  const r = await fetch('/api/verify', { method: 'POST' });
-  const res = await r.json();
-  if (res.passed) {
-    appendCard('Reflex Verification', 'ผ่านครบทุกขั้นตอน (gofmt, go vet, go build, go test)', 'PASS · ' + res.duration_ms + 'ms', '#2ea043');
-  } else {
-    appendCard('Reflex Verification — ล้มเหลวที่ขั้นตอน: ' + res.failed_stage, res.formatted, 'FAIL', '#f85149');
-  }
+ const response = await apiFetch("/api/verify", {method:"POST",body:"{}"});
+ if (!response.ok) { appendCard("Verification request failed",await response.text(),"ERROR","#f85149"); return; }
+ watchTask(await response.json());
 }
-
 async function runTask(mode) {
-  const input = document.getElementById('task-input');
-  const instruction = input.value.trim();
-  if (!instruction) return;
-  input.value = '';
-
-  document.getElementById('pill-brain2').textContent = 'Brain 2 (Deep): Architect [Active]';
-  appendCard('apw > ' + instruction, 'กำลังประมวลผลโหมด ' + (mode === 'plan' ? 'PLAN (วางแผน)' : 'TRIAD EXECUTE (วางแผน -> แก้ไข -> ตรวจสอบ)') + '...', mode.toUpperCase(), '#d97757');
-
-  try {
-    const endpoint = mode === 'plan' ? '/api/plan' : '/api/run';
-    const r = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instruction })
-    });
-    if (!r.ok) {
-      const errText = await r.text();
-      appendCard('เกิดข้อผิดพลาด', errText, 'ERROR', '#f85149');
-    } else {
-      const data = await r.json();
-      if (mode === 'plan') {
-        appendPlanCard(data);
-      } else {
-        appendExecutionReport(data);
-      }
-      loadSymbols();
-    }
-  } finally {
-    document.getElementById('pill-brain2').textContent = 'Brain 2 (Deep): Architect [Standby]';
+ const input = document.getElementById("task-input");
+ const instruction = input.value.trim();
+ if (!instruction) return;
+ try {
+  if (mode === "plan") {
+   const response = await apiFetch("/api/plan",{method:"POST",body:JSON.stringify({instruction})});
+   if (!response.ok) throw new Error(await response.text());
+   appendPlanCard(await response.json());
+  } else {
+   const response = await apiFetch("/api/run",{method:"POST",body:JSON.stringify({request_id:crypto.randomUUID(),instruction,mode})});
+   if (!response.ok) throw new Error(await response.text());
+   watchTask(await response.json());
   }
+  input.value = "";
+ } catch (error) { appendCard("Task request failed",error.message,"ERROR","#f85149"); }
 }
-
 loadStatus();
 loadSymbols();
+loadTasks();
 </script>
 </body>
 </html>`

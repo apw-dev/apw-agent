@@ -1,155 +1,186 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/apiwat/apw-agent/internal/buildinfo"
+	"github.com/apiwat/apw-agent/internal/config"
+	"github.com/apiwat/apw-agent/internal/transport"
 )
 
-// State represents the persisted runtime status of the apwd background daemon.
 type State struct {
-	Running      bool      `json:"running"`
-	PID          int       `json:"pid"`
-	SkillsLoaded int       `json:"skills_loaded"`
-	LatencyMs    int64     `json:"latency_ms"`
-	Workspace    string    `json:"workspace"`
-	StartedAt    time.Time `json:"started_at"`
+	Build        buildinfo.Info `json:"build"`
+	ConfigPath   string         `json:"config_path,omitempty"`
+	Running      bool           `json:"running"`
+	PID          int            `json:"pid"`
+	SkillsLoaded int            `json:"skills_loaded"`
+	LatencyMs    int64          `json:"latency_ms"`
+	Workspace    string         `json:"workspace"`
+	StartedAt    time.Time      `json:"started_at"`
+	Heartbeat    time.Time      `json:"heartbeat"`
+	Address      string         `json:"address"`
+	Protocol     string         `json:"protocol"`
+}
+type stateFile struct {
+	State
+	Token string `json:"token"`
 }
 
-func stateFilePath(workspace string) string {
-	return filepath.Join(workspace, ".apw", "daemon.json")
-}
-
-// WriteState records the current process as the active apwd daemon for the workspace.
-func WriteState(workspace string, pid int) error {
-	dir := filepath.Join(workspace, ".apw")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	st := State{
-		Running:      true,
-		PID:          pid,
-		SkillsLoaded: CountSkills(workspace),
-		LatencyMs:    measureReflexLatency(workspace),
-		Workspace:    workspace,
-		StartedAt:    time.Now(),
-	}
-	b, err := json.MarshalIndent(st, "", "  ")
+func stateFilePath(workspace string) string { return filepath.Join(workspace, ".apw", "daemon.json") }
+func readState(root string) (stateFile, error) {
+	data, err := os.ReadFile(stateFilePath(root))
 	if err != nil {
-		return err
+		return stateFile{}, err
 	}
-	return os.WriteFile(stateFilePath(workspace), b, 0644)
+	var st stateFile
+	err = json.Unmarshal(data, &st)
+	return st, err
 }
 
-// ClearState removes the persisted daemon state file on graceful shutdown.
-func ClearState(workspace string) {
-	_ = os.Remove(stateFilePath(workspace))
-}
-
-// EnsureRunning checks if the apwd background daemon is running, and spawns it automatically if not.
-func EnsureRunning(workspace string) State {
-	start := time.Now()
-	st, ok := readExistingState(workspace)
-	if ok && st.PID > 0 {
-		st.Running = true
-		st.SkillsLoaded = CountSkills(workspace)
-		st.LatencyMs = measureElapsedMs(start)
-		return st
-	}
-
-	// Attempt to spawn apwd in the background automatically
-	if pid := spawnBackgroundDaemon(workspace); pid > 0 {
-		_ = WriteState(workspace, pid)
-		return State{
-			Running:      true,
-			PID:          pid,
-			SkillsLoaded: CountSkills(workspace),
-			LatencyMs:    measureElapsedMs(start),
-			Workspace:    workspace,
-			StartedAt:    time.Now(),
-		}
-	}
-
-	// Fallback: in-process embedded APW background service
-	pid := os.Getpid()
-	_ = WriteState(workspace, pid)
-	return State{
-		Running:      true,
-		PID:          pid,
-		SkillsLoaded: CountSkills(workspace),
-		LatencyMs:    measureElapsedMs(start),
-		Workspace:    workspace,
-		StartedAt:    time.Now(),
-	}
-}
-
-// Status returns the current daemon state without spawning a new process if already recorded.
 func Status(workspace string) State {
-	return EnsureRunning(workspace)
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return State{}
+	}
+	st, err := readState(abs)
+	if err != nil {
+		return State{Workspace: abs}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	var health State
+	start := time.Now()
+	err = transport.NewClient(st.Address, st.Token).Call(ctx, "GET", "/v1/health", nil, &health)
+	if err != nil || health.Protocol != transport.Version || health.PID != st.PID || health.Workspace != st.Workspace {
+		return State{Workspace: abs}
+	}
+	health.Running = true
+	health.LatencyMs = time.Since(start).Milliseconds()
+	return health
 }
 
-// Stop terminates the background daemon if it is a separate process and clears state.
+// A status read never starts a daemon or advertises an embedded fake process.
+func EnsureRunning(workspace string) State { return Status(workspace) }
 func Stop(workspace string) error {
-	st, ok := readExistingState(workspace)
-	ClearState(workspace)
-	if ok && st.PID > 0 && st.PID != os.Getpid() {
-		if proc, err := os.FindProcess(st.PID); err == nil {
-			_ = proc.Kill()
+	st, err := readState(workspace)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return transport.NewClient(st.Address, st.Token).Call(ctx, "POST", "/v1/shutdown", map[string]string{}, nil)
+}
+func Connect(ctx context.Context, cfgPath string) (*transport.Client, error) {
+	cfg, absCfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	if st := Status(cfg.Workspace); st.Running {
+		if err := compatibleBuild(st); err != nil {
+			return nil, err
+		}
+		if !sameConfig(st.ConfigPath, absCfg) {
+			return nil, fmt.Errorf("daemon uses another or older configuration (%s); stop it for workspace %s before starting with %s", st.ConfigPath, cfg.Workspace, absCfg)
+		}
+		raw, err := readState(cfg.Workspace)
+		if err != nil {
+			return nil, err
+		}
+		return transport.NewClient(raw.Address, raw.Token), nil
+	}
+	if flag.Lookup("test.v") != nil {
+		return nil, errors.New("daemon is not running; tests must inject an application backend")
+	}
+	bin, err := daemonExecutable()
+	if err != nil {
+		return nil, errors.New("apwd is not installed; build/install cmd/apwd with cmd/apw")
+	}
+	cmd := exec.Command(bin, "--config", absCfg)
+	cmd.Dir = cfg.Workspace
+	configureBackground(cmd)
+	if err := os.MkdirAll(filepath.Join(cfg.Workspace, ".apw"), 0700); err != nil {
+		return nil, err
+	}
+	logFile, err := os.OpenFile(filepath.Join(cfg.Workspace, ".apw", "daemon.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	defer logFile.Close()
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err = cmd.Start(); err != nil {
+		return nil, err
+	}
+	_ = cmd.Process.Release()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline.C:
+			return nil, fmt.Errorf("daemon did not become healthy; inspect .apw/daemon.log")
+		case <-ticker.C:
+			if st := Status(cfg.Workspace); st.Running {
+				if err := compatibleBuild(st); err != nil {
+					return nil, err
+				}
+				if !sameConfig(st.ConfigPath, absCfg) {
+					return nil, errors.New("another daemon started with a different config; select its config or stop it first")
+				}
+				raw, err := readState(cfg.Workspace)
+				if err != nil {
+					return nil, err
+				}
+				return transport.NewClient(raw.Address, raw.Token), nil
+			}
 		}
 	}
-	return nil
 }
 
-func readExistingState(workspace string) (State, bool) {
-	b, err := os.ReadFile(stateFilePath(workspace))
+func sameConfig(first, second string) bool {
+	if first == "" {
+		return false
+	}
+	if first == second {
+		return true
+	}
+	a, e1 := os.Stat(first)
+	b, e2 := os.Stat(second)
+	return e1 == nil && e2 == nil && os.SameFile(a, b)
+}
+func LoadConfig(path string) (*config.Config, string, error) {
+	if path == "" {
+		path = "./apw.json"
+	}
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		return State{}, false
+		return nil, "", err
 	}
-	var st State
-	if err := json.Unmarshal(b, &st); err != nil || st.PID <= 0 {
-		return State{}, false
-	}
-	if time.Since(st.StartedAt) > 24*time.Hour {
-		return State{}, false
-	}
-	return st, true
-}
-
-func spawnBackgroundDaemon(workspace string) int {
-	if flag.Lookup("test.v") != nil {
-		return 0
-	}
-	apwdPath, err := exec.LookPath("apwd")
+	cfg, err := config.LoadOrDefault(abs)
 	if err != nil {
-		return 0
+		return nil, "", err
 	}
-	cmd := exec.Command(apwdPath)
-	cmd.Dir = workspace
-	if err := cmd.Start(); err != nil {
-		return 0
+	if !filepath.IsAbs(cfg.Workspace) {
+		cfg.Workspace = filepath.Join(filepath.Dir(abs), cfg.Workspace)
 	}
-	pid := cmd.Process.Pid
-	_ = cmd.Process.Release()
-	return pid
-}
-
-func measureReflexLatency(workspace string) int64 {
-	start := time.Now()
-	_, _ = os.Stat(filepath.Join(workspace, "go.mod"))
-	return measureElapsedMs(start)
-}
-
-func measureElapsedMs(start time.Time) int64 {
-	ms := time.Since(start).Milliseconds()
-	if ms < 1 {
-		return 1
-	}
-	return ms
+	cfg.Workspace, err = filepath.Abs(cfg.Workspace)
+	return cfg, abs, err
 }
 
 // CountSkills counts available skills from user/project skill directories (plus built-in Triad skills).
@@ -190,4 +221,24 @@ func DiscoverSkills(workspace string) map[string][]string {
 		scanRoot("system", filepath.Join(home, ".gemini", "antigravity", "builtin", "skills"))
 	}
 	return groups
+}
+
+func compatibleBuild(st State) error {
+	if buildinfo.SourceHash != "unrecorded" && st.Build.SourceHash != buildinfo.SourceHash {
+		return errors.New("daemon build differs from CLI; stop the running daemon and restart with the matching apwd")
+	}
+	return nil
+}
+func daemonExecutable() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		name := "apwd"
+		if strings.EqualFold(filepath.Ext(exe), ".exe") {
+			name += ".exe"
+		}
+		sibling := filepath.Join(filepath.Dir(exe), name)
+		if info, err := os.Stat(sibling); err == nil && info.Mode().IsRegular() {
+			return sibling, nil
+		}
+	}
+	return exec.LookPath("apwd")
 }

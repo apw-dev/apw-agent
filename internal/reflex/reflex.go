@@ -1,10 +1,17 @@
 package reflex
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/apiwat/apw-agent/internal/process"
+	"github.com/apiwat/apw-agent/internal/surgeon"
+	"go/format"
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -93,11 +100,11 @@ func (v *Verifier) RunCommand(ctx context.Context, name string, args ...string) 
 	cmd := exec.CommandContext(cmdCtx, name, args...)
 	cmd.Dir = v.Workspace
 
-	var outBuf bytes.Buffer
+	var outBuf process.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &outBuf
 
-	err := cmd.Run()
+	err := process.Run(cmdCtx, cmd)
 	if err != nil && cmdCtx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("%s %s: timed out after %v: %w", name, strings.Join(args, " "), v.Timeout, err)
 	}
@@ -118,12 +125,89 @@ func failed(stage, out string, err error, start time.Time) *VerificationResult {
 	}
 }
 
+// checkFormat inspects source files without traversing state, dependencies, or test fixtures.
+func (v *Verifier) checkFormat(ctx context.Context) (string, error) {
+	var files []string
+	err := filepath.WalkDir(v.Workspace, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path != v.Workspace {
+				switch entry.Name() {
+				case ".git", ".apw", ".worktrees", "vendor", "node_modules", "testdata":
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if entry.Type()&fs.ModeSymlink != 0 || !strings.HasSuffix(entry.Name(), ".go") {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		scanner := bufio.NewScanner(file)
+		generated := false
+		for line := 0; line < 20 && scanner.Scan(); line++ {
+			text := scanner.Text()
+			if strings.HasPrefix(text, "// Code generated ") && strings.HasSuffix(text, " DO NOT EDIT.") {
+				generated = true
+				break
+			}
+		}
+		readErr := scanner.Err()
+		closeErr := file.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if !generated {
+			rel, err := filepath.Rel(v.Workspace, path)
+			if err != nil {
+				return err
+			}
+			files = append(files, "."+string(filepath.Separator)+rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	var output strings.Builder
+	for _, path := range files {
+		if err := ctx.Err(); err != nil {
+			return output.String(), err
+		}
+		rel := strings.TrimPrefix(path, "."+string(filepath.Separator))
+		data, _, err := surgeon.ReadInRoot(v.Workspace, rel)
+		if err != nil {
+			return output.String(), err
+		}
+		normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+		formatted, err := format.Source(normalized)
+		if err != nil {
+			return fmt.Sprintf("%s:%v\n", path, err), err
+		}
+		if !bytes.Equal(normalized, formatted) {
+			output.WriteString(path + "\n")
+		}
+	}
+	return output.String(), nil
+}
+
 // Verify runs closed-loop verification: gofmt -> go vet -> go build -> go test
 func (v *Verifier) Verify(ctx context.Context) *VerificationResult {
 	start := time.Now()
 
 	// Stage 0: gofmt
-	out, err := v.RunCommand(ctx, "gofmt", "-l", ".")
+	out, err := v.checkFormat(ctx)
 	if err != nil {
 		return failed("fmt", out, err, start)
 	}
@@ -150,19 +234,19 @@ func (v *Verifier) Verify(ctx context.Context) *VerificationResult {
 	}
 
 	// Stage 1: go vet
-	out, err = v.RunCommand(ctx, "go", "vet", "./...")
+	out, err = v.RunCommand(ctx, "go", append([]string{"vet", "-mod=readonly"}, v.Packages...)...)
 	if err != nil {
 		return failed("vet", out, err, start)
 	}
 
 	// Stage 2: go build
-	out, err = v.RunCommand(ctx, "go", "build", "./...")
+	out, err = v.RunCommand(ctx, "go", append([]string{"build", "-mod=readonly", "-o", os.DevNull}, v.Packages...)...)
 	if err != nil {
 		return failed("build", out, err, start)
 	}
 
 	// Stage 3: go test
-	out, err = v.RunCommand(ctx, "go", "test", "./...")
+	out, err = v.RunCommand(ctx, "go", append([]string{"test", "-mod=readonly"}, v.Packages...)...)
 	if err != nil {
 		return failed("test", out, err, start)
 	}

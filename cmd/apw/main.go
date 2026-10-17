@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -16,22 +15,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/apiwat/apw-agent/internal/architect"
+	"github.com/apiwat/apw-agent/internal/buildinfo"
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/core"
 	"github.com/apiwat/apw-agent/internal/daemon"
 	"github.com/apiwat/apw-agent/internal/desktop"
-	"github.com/apiwat/apw-agent/internal/executor"
-	"github.com/apiwat/apw-agent/internal/provider/factory"
-	"github.com/apiwat/apw-agent/internal/reflex"
+	"github.com/apiwat/apw-agent/internal/session"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 	"github.com/apiwat/apw-agent/internal/tui"
 )
 
 const (
-	version              = "0.1.0-alpha"
 	maxOverviewSizeBytes = 20 * 1024
 )
+
+var version = buildinfo.Version
 
 func main() {
 	os.Exit(runWithStdin(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -48,7 +46,12 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 
 	switch args[0] {
 	case "version", "-v", "--version":
+		if len(args) > 1 && args[1] == "--json" {
+			_ = json.NewEncoder(stdout).Encode(buildinfo.Current())
+			return 0
+		}
 		fmt.Fprintf(stdout, "apw version %s (Triad Engine: Architect + Surgeon + Reflex)\n", version)
+		fmt.Fprintf(stdout, "source %s | revision %s | built %s\n", buildinfo.SourceHash, buildinfo.Revision, buildinfo.BuiltAt)
 		return 0
 
 	case "help", "-h", "--help":
@@ -58,14 +61,18 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return 0
 
 	case "shell":
-		return runInteractiveShell(stdin, stdout, stderr)
+		o, code := parseOptions("shell", args[1:], stderr)
+		if code != 0 {
+			return code
+		}
+		if len(o.Args) > 0 {
+			fmt.Fprintln(stderr, "unexpected shell arguments")
+			return 2
+		}
+		return runShellConfig(o.Config, stdin, stdout, stderr)
 
 	case "verify":
-		workspace := "."
-		if len(args) > 1 {
-			workspace = args[1]
-		}
-		return executeVerify(workspace, stdout)
+		return runVerify(args[1:], stdout, stderr)
 
 	case "symbols":
 		if len(args) < 2 {
@@ -77,8 +84,17 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	case "plan":
 		return runPlan(args[1:], stdout, stderr)
 
+	case "review":
+		return runSubmit(core.ModeReview, args[1:], stdout, stderr)
+	case "preview":
+		return runSubmit(core.ModePreview, args[1:], stdout, stderr)
+	case "apply", "task", "tasks", "watch", "diff", "cancel", "trust", "recover":
+		return runTaskCommand(args[0], args[1:], stdout, stderr)
 	case "run":
 		return runExecute(args[1:], stdout, stderr)
+
+	case "resume":
+		return runResume(nil, args[1:], stdout, stderr)
 
 	case "daemon":
 		return runDaemonCmd(args[1:], stdout, stderr)
@@ -110,9 +126,13 @@ func printBanner(w io.Writer, workspace string) {
 	fmt.Fprintln(w, "  ▄▀█ █▀█ █░█░█")
 	fmt.Fprintf(w, "  █▀█ █▀▀ ▀▄▀▄▀   v%s (Apiwat Agent)\n", version)
 	fmt.Fprintln(w, " ───────────────────────────────────────────────────────")
-	fmt.Fprintf(w, "  Brain 1 (Reflex) : Reflex Engine [Active - %dms]\n", dState.LatencyMs)
+	fmt.Fprintln(w, "  Brain 1 (Reflex) : Reflex Engine [Available]")
 	fmt.Fprintln(w, "  Brain 2 (Deep)   : Architect     [Standby]")
-	fmt.Fprintf(w, "  Daemon (apwd)    : Running (PID: %d) | %d Skills Loaded\n", dState.PID, dState.SkillsLoaded)
+	state := "Stopped"
+	if dState.Running {
+		state = "Running"
+	}
+	fmt.Fprintf(w, "  Daemon (apwd)    : %s (PID: %d) | %d Skills Loaded\n", state, dState.PID, daemon.CountSkills(workspace))
 	fmt.Fprintln(w, " ───────────────────────────────────────────────────────")
 	fmt.Fprintf(w, "  Workspace        : %s (%s)\n", wsDisplay, stack)
 }
@@ -127,151 +147,6 @@ func formatWorkspacePath(workspace string) string {
 		return "~" + filepath.ToSlash(rel)
 	}
 	return filepath.ToSlash(abs)
-}
-
-func runInteractiveShell(stdin io.Reader, stdout, stderr io.Writer) int {
-	sess := tui.NewSession(".", version)
-	if stdin == os.Stdin {
-		tui.RenderDashboard(stdout, ".", version, sess.SessionID)
-	} else {
-		printBanner(stdout, ".")
-		fmt.Fprintln(stdout)
-	}
-
-	var scanner *bufio.Scanner
-	for {
-		var line string
-		if stdin == os.Stdin {
-			l, err := sess.ReadInteractiveLine(stdout)
-			if err == nil {
-				line = strings.TrimSpace(l)
-			} else {
-				// Fallback to standard scanner if raw terminal mode is not supported
-				if scanner == nil {
-					scanner = bufio.NewScanner(stdin)
-				}
-				fmt.Fprint(stdout, "apw > ")
-				if !scanner.Scan() {
-					fmt.Fprintln(stdout)
-					return 0
-				}
-				line = strings.TrimSpace(scanner.Text())
-			}
-		} else {
-			if scanner == nil {
-				scanner = bufio.NewScanner(stdin)
-			}
-			fmt.Fprint(stdout, "apw > ")
-			if !scanner.Scan() {
-				fmt.Fprintln(stdout)
-				return 0
-			}
-			line = strings.TrimSpace(scanner.Text())
-		}
-
-		if line == "" {
-			continue
-		}
-
-		cmdLine := strings.TrimPrefix(line, "/")
-		fields := strings.Fields(cmdLine)
-		head := strings.ToLower(fields[0])
-		rest := ""
-		if len(fields) > 1 {
-			rest = strings.TrimSpace(cmdLine[len(fields[0]):])
-		}
-
-		switch head {
-		case "exit", "quit", "q":
-			fmt.Fprintln(stdout, "Shutting down interactive session. Daemon (apwd) remains active in background.")
-			return 0
-
-		case "help", "?":
-			printHelp(stdout)
-
-		case "status":
-			printBanner(stdout, ".")
-
-		case "new", "reset":
-			sess.ResetSession()
-			fmt.Fprintf(stdout, "Started fresh session: %s\n", sess.SessionID)
-
-		case "clear", "cls", "redraw":
-			fmt.Fprint(stdout, "\033[H\033[2J")
-			if stdin == os.Stdin {
-				tui.RenderDashboard(stdout, ".", version, sess.SessionID)
-			} else {
-				printBanner(stdout, ".")
-			}
-
-		case "skills":
-			_ = runSkillsCmd(".", stdout)
-
-		case "verify":
-			ws := "."
-			if rest != "" {
-				ws = rest
-			}
-			_ = executeVerify(ws, stdout)
-
-		case "symbols":
-			if rest == "" {
-				fmt.Fprintln(stderr, "Usage: symbols <path/to/file.go>")
-				continue
-			}
-			_ = executeSymbols(rest, stdout, stderr)
-
-		case "plan":
-			if rest == "" {
-				fmt.Fprintln(stderr, "Usage: plan <task instruction>")
-				continue
-			}
-			_ = runPlan([]string{rest}, stdout, stderr)
-
-		case "run":
-			if rest == "" {
-				fmt.Fprintln(stderr, "Usage: run <task instruction>")
-				continue
-			}
-			_ = runExecute([]string{rest}, stdout, stderr)
-
-		case "daemon":
-			var sub []string
-			if rest != "" {
-				sub = strings.Fields(rest)
-			}
-			_ = runDaemonCmd(sub, stdout, stderr)
-
-		case "model", "models", "config":
-			var sub []string
-			if rest != "" {
-				sub = strings.Fields(rest)
-			}
-			_ = runModelCmdWithStdin(sub, stdin, stdout, stderr)
-
-		case "auth", "login":
-			var sub []string
-			if rest != "" {
-				sub = strings.Fields(rest)
-			}
-			_ = runAuthCmdWithStdin(sub, stdin, stdout, stderr)
-
-		case "ui", "desktop":
-			srv := desktop.NewServer("./apw.json", version)
-			url, err := srv.StartAndOpen(context.Background(), "127.0.0.1:0", true)
-			if err != nil {
-				fmt.Fprintf(stderr, "Failed to start Desktop UI: %v\n", err)
-			} else {
-				fmt.Fprintf(stdout, "Launched Apiwat Agent Desktop App at %s\n", url)
-			}
-
-		default:
-			// Natural language instruction typed directly at `apw > _`:
-			// Execute full Triad loop (Architect -> Surgeon -> Reflex)
-			_ = runExecute([]string{line}, stdout, stderr)
-		}
-		fmt.Fprintln(stdout)
-	}
 }
 
 func runSkillsCmd(workspace string, stdout io.Writer) int {
@@ -289,16 +164,7 @@ func runSkillsCmd(workspace string, stdout io.Writer) int {
 }
 
 func executeVerify(workspace string, stdout io.Writer) int {
-	fmt.Fprintf(stdout, "Running Reflex closed-loop verification on: %s...\n", workspace)
-	v := reflex.NewVerifier(workspace)
-	res := v.Verify(context.Background())
-	if res.Passed {
-		fmt.Fprintf(stdout, "PASS: All checks (fmt, vet, build, test) passed in %v!\n", res.Duration)
-		return 0
-	}
-	fmt.Fprintf(stdout, "FAIL: Verification failed at stage: %s\n", res.FailedStage)
-	fmt.Fprintln(stdout, reflex.FormatDiagnostics(res))
-	return 1
+	return runVerify([]string{workspace}, stdout, stdout)
 }
 
 func executeSymbols(filePath string, stdout, stderr io.Writer) int {
@@ -316,38 +182,74 @@ func executeSymbols(filePath string, stdout, stderr io.Writer) int {
 }
 
 func runDaemonCmd(args []string, stdout, stderr io.Writer) int {
-	action := "status"
-	if len(args) > 0 {
-		action = strings.ToLower(args[0])
+	options, code := parseOptions("daemon", args, stderr)
+	if code != 0 {
+		return code
 	}
-	switch action {
-	case "status", "start":
-		st := daemon.EnsureRunning(".")
-		fmt.Fprintf(stdout, "Daemon (apwd): Running (PID: %d) | %d Skills Loaded | Reflex Latency: %dms\n", st.PID, st.SkillsLoaded, st.LatencyMs)
-		return 0
-	case "stop":
-		if err := daemon.Stop("."); err != nil {
-			fmt.Fprintf(stderr, "Failed to stop daemon: %v\n", err)
-			return 1
-		}
-		fmt.Fprintln(stdout, "Daemon (apwd) stopped.")
-		return 0
-	default:
-		fmt.Fprintln(stderr, "Usage: apw daemon [status|start|stop]")
+	if len(options.Args) > 1 {
+		fmt.Fprintln(stderr, "Usage: apw daemon [--config path] [status|start|stop]")
 		return 2
 	}
+	action := "status"
+	if len(options.Args) > 0 {
+		action = strings.ToLower(options.Args[0])
+	}
+	if action != "status" && action != "start" && action != "stop" {
+		fmt.Fprintln(stderr, "unknown daemon action:", action)
+		return 2
+	}
+	cfg, _, err := daemon.LoadConfig(options.Config)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if action == "stop" {
+		if err := daemon.Stop(cfg.Workspace); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Daemon (apwd) shutdown requested.")
+		return 0
+	}
+	if action == "start" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := daemon.Connect(ctx, options.Config); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	st := daemon.Status(cfg.Workspace)
+	fmt.Fprintf(stdout, "Daemon running=%v PID=%d health latency=%dms workspace=%s\n", st.Running, st.PID, st.LatencyMs, cfg.Workspace)
+	return 0
 }
 
 func runAuthCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cfgPath := "./apw.json"
+	options, code := parseOptions("model", args, stderr)
+	if code != 0 {
+		return code
+	}
+	args = options.Args
+	cfgPath := options.Config
+	if _, err := config.LoadOrDefault(cfgPath); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	if len(args) == 0 && stdin == os.Stdin {
 		if rc := tui.RunInteractiveAuthMenu(cfgPath, stdin, stdout, stderr); rc >= 0 {
 			return rc
 		}
 	}
 
-	cfg, statuses := tui.LoadSyncedConfig(".", cfgPath, true)
-	_ = cfg.Save(cfgPath)
+	cfg, statuses, err := tui.LoadSyncedConfig(".", cfgPath, true)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := cfg.Save(cfgPath); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	fmt.Fprintln(stdout, "APW Authentication & Live Model Discovery:")
 	for _, st := range statuses {
@@ -364,20 +266,36 @@ func runAuthCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Write
 }
 
 func runModelCmdWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cfgPath := "./apw.json"
+	options, code := parseOptions("model", args, stderr)
+	if code != 0 {
+		return code
+	}
+	args = options.Args
+	cfgPath := options.Config
+	if _, err := config.LoadOrDefault(cfgPath); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	if len(args) == 0 && stdin == os.Stdin {
 		if rc := tui.RunInteractiveModelSelector(cfgPath, stdin, stdout, stderr); rc >= 0 {
 			return rc
 		}
 	}
 
-	cfg, statuses := tui.LoadSyncedConfig(".", cfgPath, len(args) > 0 && strings.ToLower(args[0]) == "refresh")
+	cfg, statuses, err := tui.LoadSyncedConfig(".", cfgPath, len(args) > 0 && strings.ToLower(args[0]) == "refresh")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	if cfg == nil {
 		fmt.Fprintln(stderr, "Error loading config")
 		return 1
 	}
 	if len(args) > 0 && strings.ToLower(args[0]) == "refresh" {
-		_ = cfg.Save(cfgPath)
+		if err := cfg.Save(cfgPath); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 
 	if len(args) == 0 || strings.ToLower(args[0]) == "status" || strings.ToLower(args[0]) == "list" || strings.ToLower(args[0]) == "refresh" {
@@ -452,6 +370,7 @@ func runDesktopApp(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "./apw.json", "path to configuration file")
 	addr := fs.String("addr", "127.0.0.1:0", "listen address")
+	noOpen := fs.Bool("no-open", false, "serve without opening a browser")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -460,59 +379,26 @@ func runDesktopApp(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 
 	srv := desktop.NewServer(*cfgPath, version)
-	url, err := srv.StartAndOpen(ctx, *addr, true)
+	url, err := srv.StartAndOpen(ctx, *addr, !*noOpen)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error starting Desktop UI: %v\n", err)
 		return 1
 	}
 
 	printBanner(stdout, ".")
-	fmt.Fprintf(stdout, "\n  Desktop App      : %s (Window Launched)\n", url)
+	fmt.Fprintf(stdout, "\n  Desktop App      : %s\n", url)
 	fmt.Fprintln(stdout, "  Press Ctrl+C to close Desktop service.")
 	<-ctx.Done()
 	return 0
 }
 
 func parseConfigAndTaskArgs(cmdName string, args []string, stderr io.Writer) (string, string, bool, int) {
-	fs := flag.NewFlagSet(cmdName, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", "./apw.json", "path to configuration file")
-
-	var positional []string
-	var flagArgs []string
-	explicitConfig := false
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "-") {
-			if strings.Contains(args[i], "config") {
-				explicitConfig = true
-			}
-			flagArgs = append(flagArgs, args[i])
-			if !strings.Contains(args[i], "=") && i+1 < len(args) {
-				i++
-				flagArgs = append(flagArgs, args[i])
-			}
-		} else {
-			positional = append(positional, args[i])
-		}
-	}
-
-	if err := fs.Parse(flagArgs); err != nil {
-		return "", "", false, 2
-	}
-	positional = append(positional, fs.Args()...)
-	instruction := strings.TrimSpace(strings.Join(positional, " "))
-	return *cfgPath, instruction, explicitConfig, 0
+	options, code := parseOptions(cmdName, args, stderr)
+	return options.Config, strings.TrimSpace(strings.Join(options.Args, " ")), options.Explicit, code
 }
-
 func loadConfigForCLI(cfgPath string, explicit bool) (*config.Config, error) {
-	if explicit {
-		return config.Load(cfgPath)
-	}
-	cfg, _ := tui.LoadSyncedConfig(".", cfgPath, false)
-	if cfg != nil {
-		return cfg, nil
-	}
-	return config.LoadOrDefault(cfgPath)
+	cfg, _, err := daemon.LoadConfig(cfgPath)
+	return cfg, err
 }
 
 func runPlan(args []string, stdout, stderr io.Writer) int {
@@ -531,37 +417,20 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	provCfg := cfg.Providers[cfg.Roles.Architect]
-	prov, err := factory.New(provCfg)
-	if err != nil {
-		fmt.Fprintf(stderr, "Error creating architect provider: %v\n", err)
-		return 1
-	}
-	defer prov.Close()
-
-	overview := buildCodebaseOverview(cfg.Workspace)
-
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	timeout := time.Duration(cfg.Budget.TaskTimeoutSec) * time.Second
 	if timeout <= 0 {
-		timeout = 600 * time.Second
+		timeout = 20 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	arch := architect.NewArchitect(prov)
-	arch.Model = provCfg.Model
-
-	task := core.Task{
-		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		Workspace:   cfg.Workspace,
-		Instruction: instruction,
-		Mode:        "preview",
-		Status:      core.StatusPlanning,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+	backend, err := daemon.Connect(ctx, cfgPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-
-	plan, err := arch.Plan(ctx, task, overview)
+	plan, err := backend.Plan(ctx, "local", instruction)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error generating plan: %v\n", err)
 		return 1
@@ -651,127 +520,16 @@ func (s *triadSpinner) Stop() {
 }
 
 func runExecute(args []string, stdout, stderr io.Writer) int {
-	cfgPath, instruction, explicit, errCode := parseConfigAndTaskArgs("run", args, stderr)
-	if errCode != 0 {
-		return errCode
+	return runSubmit(core.ModeExecute, args, stdout, stderr)
+}
+func runExecuteWithSession(sess *session.Session, args []string, stdout, stderr io.Writer) int {
+	if sess != nil && sess.ID != "" {
+		args = append([]string{"--session", sess.ID}, args...)
 	}
-	if instruction == "" {
-		fmt.Fprintln(stderr, "Usage: apw run [--config path] \"<task instruction>\"")
-		return 1
-	}
-
-	cfg, err := loadConfigForCLI(cfgPath, explicit)
-	if err != nil {
-		fmt.Fprintf(stderr, "Error loading config: %v\n", err)
-		return 1
-	}
-
-	archCfg := cfg.Providers[cfg.Roles.Architect]
-	archProv, err := factory.New(archCfg)
-	if err != nil {
-		fmt.Fprintf(stderr, "Error creating architect provider: %v\n", err)
-		return 1
-	}
-	defer archProv.Close()
-
-	reflexCfg := cfg.Providers[cfg.Roles.Reflex]
-	reflexProv, err := factory.New(reflexCfg)
-	if err != nil {
-		reflexProv = archProv
-	} else {
-		defer reflexProv.Close()
-	}
-
-	overview := buildCodebaseOverview(cfg.Workspace)
-	timeout := time.Duration(cfg.Budget.TaskTimeoutSec) * time.Second
-	if timeout <= 0 {
-		timeout = 600 * time.Second
-	}
-	sigCtx, stopSig := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSig()
-	ctx, cancel := context.WithTimeout(sigCtx, timeout)
-	defer cancel()
-
-	fmt.Fprintf(stdout, "\n  %s⚡ [Dual-Brain Triad]%s Executing task: %s%s%s\n", "\x1b[1m\x1b[38;2;229;169;60m", "\x1b[0m", "\x1b[1m\x1b[38;2;235;240;245m", instruction, "\x1b[0m")
-
-	var spinner *triadSpinner
-	defer func() {
-		if spinner != nil {
-			spinner.Stop()
-		}
-	}()
-
-	spinner = startSpinner(stdout, fmt.Sprintf("🧠 [Brain 2 · Architect] Formulating ExecutionPlan using %s (%s)...", archCfg.Model, cfg.Roles.Architect))
-
-	ex := executor.New(cfg.Workspace, archProv, reflexProv, archCfg.Model, reflexCfg.Model, cfg.Budget.MaxRepairs)
-	ex.OnProgress = func(ev executor.ProgressEvent) {
-		switch ev.Stage {
-		case "plan_ready":
-			if spinner != nil {
-				spinner.Stop()
-				spinner = nil
-			}
-			fmt.Fprintf(stdout, "  %s📋 [ExecutionPlan Ready]%s %s (%d step(s) · %v)\n", "\x1b[1m\x1b[38;2;86;182;242m", "\x1b[0m", ev.Message, ev.TotalSteps, ev.Duration.Round(time.Millisecond))
-		case "step_start":
-			if spinner != nil {
-				spinner.Stop()
-				spinner = nil
-			}
-			fmt.Fprintf(stdout, "    \x1b[38;2;229;169;60m⚡\x1b[0m [%d/%d] %s...\n", ev.StepIndex, ev.TotalSteps, ev.Message)
-		case "step_done":
-			if ev.Step != nil {
-				fmt.Fprintf(stdout, "    \x1b[32m✓\x1b[0m [%d/%d] [%s] %s — %s\n", ev.StepIndex, ev.TotalSteps, ev.Step.Action, ev.Step.SubtaskID, ev.Step.Message)
-			}
-		case "verifying":
-			if spinner != nil {
-				spinner.Stop()
-			}
-			spinner = startSpinner(stdout, "⚡ [Brain 1 · Reflex] Running closed-loop verification (gofmt, vet, build, test)...")
-		case "verified":
-			if spinner != nil {
-				spinner.Stop()
-				spinner = nil
-			}
-			if ev.Passed {
-				fmt.Fprintf(stdout, "  %s✓ [Brain 1 · Reflex]%s %s (%v)\n", "\x1b[1m\x1b[38;2;74;222;128m", "\x1b[0m", ev.Message, ev.Duration.Round(time.Millisecond))
-			} else {
-				fmt.Fprintf(stdout, "  %s❌ [Brain 1 · Reflex]%s %s (%v)\n", "\x1b[1m\x1b[31m", "\x1b[0m", ev.Message, ev.Duration.Round(time.Millisecond))
-			}
-		case "synthesizing":
-			if spinner != nil {
-				spinner.Stop()
-			}
-			spinner = startSpinner(stdout, "💬 [Triad Report] Synthesizing summary report in Thai...")
-		}
-	}
-
-	report, err := ex.Execute(ctx, instruction, overview)
-	if spinner != nil {
-		spinner.Stop()
-		spinner = nil
-	}
-
-	if err != nil {
-		if sigCtx.Err() != nil {
-			fmt.Fprintf(stdout, "\n  %s⚠ [Triad Interrupted]%s Task cancelled by user (Ctrl+C).\n\n", "\x1b[1m\x1b[33m", "\x1b[0m")
-			return 130
-		}
-		fmt.Fprintf(stdout, "\n  %s❌ [Triad Error]%s: %v\n\n", "\x1b[1m\x1b[31m", "\x1b[0m", err)
-		return 1
-	}
-
-	if report.Summary != "" {
-		fmt.Fprintf(stdout, "\n  %s%s───────────────────────────────────────────────────────────────────────%s\n", "\x1b[2m", "\x1b[38;2;130;138;150m", "\x1b[0m")
-		fmt.Fprintf(stdout, "  %s💬 สรุปผลการทำงาน (Triad Report):%s\n\n%s\n", "\x1b[1m\x1b[38;2;86;182;242m", "\x1b[0m", report.Summary)
-		fmt.Fprintf(stdout, "  %s%s───────────────────────────────────────────────────────────────────────%s\n\n", "\x1b[2m", "\x1b[38;2;130;138;150m", "\x1b[0m")
-	}
-
-	if report.Passed {
-		fmt.Fprintf(stdout, "  %s⚡ [Brain 1 · Reflex]%s Closed-loop PASS (%d attempt(s), %v)\n\n", "\x1b[1m\x1b[38;2;74;222;128m", "\x1b[0m", len(report.ReflexAttempts), report.Duration.Round(time.Millisecond))
-		return 0
-	}
-	fmt.Fprintf(stdout, "  %s❌ [Brain 1 · Reflex]%s FAIL after %d attempt(s)\n\n", "\x1b[1m\x1b[31m", "\x1b[0m", len(report.ReflexAttempts))
-	return 1
+	return runSubmit(core.ModeExecute, args, stdout, stderr)
+}
+func runResume(_ *session.Session, args []string, stdout, stderr io.Writer) int {
+	return runTaskCommand("resume", args, stdout, stderr)
 }
 
 func buildCodebaseOverview(workspace string) string {
@@ -835,7 +593,18 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  apw desktop (or apw ui)        Launch Claude Code Desktop-style Windows App")
 	fmt.Fprintln(w, "  Ctrl+C twice (within 2s)       Safely exit the interactive shell (Ctrl+D exits immediately)")
 	fmt.Fprintln(w, "\nCommands:")
-	fmt.Fprintln(w, "  run [--config path] \"<task>\"   Execute full Triad loop (Architect -> Surgeon -> Reflex)")
+	fmt.Fprintln(w, "  review [--config path] <task>   Read source and report findings")
+	fmt.Fprintln(w, "  preview [--config path] <task>  Prepare a diff without executing repository code")
+	fmt.Fprintln(w, "  trust [--config path]          Allow build/test for this workspace")
+	fmt.Fprintln(w, "  tasks | task <task-id>         List jobs or inspect a saved JSON report")
+	fmt.Fprintln(w, "  diff <task-id>                 Show the saved source diff")
+	fmt.Fprintln(w, "  recover <legacy-task-id>       Export old work safely for review; never apply")
+	fmt.Fprintln(w, "  watch <task-id>                Reattach to progress; Ctrl+C detaches")
+	fmt.Fprintln(w, "  review/preview/run flags: --request-id <id> --session <id> --config <path>")
+	fmt.Fprintln(w, "  cancel <task-id>               Cancel a task and its subprocess tree")
+	fmt.Fprintln(w, "  apply <task-id>                Apply a verified patch with conflict checks")
+	fmt.Fprintln(w, "  run [--config path] \"<task>\"   Prepare and verify a patch in an isolated worktree")
+	fmt.Fprintln(w, "  resume [task-id]               Resume saved task; preview resumes as execute")
 	fmt.Fprintln(w, "  plan [--config path] \"<task>\"  Generate an ExecutionPlan and save to .apw/plans/")
 	fmt.Fprintln(w, "  verify [dir]                   Run Reflex closed-loop verification (fmt -> vet -> build -> test)")
 	fmt.Fprintln(w, "  symbols <file.go>              Inspect AST code symbols using Surgeon inspector")
@@ -843,4 +612,27 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  auth                           Connect ChatGPT Sub/API, Claude Sub/API, or AGY CLI")
 	fmt.Fprintln(w, "  daemon [status|start|stop]     Manage apwd background agent daemon")
 	fmt.Fprintln(w, "  version                        Show version and architecture info")
+}
+
+func renderMarkdownAnsi(s string) string {
+	lines := strings.Split(s, "\n")
+	var out []string
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "### ") {
+			out = append(out, fmt.Sprintf("  \x1b[1m\x1b[38;2;86;182;242m%s\x1b[0m", trimmed))
+		} else if strings.HasPrefix(trimmed, "#### ") {
+			out = append(out, fmt.Sprintf("  \x1b[1m\x1b[38;2;198;120;221m%s\x1b[0m", trimmed))
+		} else if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "• ") {
+			content := strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "• ")
+			out = append(out, fmt.Sprintf("    \x1b[38;2;97;175;239m•\x1b[0m %s", content))
+		} else if trimmed == "---" {
+			out = append(out, "  \x1b[2m\x1b[38;2;90;98;110m─────────────────────────────────────────────────────────────\x1b[0m")
+		} else if trimmed != "" {
+			out = append(out, "  "+l)
+		} else {
+			out = append(out, "")
+		}
+	}
+	return strings.Join(out, "\n")
 }
