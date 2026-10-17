@@ -60,6 +60,7 @@ func DefaultCommands() []SlashCommand {
 		{Name: "/apply", Usage: "/apply <id>", Description: "Apply verified changes after conflict checks", TakesArgs: true},
 		{Name: "/cancel", Usage: "/cancel <id>", Description: "Cancel a task and its process tree", TakesArgs: true},
 		{Name: "/trust", Usage: "/trust", Description: "Allow repository build/test in this workspace"},
+		{Name: "/mode", Usage: "/mode [ask|auto|plan|unverified]", Description: "Show or set what a request does: ask before apply, apply automatically, plan only, or skip build/test", TakesArgs: false},
 		{Name: "/plan", Usage: "/plan <instruction>", Description: "Spec-First Planning: create ExecutionPlan (.apw/plans/) before touching code", TakesArgs: true},
 		{Name: "/run", Usage: "/run <instruction>", Description: "Execute full Triad loop (Architect -> Surgeon -> Reflex) on a task", TakesArgs: true},
 		{Name: "/resume", Usage: "/resume [task-id]", Description: "Resume interrupted task from checkpoint in isolated worktree without losing completed work", TakesArgs: false},
@@ -108,16 +109,37 @@ type Session struct {
 	Workspace  string
 	Version    string
 	SessionID  string
-	ModeIndex  int // 0 = auto-triad, 1 = plan-first, 2 = fast-reflex
+	ModeIndex  int // index into ApprovalModes; shift+tab cycles
 	History    []string
 
 	lastInterrupt time.Time
 }
 
+// ApprovalModes decide what a free-text request does in the interactive shell.
+var ApprovalModes = []string{"ask", "auto", "plan", "unverified"}
+
 var modeNames = []string{
-	"auto-triad (Architect -> Surgeon -> Reflex)",
-	"plan-only (Spec-First Architect)",
-	"verify-only (fmt/vet/build/test)",
+	"ask (verify, then ask before applying)",
+	"auto (verify, then apply automatically)",
+	"plan (plan only; nothing changes)",
+	"unverified (patch without build/test; ask before applying)",
+}
+
+// ApprovalMode returns the current approval mode name.
+func (s *Session) ApprovalMode() string { return ApprovalModes[s.ModeIndex%len(ApprovalModes)] }
+
+// ApprovalModeLabel describes the current approval mode.
+func (s *Session) ApprovalModeLabel() string { return modeNames[s.ModeIndex%len(modeNames)] }
+
+// SetApprovalMode selects a mode by name and reports whether the name is known.
+func (s *Session) SetApprovalMode(name string) bool {
+	for i, m := range ApprovalModes {
+		if strings.EqualFold(m, strings.TrimSpace(name)) {
+			s.ModeIndex = i
+			return true
+		}
+	}
+	return false
 }
 
 // ctrlCExitWindow is the time window in which a second Ctrl+C confirms exiting the CLI.
@@ -382,14 +404,14 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 
 			leftHint := fmt.Sprintf(" %s↑/↓%s Navigate · %senter%s Select · %stab%s Complete · %sesc%s Cancel",
 				cBold+cCyan, cGray, cBold+cCyan, cGray, cBold+cCyan, cGray, cBold+cCyan, cGray)
-			rightHint := fmt.Sprintf("%sexplicit-apply%s · %s%s%s", cGreen, cGray, cWhite, truncatePlain(archModel, 18), cReset)
+			rightHint := fmt.Sprintf("%smode %s%s · %s%s%s", cGreen, s.ApprovalMode(), cGray, cWhite, truncatePlain(archModel, 18), cReset)
 			fmt.Fprint(stdout, leftHint+"   "+rightHint)
 		} else {
 			if s.InterruptPending(time.Now()) {
 				fmt.Fprintf(stdout, " %s⚠ Press Ctrl+C again to exit%s %s(Ctrl+D exits immediately)%s", cBold+cAmber, cReset, cGray, cReset)
 			} else {
 				modeLabel := modeNames[s.ModeIndex%len(modeNames)]
-				fmt.Fprintf(stdout, " %s▸▸ %s%s %s(shift+tab to cycle · /model · /auth)%s",
+				fmt.Fprintf(stdout, " %s▸▸ %s%s %s(shift+tab or /mode to change · /model · /auth)%s",
 					cGold, modeLabel, cReset, cGray, cReset)
 			}
 		}
@@ -534,14 +556,6 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			redraw(true)
 			if finalLine != "" {
 				s.History = append(s.History, finalLine)
-			}
-			if finalLine != "" && !strings.HasPrefix(finalLine, "/") {
-				switch s.ModeIndex % len(modeNames) {
-				case 1:
-					finalLine = "/plan " + finalLine
-				case 2:
-					finalLine = "/verify"
-				}
 			}
 			return finalLine, nil
 		}

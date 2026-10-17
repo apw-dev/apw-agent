@@ -136,7 +136,20 @@ apw cleanup --dry-run                  # ดูว่า retention policy จะ
 apw symbols internal/surgeon/surgeon.go # สกัดโครงสร้าง AST Symbols ในไฟล์
 apw daemon status                      # ตรวจสอบสถานะบริการเบื้องหลัง apwd
 ```
-`review`, `preview` และ `plan` ใช้ได้โดยไม่ต้อง trust เพราะไม่รันโค้ดของ repository ส่วน `run` และ `verify` จะรัน build/test จึงถูกปฏิเสธจนกว่าจะ `apw trust` (Git worktree แยกไฟล์ออกจาก workspace แต่ไม่ได้ sandbox โค้ดที่ถูกรัน)
+`review`, `preview` และ `plan` ใช้ได้โดยไม่ต้อง trust เพราะไม่รันโค้ดของ repository ส่วน `run` และ `verify` จะรัน build/test จึงถูกปฏิเสธจนกว่าจะ `apw trust` (Git worktree แยกไฟล์ออกจาก workspace แต่ไม่ได้ sandbox โค้ดที่ถูกรัน เว้นแต่เปิด `sandbox`)
+
+```bash
+apw run --auto "..."        # verify ผ่านแล้ว apply ให้ทันที ไม่ต้องสั่ง apply เอง
+apw run --no-verify "..."   # ไม่รัน install/build/test (ไม่ต้อง trust) ตรวจเฉพาะ check ระดับไฟล์ แล้วรอ apply
+```
+
+**โหมดใน CLI แบบ interactive:** พิมพ์ `/mode` หรือกด shift+tab เพื่อเปลี่ยนว่าคำสั่งที่พิมพ์จะทำอะไร (ค่าเริ่มต้นตั้งได้ใน `apw.json` ที่ `"approval"`):
+- `ask` (ค่าเริ่มต้น): วางแผน แก้ และ verify เสร็จแล้วถาม `Apply ... [y/N]` ก่อนนำผลไปใส่ในโปรเจกต์
+- `auto`: verify ผ่านแล้ว apply ให้เลยโดยไม่ถาม
+- `plan`: วางแผนอย่างเดียว ไม่แก้และไม่รันอะไร
+- `unverified`: แก้โดยไม่รัน install/build/test (ไม่ต้อง trust) ตรวจเฉพาะ check ระดับไฟล์ แล้วถามก่อน apply รายงานจะเขียนว่า UNVERIFIED ชัดเจน
+
+**Trust ตอนเข้า CLI:** ถ้าโฟลเดอร์ยังไม่ได้ trust ตอนเปิด `apw` จะอธิบายว่า trust อนุญาตอะไร (ให้รัน install/build/test ของโปรเจกต์ใน worktree ด้วยสิทธิ์ของผู้ใช้) แล้วถาม `Trust this folder? [y/N]` ถ้าตอบไม่ ยังใช้ `plan`, `review`, `preview` และโหมด `unverified` ได้
 
 ### ภาษาและเครื่องมือที่รองรับ
 APW ตรวจชนิดโปรเจกต์จากไฟล์ที่ root แล้วเลือก pipeline ตรวจสอบ (Reflex) ให้เอง ทุกขั้นรันใน worktree ที่แยกออกมา และต้อง `apw trust` ก่อน:

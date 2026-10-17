@@ -42,13 +42,35 @@ func runSubmitOptions(mode core.TaskMode, options cliOptions, stdout, stderr io.
 	if requestID == "" {
 		requestID = app.NewID()
 	}
+	if options.NoVerify && mode == core.ModeExecute {
+		mode = core.ModeUnverified
+	}
 	job, err := client.Submit(ctx, "local", app.Request{RequestID: requestID, SessionID: options.SessionID, Mode: mode, Instruction: instruction})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		fmt.Fprintf(stderr, "Submission ID: %s. Check 'apw tasks' or retry the same instruction with --request-id %s.\n", requestID, requestID)
 		return 1
 	}
-	return followTask(ctx, client, job, stdout, stderr)
+	code, final := followTaskResult(ctx, client, job, stdout, stderr, true, options.Auto || options.Approve != nil)
+	if final == nil || final.Status != core.StatusReady {
+		return code
+	}
+	switch {
+	case options.Auto:
+		fmt.Fprintln(stdout, "Applying automatically (approval mode: auto).")
+	case options.Approve != nil && options.Approve(final):
+	case options.Approve != nil:
+		fmt.Fprintf(stdout, "Not applied. Apply later with 'apw apply %s'.\n", final.ID)
+		return code
+	default:
+		return code
+	}
+	applyJob, err := client.Apply(ctx, final.ID, "local")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return followTask(ctx, client, applyJob, stdout, stderr)
 }
 func terminal(status core.TaskStatus) bool {
 	switch status {
@@ -66,6 +88,14 @@ func followTask(ctx context.Context, backend app.API, job *store.Job, stdout, st
 	return followTaskWithCancel(ctx, backend, job, stdout, stderr, true)
 }
 func followTaskWithCancel(ctx context.Context, backend app.API, job *store.Job, stdout, stderr io.Writer, cancelOnInterrupt bool) int {
+	code, _ := followTaskResult(ctx, backend, job, stdout, stderr, cancelOnInterrupt, false)
+	return code
+}
+
+// followTaskResult follows a task to a terminal status and returns the exit code and the final job
+// (nil when following stopped early). approvalFollows suppresses the "apply explicitly" hint when
+// the caller applies or asks next.
+func followTaskResult(ctx context.Context, backend app.API, job *store.Job, stdout, stderr io.Writer, cancelOnInterrupt, approvalFollows bool) (int, *store.Job) {
 	fmt.Fprintf(stdout, "Task %s (%s)\n", job.ID, job.Mode)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -78,7 +108,7 @@ func followTaskWithCancel(ctx context.Context, backend app.API, job *store.Job, 
 			}
 			fmt.Fprintln(stderr, err)
 			fmt.Fprintf(stderr, "Task remains tracked by the daemon. Reattach with 'apw watch %s' (use the same --config).\n", job.ID)
-			return 1
+			return 1, nil
 		}
 		statusChanged := false
 		for _, event := range events {
@@ -99,7 +129,7 @@ func followTaskWithCancel(ctx context.Context, backend app.API, job *store.Job, 
 				}
 				fmt.Fprintln(stderr, getErr)
 				fmt.Fprintf(stderr, "Task remains tracked by the daemon. Reattach with 'apw watch %s' (use the same --config).\n", job.ID)
-				return 1
+				return 1, nil
 			}
 			job = fresh
 		}
@@ -107,8 +137,8 @@ func followTaskWithCancel(ctx context.Context, backend app.API, job *store.Job, 
 			var report executor.ExecutionReport
 			if len(job.Report) > 0 && json.Unmarshal(job.Report, &report) == nil {
 				fmt.Fprintln(stdout, renderMarkdownAnsi(report.Summary))
-				if job.Status == core.StatusReady {
-					fmt.Fprintf(stdout, "Review the diff with 'apw task %s'. Apply explicitly with 'apw apply %s'.\n", job.ID, job.ID)
+				if job.Status == core.StatusReady && !approvalFollows {
+					fmt.Fprintf(stdout, "Review the diff with 'apw diff %s'. Apply explicitly with 'apw apply %s'.\n", job.ID, job.ID)
 				}
 			}
 			fmt.Fprintf(stdout, "Status: %s\n", job.Status)
@@ -116,9 +146,9 @@ func followTaskWithCancel(ctx context.Context, backend app.API, job *store.Job, 
 				fmt.Fprintln(stderr, job.Error)
 			}
 			if job.Status == core.StatusReady || job.Status == core.StatusPreview || job.Status == core.StatusSucceeded {
-				return 0
+				return 0, job
 			}
-			return 1
+			return 1, job
 		}
 		select {
 		case <-ctx.Done():
@@ -129,14 +159,14 @@ func followTaskWithCancel(ctx context.Context, backend app.API, job *store.Job, 
 cancelled:
 	if !cancelOnInterrupt {
 		fmt.Fprintf(stdout, "Detached from %s; task continues.\n", job.ID)
-		return 130
+		return 130, nil
 	}
 	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := backend.Cancel(cancelCtx, job.ID, "local"); err != nil {
 		fmt.Fprintf(stderr, "Cancellation could not be confirmed: %v\n", err)
 	}
-	return 130
+	return 130, nil
 }
 
 func runTaskCommand(action string, args []string, stdout, stderr io.Writer) int {

@@ -120,6 +120,10 @@ type Config struct {
 	Research ResearchConfig `json:"research,omitzero"`
 	// Planning asks several architect models for plans and ranks them.
 	Planning PlanningConfig `json:"planning,omitzero"`
+	// Approval is the interactive CLI's default mode for free-text requests: "ask" (default) runs
+	// and verifies, then asks before applying; "auto" applies verified changes without asking;
+	// "plan" only plans; "unverified" patches without running build or test and asks before applying.
+	Approval string `json:"approval,omitempty"`
 }
 
 // SandboxConfig selects how verification commands are isolated. Mode "off" (default) runs them as
@@ -422,6 +426,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Research.MaxSources < 0 || c.Research.MaxSources > 10 {
 		return errors.New("config: research.max_sources must be between 0 and 10")
+	}
+	switch c.Approval {
+	case "", "ask", "auto", "plan", "unverified":
+	default:
+		return fmt.Errorf("config: approval %q must be ask, auto, plan or unverified", c.Approval)
 	}
 	switch c.Planning.Lookup {
 	case "", "auto", "always", "off":

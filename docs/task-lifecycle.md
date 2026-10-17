@@ -16,12 +16,29 @@ apw desktop
 | `apw preview "<instruction>"` | None; Git creates a snapshot worktree with hooks and checkout filters disabled | No source patch |
 | `apw trust` | None | Saves `policy.trusted: true` in the selected config |
 | `apw run "<instruction>"` | Baseline and final fmt/vet/build/test in the worktree | Waits for explicit apply |
+| `apw run --auto "<instruction>"` | Same as `run` | Applies automatically once verification and acceptance pass |
+| `apw run --no-verify "<instruction>"` | None (unverified mode; no trust needed) | Waits for explicit apply; only file-level acceptance checks ran |
 | `apw verify .` | fmt/vet/build/test in a snapshot worktree; no model repair | No source patch |
 | `apw apply <task-id>` | No model call or repository tests | Applies the verified set after conflict checks |
 
+### Interactive approval modes
+
+The interactive shell (`apw`) decides what a free-text request does by its mode; `/mode <name>` or shift+tab changes it, and `apw.json` `"approval"` sets the default:
+
+| Mode | What a request does |
+| --- | --- |
+| `ask` (default) | Plan, patch and verify; when the task is ready, ask `Apply ... [y/N]` and apply on yes. |
+| `auto` | Plan, patch and verify; apply automatically when verification and acceptance pass. |
+| `plan` | Only plan (like `apw plan`); nothing is patched or run. |
+| `unverified` | Plan and patch without running install, build, test or the browser check (no trust needed); file-level acceptance checks (`contains`, `only_changes`, `unchanged`, ...) still run, and the shell asks before applying. The report and the apply prompt say UNVERIFIED. |
+
+`/run` always verifies (and applies automatically only in `auto` mode); `/plan`, `/preview` and `/review` keep their own meaning. Declining the apply prompt keeps the task ready; `apw apply <task-id>` applies it later. Telegram and Desktop keep explicit apply.
+
+When the shell starts in an untrusted workspace it explains what trust allows (the project's own install, build and test commands run in an isolated worktree with the user's permissions), suggests the verification sandbox when it is off, and asks `Trust this folder? [y/N]`. A verified request in an untrusted workspace asks again; `plan`, `review`, `preview` and `unverified` never need trust.
+
 Review and preview still contact the configured model provider. Source context is bounded to 96 KiB and marks truncation; it is not a complete repository audit. The built-in mock provider is for offline workflow checks.
 
-Execute/verify require an explicit trusted workspace and a Git repository with an initial commit. Trust authorizes repository Go code, tests and build tooling to run with the current user's permissions. The worktree isolates ordinary edits; it is not an OS security sandbox for hostile tests unless a verification sandbox is configured (see [Verification sandbox](#verification-sandbox)).
+Execute/verify (not unverified mode) require an explicit trusted workspace and a Git repository with an initial commit. Trust authorizes repository Go code, tests and build tooling to run with the current user's permissions. The worktree isolates ordinary edits; it is not an OS security sandbox for hostile tests unless a verification sandbox is configured (see [Verification sandbox](#verification-sandbox)).
 
 Provider CLIs run from a separate temporary directory with the selected model, stdin prompts and their restricted tool/sandbox settings. The executor itself enforces mode restrictions. Review never enters mutation or verification code. Preview supports structured source edits but skips repository commands. Go verification uses `-mod=readonly` and sends build output to the null device. Formatting uses Go's formatter to compare source, accepts equivalent CRLF/LF endings without rewriting files, and skips state folders, dependencies, generated files and test fixtures.
 

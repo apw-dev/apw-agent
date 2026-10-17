@@ -8,13 +8,19 @@ import (
 	"os"
 	"strings"
 	"unicode"
+
+	"github.com/apiwat/apw-agent/internal/store"
 )
 
 type cliOptions struct {
 	Config, RequestID, SessionID              string
 	Explicit                                  bool
 	DryRun, ExportUnapplied, Vacuum, JSONMode bool
-	Args                                      []string
+	// Auto applies a task as soon as it is ready; NoVerify submits it in unverified mode.
+	Auto, NoVerify bool
+	// Approve, when set (interactive shell), is asked before a ready task is applied.
+	Approve func(*store.Job) bool
+	Args    []string
 }
 
 func parseOptions(command string, args []string, stderr io.Writer) (cliOptions, int) {
@@ -23,9 +29,13 @@ func parseOptions(command string, args []string, stderr io.Writer) (cliOptions, 
 	fs.SetOutput(stderr)
 	fs.StringVar(&o.Config, "config", o.Config, "path to workspace configuration")
 	switch command {
-	case "run", "execute", "review", "preview", "verify":
+	case "run", "execute", "review", "preview", "verify", "unverified":
 		fs.StringVar(&o.RequestID, "request-id", "", "stable submission ID for safe retries")
 		fs.StringVar(&o.SessionID, "session", "", "conversation ID")
+		if command == "run" || command == "execute" || command == "unverified" {
+			fs.BoolVar(&o.Auto, "auto", false, "apply the changes automatically once the task is ready")
+			fs.BoolVar(&o.NoVerify, "no-verify", false, "prepare the patch without running install, build or test (unverified mode)")
+		}
 	case "cleanup":
 		fs.BoolVar(&o.DryRun, "dry-run", false, "list what would be removed without changing anything")
 		fs.BoolVar(&o.ExportUnapplied, "export-unapplied", false, "export unapplied worktree changes to .apw/recovery before removal")
