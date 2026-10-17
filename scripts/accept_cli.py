@@ -154,9 +154,13 @@ def main(binary_dir, output):
             startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startup.wShowWindow = 0
             kwargs = {"creationflags": subprocess.CREATE_NEW_CONSOLE, "startupinfo": startup}
-        helper = subprocess.run([sys.executable, __file__, "--console-helper", exe, str(cfg), str(root)], env=env, capture_output=True, text=True, timeout=65, **kwargs)
+        # Force UTF-8 on both ends: a non-UTF-8 locale (e.g. cp874) otherwise breaks decoding
+        # in subprocess's reader thread, leaving stderr None and hiding the helper's real error.
+        helper_env = dict(env, PYTHONIOENCODING="utf-8")
+        helper = subprocess.run([sys.executable, __file__, "--console-helper", exe, str(cfg), str(root)], env=helper_env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=65, **kwargs)
         if helper.returncode:
-            raise RuntimeError("console helper failed: " + helper.stderr)
+            detail = (helper.stderr or "").strip() or (helper.stdout or "").strip() or f"exit code {helper.returncode}, no output"
+            raise RuntimeError("console helper failed: " + detail)
         cancelled = wait_for(lambda: next((j for j in jobs() if j["request_id"] == "ctrl-c" and j["status"] == "cancelled"), None))
         report["real_console_ctrl_c_exit_130"] = (root / "ctrl.result").read_text() == "130"
         report["cancel_persisted"] = cancelled["cancel_requested"]
