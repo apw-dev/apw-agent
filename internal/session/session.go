@@ -16,6 +16,17 @@ import (
 // maxHistoryTurns bounds how many recent turns are retained in a session.
 const maxHistoryTurns = 50
 
+// Memory compaction keeps the prompt bounded however long a session runs: the last recentTurns
+// turns are shown in detail, older ones as one-line digests (within digestBudget bytes), turns that
+// leave History survive as digests in Memory.Earlier (at most maxEarlier), and only the newest
+// maxPromptFiles touched files are listed. Compaction is deterministic; it never asks a model.
+const (
+	recentTurns    = 3
+	digestBudget   = 3 * 1024
+	maxEarlier     = 30
+	maxPromptFiles = 40
+)
+
 // Turn represents a single conversational and execution cycle in a session.
 type Turn struct {
 	Index          int       `json:"index"`
@@ -41,6 +52,8 @@ type Memory struct {
 	LastWorktreeBranch string            `json:"last_worktree_branch,omitempty"`
 	LastWorktreePath   string            `json:"last_worktree_path,omitempty"`
 	FileCheckpoints    map[string]string `json:"file_checkpoints,omitempty"` // path -> base sha256
+	// Earlier holds one-line digests of turns that no longer fit History, oldest first.
+	Earlier []string `json:"earlier,omitempty"`
 }
 
 // Session encapsulates stateful interactive operation inside APW.
@@ -84,6 +97,13 @@ func (s *Session) RecordTurn(t Turn) {
 	}
 	s.History = append(s.History, t)
 	if len(s.History) > maxHistoryTurns {
+		evicted := s.History[:len(s.History)-maxHistoryTurns]
+		for _, old := range evicted {
+			s.Memory.Earlier = append(s.Memory.Earlier, digest(old))
+		}
+		if n := len(s.Memory.Earlier); n > maxEarlier {
+			s.Memory.Earlier = append([]string(nil), s.Memory.Earlier[n-maxEarlier:]...)
+		}
 		// Copy the tail so the old, larger backing array can be collected.
 		s.History = append([]Turn(nil), s.History[len(s.History)-maxHistoryTurns:]...)
 	}
@@ -153,9 +173,13 @@ func (s *Session) BuildContextSummary() string {
 	sb.WriteString("\n## Session Working Context (Continuous Interactive Memory)\n")
 	sb.WriteString(fmt.Sprintf("Session ID: %s (Turn #%d)\n", s.ID, s.nextIndex()))
 
-	if len(s.Memory.TouchedFiles) > 0 {
+	if files := s.Memory.TouchedFiles; len(files) > 0 {
 		sb.WriteString("Workspace files changed by applied tasks in this session:\n")
-		for _, f := range s.Memory.TouchedFiles {
+		if len(files) > maxPromptFiles {
+			sb.WriteString(fmt.Sprintf("  (%d earlier files omitted; newest shown)\n", len(files)-maxPromptFiles))
+			files = files[len(files)-maxPromptFiles:]
+		}
+		for _, f := range files {
 			sb.WriteString(fmt.Sprintf("  - %s\n", f))
 		}
 	}
@@ -164,12 +188,32 @@ func (s *Session) BuildContextSummary() string {
 		sb.WriteString(fmt.Sprintf("Active Worktree Checkpoint: branch %s (at %s)\n", s.Memory.LastWorktreeBranch, s.Memory.LastWorktreePath))
 	}
 
-	// Include up to 3 recent turns for high-signal continuity
-	recentCount := 3
+	// Show the most recent turns in detail and older ones as compact digests.
+	recentCount := recentTurns
 	if len(s.History) < recentCount {
 		recentCount = len(s.History)
 	}
 	startIdx := len(s.History) - recentCount
+	var older []string
+	older = append(older, s.Memory.Earlier...)
+	for _, turn := range s.History[:startIdx] {
+		older = append(older, digest(turn))
+	}
+	if len(older) > 0 {
+		// Keep the newest digests that fit the budget, then print them oldest first.
+		kept, size := 0, 0
+		for i := len(older) - 1; i >= 0 && size+len(older[i])+1 <= digestBudget; i-- {
+			size += len(older[i]) + 1
+			kept++
+		}
+		sb.WriteString("\nEarlier in this session (compacted):\n")
+		if skipped := len(older) - kept; skipped > 0 {
+			sb.WriteString(fmt.Sprintf("  (%d older turns omitted)\n", skipped))
+		}
+		for _, line := range older[len(older)-kept:] {
+			sb.WriteString("  " + line + "\n")
+		}
+	}
 
 	sb.WriteString("\nRecent session conversation history:\n")
 	for i := startIdx; i < len(s.History); i++ {
@@ -245,6 +289,39 @@ func Load(workspace, sessionID string) (*Session, error) {
 		sess.Memory.FileCheckpoints = make(map[string]string)
 	}
 	return &sess, nil
+}
+
+// digest compresses a turn into one bounded line: index, outcome, request and changed files.
+func digest(t Turn) string {
+	status := "failed"
+	switch {
+	case t.Applied:
+		status = "applied"
+	case t.Success && len(t.ModifiedFiles) > 0:
+		status = "not applied"
+	case t.Success:
+		status = "ok"
+	}
+	line := fmt.Sprintf("#%d [%s] %s", t.Index, status, clip(strings.Join(strings.Fields(t.Instruction), " "), 120))
+	if len(t.ModifiedFiles) > 0 {
+		files := t.ModifiedFiles
+		more := ""
+		if len(files) > 4 {
+			more = fmt.Sprintf(" +%d", len(files)-4)
+			files = files[:4]
+		}
+		line += " (files: " + strings.Join(files, ", ") + more + ")"
+	}
+	return line
+}
+
+// clip shortens s to at most n runes.
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "..."
 }
 
 func validID(id string) bool {
