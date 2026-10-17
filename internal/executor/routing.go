@@ -98,7 +98,7 @@ func (e *Executor) directiveCandidates() []FailoverCandidate {
 }
 
 func (e *Executor) askDirective(ctx context.Context, prompt string) (*patchDirective, error) {
-	prompt += "\nPreviously read source context:\n" + e.ReadContext
+	prompt += InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + e.ReadContext
 	if e.Failover.Models == nil {
 		e.Failover.Models = make(map[string]time.Time)
 	}
