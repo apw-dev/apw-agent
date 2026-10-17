@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/architect"
+	"github.com/apiwat/apw-agent/internal/process"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
@@ -74,10 +75,21 @@ func validateResumeWorktree(ctx context.Context, workspace string, cp PlanCheckp
 		return fmt.Errorf("resume worktree must be inside %s", root)
 	}
 	gitValue := func(dir string, args ...string) (string, error) {
+		// Use the bounded runner like every other git call: the daemon runs detached
+		// without a console, and a raw exec child gets its own console window, which
+		// Windows may close (exit status 0xc000013a) before git finishes.
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
-		out, err := cmd.Output()
-		return strings.TrimSpace(string(out)), err
+		var out, stderr process.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &stderr
+		if err := process.Run(ctx, cmd); err != nil {
+			if msg := strings.TrimSpace(stderr.String()); msg != "" {
+				return "", fmt.Errorf("%w: %s", err, msg)
+			}
+			return "", err
+		}
+		return strings.TrimSpace(out.String()), nil
 	}
 	top, err := gitValue(path, "rev-parse", "--show-toplevel")
 	if err != nil {
