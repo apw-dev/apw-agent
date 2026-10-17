@@ -364,13 +364,14 @@ func (v *Verifier) browserResult(ctx context.Context, s project.Stage, start tim
 		return failed(s.Name, err.Error(), err, start)
 	}
 	var diags []Diagnostic
+	index := filepath.ToSlash(filepath.Join(s.Dir, "index.html"))
 	for _, msg := range page.Errors {
-		text := "uncaught error while rendering " + s.Dir + "/index.html in a headless browser: " + msg
-		diags = append(diags, Diagnostic{Stage: s.Name, File: filepath.ToSlash(filepath.Join(s.Dir, "index.html")), Message: text, RawError: text})
+		text := "uncaught error while rendering " + index + " in a headless browser: " + msg
+		diags = append(diags, Diagnostic{Stage: s.Name, File: index, Message: text, RawError: text})
 	}
 	if page.Blank {
-		text := "the built page " + s.Dir + "/index.html rendered no visible content in a headless browser (blank page)"
-		diags = append(diags, Diagnostic{Stage: s.Name, File: filepath.ToSlash(filepath.Join(s.Dir, "index.html")), Message: text, RawError: text})
+		text := "the built page " + index + " rendered no visible content in a headless browser (blank page)"
+		diags = append(diags, Diagnostic{Stage: s.Name, File: index, Message: text, RawError: text})
 	}
 	if len(diags) == 0 {
 		return nil
