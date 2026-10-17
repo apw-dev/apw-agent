@@ -182,40 +182,84 @@ Respond with ONLY the JSON object, wrapped in a single `+"```json ... ```"+` blo
 }
 
 // ParsePlan extracts ExecutionPlan from raw model response
-func ParsePlan(taskID, raw string) (*ExecutionPlan, error) {
-	jsonStr := raw
-	if idx := strings.Index(raw, "```json"); idx != -1 {
-		rest := raw[idx+7:]
-		if endIdx := strings.Index(rest, "```"); endIdx != -1 {
-			jsonStr = rest[:endIdx]
+// planCandidates lists ways to extract the plan JSON from a model response, most
+// literal first. Models often wrap JSON in a ```json fence while string values
+// (for example a check expecting a ```bash block) contain fences too, so cutting
+// at the first closing fence alone can truncate the plan.
+func planCandidates(raw string) []string {
+	var out []string
+	add := func(c string) {
+		c = strings.TrimSpace(c)
+		for _, seen := range out {
+			if seen == c {
+				return
+			}
 		}
-	} else if idx := strings.Index(raw, "```"); idx != -1 {
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	if t := strings.TrimSpace(raw); strings.HasPrefix(t, "{") {
+		add(t)
+	}
+	if idx := strings.Index(raw, "```"); idx != -1 {
 		rest := raw[idx+3:]
-		if endIdx := strings.Index(rest, "```"); endIdx != -1 {
-			jsonStr = rest[:endIdx]
+		if nl := strings.IndexByte(rest, '\n'); nl != -1 && !strings.ContainsAny(strings.TrimSpace(rest[:nl]), "{}\" ") {
+			rest = rest[nl+1:] // drop the language tag line, e.g. "json"
 		}
-	} else if startIdx := strings.Index(raw, "{"); startIdx != -1 {
-		if endIdx := strings.LastIndex(raw, "}"); endIdx != -1 && endIdx > startIdx {
-			jsonStr = raw[startIdx : endIdx+1]
+		if last := strings.LastIndex(rest, "```"); last != -1 {
+			add(rest[:last])
+		}
+		if first := strings.Index(rest, "```"); first != -1 {
+			add(rest[:first])
 		}
 	}
-
-	jsonStr = strings.TrimSpace(jsonStr)
-	if jsonStr == "" {
-		return nil, errors.New("empty plan response")
+	if startIdx := strings.Index(raw, "{"); startIdx != -1 {
+		if endIdx := strings.LastIndex(raw, "}"); endIdx > startIdx {
+			add(raw[startIdx : endIdx+1])
+		}
 	}
+	return out
+}
 
+// decodePlan strictly decodes one candidate: known fields only, no trailing content.
+func decodePlan(jsonStr string) (*ExecutionPlan, error) {
 	var plan ExecutionPlan
 	decoder := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
 	decoder.DisallowUnknownFields()
-	err := decoder.Decode(&plan)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal execution plan: %w\nRaw: %s", err, jsonStr)
+	if err := decoder.Decode(&plan); err != nil {
+		return nil, err
 	}
-
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, errors.New("trailing plan content")
+	}
+	return &plan, nil
+}
+
+func ParsePlan(taskID, raw string) (*ExecutionPlan, error) {
+	candidates := planCandidates(raw)
+	if len(candidates) == 0 {
+		return nil, errors.New("empty plan response")
+	}
+	var plan *ExecutionPlan
+	var firstErr error
+	for _, c := range candidates {
+		p, err := decodePlan(c)
+		if err == nil {
+			plan = p
+			break
+		}
+		if firstErr == nil {
+			if err.Error() == "trailing plan content" {
+				firstErr = err
+			} else {
+				firstErr = fmt.Errorf("failed to unmarshal execution plan: %w\nRaw: %s", err, c)
+			}
+		}
+	}
+	if plan == nil {
+		return nil, firstErr
 	}
 	if err := plan.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid execution plan: %w", err)
@@ -224,7 +268,7 @@ func ParsePlan(taskID, raw string) (*ExecutionPlan, error) {
 	plan.PlanID = fmt.Sprintf("plan-%d", time.Now().UnixNano())
 	plan.TaskID = taskID
 	plan.CreatedAt = time.Now()
-	return &plan, nil
+	return plan, nil
 }
 
 // Plan coordinates with the model provider to formulate an ExecutionPlan

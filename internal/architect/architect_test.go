@@ -180,3 +180,30 @@ func TestArchitect_Plan_MockProvider(t *testing.T) {
 		t.Fatalf("expected escapes workspace error, got: %v", err)
 	}
 }
+
+// Regression: a live preview plan was wrapped in a ```json fence and a check value
+// held a ```bash block; cutting at the first inner fence truncated the JSON.
+func TestParsePlanKeepsFencesInsideStrings(t *testing.T) {
+	body := "{\"objective\":\"doc\",\"affected_files\":[\"README.md\"],\"subtasks\":[{\"id\":\"1\",\"action\":\"patch\",\"target_file\":\"README.md\",\"instruction\":\"add a ```bash block\"}]," +
+		"\"acceptance_criteria\":[\"has block\"],\"checks\":[{\"criterion\":\"has block\",\"kind\":\"contains\",\"file\":\"README.md\",\"value\":\"```bash\\ngit clone x\\n```\"}]}"
+	for name, raw := range map[string]string{
+		"fenced json":       "```json\n" + body + "\n```",
+		"fenced untagged":   "```\n" + body + "\n```",
+		"bare json":         body,
+		"prose and fence":   "Here is the plan:\n```json\n" + body + "\n```\nDone.",
+		"prose bare braces": "Plan follows " + body + " end",
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan, err := ParsePlan("task-1", raw)
+			if err != nil {
+				t.Fatalf("ParsePlan: %v", err)
+			}
+			if len(plan.Subtasks) != 1 || plan.Subtasks[0].Instruction != "add a ```bash block" {
+				t.Fatalf("unexpected plan: %+v", plan.Subtasks)
+			}
+		})
+	}
+	if _, err := ParsePlan("task-1", "```json\n{\"objective\": \"x\",\n```"); err == nil || !strings.Contains(err.Error(), "failed to unmarshal execution plan") {
+		t.Fatalf("truncated plan must still fail clearly, got %v", err)
+	}
+}
