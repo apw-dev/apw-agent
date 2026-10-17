@@ -424,7 +424,7 @@ func (s *Service) run(j *store.Job) {
 		}
 	}
 	if e != nil && e.Session != nil && report != nil {
-		turn := session.Turn{Instruction: j.Instruction, ModifiedFiles: report.ModifiedFiles, Summary: report.Summary, Success: report.Passed}
+		turn := session.Turn{Instruction: j.Instruction, ModifiedFiles: report.ModifiedFiles, Summary: report.Summary, Success: report.Passed, Applied: report.Applied}
 		if report.Plan != nil {
 			turn.PlanID = report.Plan.PlanID
 			turn.TotalSteps = len(report.Plan.Subtasks)

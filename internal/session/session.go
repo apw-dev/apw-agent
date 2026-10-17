@@ -27,7 +27,10 @@ type Turn struct {
 	ModifiedFiles  []string  `json:"modified_files,omitempty"`
 	Summary        string    `json:"summary,omitempty"`
 	Success        bool      `json:"success"`
-	Error          string    `json:"error,omitempty"`
+	// Applied is true when the changes reached the workspace; otherwise they exist
+	// only in an isolated worktree (or not at all) and must not be assumed present.
+	Applied bool   `json:"applied,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // Memory represents persistent working context across multiple turns.
@@ -86,6 +89,14 @@ func (s *Session) RecordTurn(t Turn) {
 	}
 	s.UpdatedAt = time.Now()
 
+	// Only applied changes exist in the workspace; unapplied or failed work must not
+	// be presented to the next plan as files it can build on.
+	if !t.Applied {
+		if t.PlanID != "" {
+			s.Memory.LastPlanID = t.PlanID
+		}
+		return
+	}
 	// Update touched files in memory (unique preservation)
 	existing := make(map[string]bool)
 	for _, f := range s.Memory.TouchedFiles {
@@ -143,7 +154,7 @@ func (s *Session) BuildContextSummary() string {
 	sb.WriteString(fmt.Sprintf("Session ID: %s (Turn #%d)\n", s.ID, s.nextIndex()))
 
 	if len(s.Memory.TouchedFiles) > 0 {
-		sb.WriteString("Files modified or created in this session:\n")
+		sb.WriteString("Workspace files changed by applied tasks in this session:\n")
 		for _, f := range s.Memory.TouchedFiles {
 			sb.WriteString(fmt.Sprintf("  - %s\n", f))
 		}
@@ -164,8 +175,15 @@ func (s *Session) BuildContextSummary() string {
 	for i := startIdx; i < len(s.History); i++ {
 		turn := s.History[i]
 		statusStr := "SUCCESS"
-		if !turn.Success {
+		switch {
+		case !turn.Success && len(turn.ModifiedFiles) > 0 && !turn.Applied:
+			statusStr = fmt.Sprintf("INTERRUPTED/FAILED, NOT APPLIED (workspace unchanged): %s", turn.Error)
+		case !turn.Success:
 			statusStr = fmt.Sprintf("INTERRUPTED/FAILED: %s", turn.Error)
+		case turn.Applied:
+			statusStr = "SUCCESS, APPLIED TO WORKSPACE"
+		case len(turn.ModifiedFiles) > 0:
+			statusStr = "SUCCESS, NOT APPLIED (changes exist only in an isolated worktree; workspace unchanged)"
 		}
 		sb.WriteString(fmt.Sprintf("Turn #%d [%s]:\n", turn.Index, statusStr))
 		sb.WriteString(fmt.Sprintf("  User Request : %s\n", turn.Instruction))

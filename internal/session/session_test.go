@@ -57,6 +57,7 @@ func TestSession_RecordTurnAndMemory(t *testing.T) {
 		ModifiedFiles: []string{"user.go", "user_test.go"},
 		Summary:       "Implemented User struct and CRUD handlers",
 		Success:       true,
+		Applied:       true,
 	})
 
 	if len(sess.History) != 1 {
@@ -74,6 +75,7 @@ func TestSession_RecordTurnAndMemory(t *testing.T) {
 		ModifiedFiles: []string{"user.go", "validator.go"},
 		Summary:       "Added email validation",
 		Success:       true,
+		Applied:       true,
 	})
 
 	if len(sess.History) != 2 {
@@ -164,5 +166,24 @@ func TestRecordTurnFirstIndexIsOne(t *testing.T) {
 	s.RecordTurn(Turn{Instruction: "a"})
 	if s.History[0].Index != 1 {
 		t.Fatalf("index=%d", s.History[0].Index)
+	}
+}
+
+// Regression: a failed, never-applied task was listed as "files modified in this
+// session", so the next plan assumed src/clamp.ts existed in the workspace.
+func TestUnappliedTurnsDoNotClaimWorkspaceFiles(t *testing.T) {
+	s := New(t.TempDir())
+	s.RecordTurn(Turn{Instruction: "add clamp", ModifiedFiles: []string{"src/clamp.ts"}, Success: false, Error: "unplanned worktree change"})
+	s.RecordTurn(Turn{Instruction: "preview tweak", ModifiedFiles: []string{"src/App.tsx"}, Success: true})
+	if len(s.Memory.TouchedFiles) != 0 {
+		t.Fatalf("unapplied work must not be recorded as workspace files: %v", s.Memory.TouchedFiles)
+	}
+	summary := s.BuildContextSummary()
+	if !strings.Contains(summary, "FAILED, NOT APPLIED (workspace unchanged)") || !strings.Contains(summary, "SUCCESS, NOT APPLIED") {
+		t.Fatalf("summary must say the changes were not applied:\n%s", summary)
+	}
+	s.RecordTurn(Turn{Instruction: "apply", ModifiedFiles: []string{"src/App.tsx"}, Success: true, Applied: true})
+	if len(s.Memory.TouchedFiles) != 1 || !strings.Contains(s.BuildContextSummary(), "SUCCESS, APPLIED TO WORKSPACE") {
+		t.Fatalf("applied work must be recorded: %v", s.Memory.TouchedFiles)
 	}
 }
