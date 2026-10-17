@@ -405,21 +405,15 @@ func (w *Worktree) DiffFiles(ctx context.Context, paths []string) (string, error
 		if before.Exists && CalculateHash(string(original)) != before.Hash {
 			return "", errors.New("baseline contents unavailable for diff")
 		}
-		if b.Len()+len(data)+len(original) > 1024*1024 {
+		if !before.Exists {
+			original = nil
+		}
+		fileDiff := renderFileDiff(filepath.ToSlash(path), before, after, original, data)
+		if b.Len()+len(fileDiff) > maxDiffBytes {
 			b.WriteString("\n[diff truncated]\n")
 			break
 		}
-		fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", filepath.ToSlash(path), filepath.ToSlash(path))
-		if before.Exists {
-			for _, line := range strings.Split(strings.TrimSuffix(string(original), "\n"), "\n") {
-				fmt.Fprintf(&b, "-%s\n", line)
-			}
-		}
-		if after.Exists {
-			for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
-				fmt.Fprintf(&b, "+%s\n", line)
-			}
-		}
+		b.WriteString(fileDiff)
 	}
 	return b.String(), nil
 }
