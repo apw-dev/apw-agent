@@ -24,7 +24,7 @@ func TestBrowserAcceptanceCheck(t *testing.T) {
 			return &browser.Page{Text: text, Errors: errs}, nil
 		}
 	}
-	if results, ok := acceptanceSnapshot(root, plan, true, nil, visit("Vite + React Count is 10", nil, nil)); !ok || !strings.Contains(results[0].Evidence, "Count is 10") || visited[0] != "/" {
+	if results, ok := acceptanceSnapshot(root, plan, true, nil, visit("Vite + React Count is 10", nil, nil), false); !ok || !strings.Contains(results[0].Evidence, "Count is 10") || visited[0] != "/" {
 		t.Fatalf("visible text not accepted: %+v %v", results, visited)
 	}
 	for name, v := range map[string]pageVisitor{
@@ -33,12 +33,12 @@ func TestBrowserAcceptanceCheck(t *testing.T) {
 		"render failure": visit("", nil, errors.New("no DOM")),
 		"no browser":     nil,
 	} {
-		if results, ok := acceptanceSnapshot(root, plan, true, nil, v); ok {
+		if results, ok := acceptanceSnapshot(root, plan, true, nil, v, false); ok {
 			t.Fatalf("%s accepted: %+v", name, results)
 		}
 	}
 	calls := len(visited)
-	if _, ok := acceptanceSnapshot(root, plan, false, nil, visit("Count is 10", nil, nil)); ok || len(visited) != calls {
+	if _, ok := acceptanceSnapshot(root, plan, false, nil, visit("Count is 10", nil, nil), false); ok || len(visited) != calls {
 		t.Fatal("browser check ran or passed although verification failed")
 	}
 }

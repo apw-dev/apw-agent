@@ -13,10 +13,14 @@ const (
 	ModePreview TaskMode = "preview"
 	ModeExecute TaskMode = "execute"
 	ModeVerify  TaskMode = "verify"
+	// ModeUnverified prepares a patch like preview (no repository commands run, so no trust is
+	// needed) but lets it be applied after APW's file-level acceptance checks; build, test and
+	// browser checks are skipped and the report says so.
+	ModeUnverified TaskMode = "unverified"
 )
 
 func (m TaskMode) Valid() bool {
-	return m == ModeReview || m == ModePreview || m == ModeExecute || m == ModeVerify
+	return m == ModeReview || m == ModePreview || m == ModeExecute || m == ModeVerify || m == ModeUnverified
 }
 
 const (

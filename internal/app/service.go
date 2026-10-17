@@ -407,6 +407,9 @@ func (s *Service) run(j *store.Job) {
 				report, err = e.Apply(ctx, *cp)
 			} else {
 				e.Mode = core.ModeExecute
+				if cp.Mode == core.ModeUnverified {
+					e.Mode = core.ModeUnverified
+				}
 				report, err = e.Resume(ctx, *cp)
 			}
 		} else {

@@ -124,8 +124,8 @@ func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionRep
 	if e.Mode == "" {
 		e.Mode = core.ModeExecute
 	}
-	if e.Mode != core.ModeExecute && e.Mode != core.ModePreview {
-		return nil, errors.New("resume requires execute or preview mode")
+	if e.Mode != core.ModeExecute && e.Mode != core.ModePreview && e.Mode != core.ModeUnverified {
+		return nil, errors.New("resume requires execute, preview or unverified mode")
 	}
 	if (e.Mode == core.ModeExecute || e.Mode == core.ModeVerify) && !e.Trusted {
 		return nil, errors.New("workspace is not trusted for build/test")
@@ -217,6 +217,28 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 	if e.Mode == core.ModePreview {
 		e.Phase = "preview"
 		report.Summary = "Preview prepared in isolated worktree. No repository commands were executed; verification and apply are still required."
+	} else if e.Mode == core.ModeUnverified {
+		// No install, build, test or browser check runs; only file-level acceptance checks decide.
+		var accepted bool
+		report.Unverified = true
+		report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, false, wt, nil, true)
+		report.Passed = accepted
+		e.Phase = "failed"
+		if accepted {
+			e.Phase = "ready"
+		}
+		report.Summary = e.formatReportSummary(instruction, plan, report.Steps, false, time.Since(start))
+		report.Summary += "\nUNVERIFIED: no install, build, test or browser check was run. Review the diff before applying."
+		for _, check := range report.Acceptance {
+			label := "PASS"
+			if !check.Passed {
+				label = "FAIL"
+			}
+			report.Summary += "\nAcceptance " + label + ": " + check.Criterion + " — " + check.Evidence
+		}
+		if report.Passed {
+			report.Summary += "\nChanges are retained in the worktree. Explicit apply is required."
+		}
 	} else {
 		e.emit(ProgressEvent{Stage: "verifying", Message: "Verifying isolated changes"})
 		engine := reflex.NewReflexEngineForProfile(wt.Path, e.Reflex.MaxRetries, e.Profile(wt.Path))
@@ -240,7 +262,7 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		}
 		verified := len(attempts) > 0 && attempts[len(attempts)-1].Result.Passed
 		var accepted bool
-		report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, verified, wt, e.pageVisitor(ctx, wt.Path))
+		report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, verified, wt, e.pageVisitor(ctx, wt.Path), false)
 		report.Passed = verified && accepted
 		if report.Passed {
 			e.Phase = "ready"

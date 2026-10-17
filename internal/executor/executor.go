@@ -48,6 +48,8 @@ type ExecutionReport struct {
 	Applied        bool                       `json:"applied"`
 	Diagnostics    *DiagnosticComparison      `json:"diagnostic_comparison,omitempty"`
 	Research       []research.Source          `json:"research,omitempty"`
+	// Unverified is set for unverified-mode tasks: no repository command checked the change.
+	Unverified bool `json:"unverified,omitempty"`
 }
 
 // ProgressEvent describes a real-time progress update during Triad execution.

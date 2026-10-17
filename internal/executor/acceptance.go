@@ -25,7 +25,7 @@ type CheckResult struct {
 type pageVisitor func(path string) (*browser.Page, error)
 
 func acceptance(root string, plan *architect.ExecutionPlan, verified bool) ([]CheckResult, bool) {
-	return acceptanceSnapshot(root, plan, verified, nil, nil)
+	return acceptanceSnapshot(root, plan, verified, nil, nil, false)
 }
 
 // pageVisitor returns a visitor for root's browser stage, or nil when there is none.
@@ -40,7 +40,9 @@ func (e *Executor) pageVisitor(ctx context.Context, root string) pageVisitor {
 	}
 }
 
-func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified bool, wt *surgeon.Worktree, visit pageVisitor) ([]CheckResult, bool) {
+// acceptanceSnapshot evaluates the plan's checks. skipCommands (unverified mode) treats checks that
+// need repository commands (verification, browser) as skipped rather than failed.
+func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified bool, wt *surgeon.Worktree, visit pageVisitor, skipCommands bool) ([]CheckResult, bool) {
 	var results []CheckResult
 	all := true
 	for _, criterion := range plan.AcceptanceCriteria {
@@ -59,17 +61,20 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 			}
 			ok := false
 			evidence := ""
-			switch check.Kind {
-			case "verification":
+			switch {
+			case skipCommands && (check.Kind == "verification" || check.Kind == "browser"):
+				ok = true
+				evidence = "SKIPPED (unverified mode runs no build, test or browser): " + check.Kind + " " + check.Value
+			case check.Kind == "verification":
 				ok = verified
 				evidence = "project verification pipeline (" + check.Value + ")"
-			case "unchanged":
+			case check.Kind == "unchanged":
 				if wt != nil {
 					state, stateErr := surgeon.StateInRoot(root, check.File)
 					ok = stateErr == nil && state == wt.Baseline[filepath.Clean(check.File)]
 				}
 				evidence = "original snapshot comparison: " + check.File
-			case "only_changes":
+			case check.Kind == "only_changes":
 				if wt != nil {
 					changes, scanErr := wt.ChangedFiles(context.Background())
 					allowed := map[string]bool{}
@@ -83,7 +88,7 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 					evidence = "actual changed files: " + strings.Join(changes, ", ")
 				}
 
-			case "browser":
+			case check.Kind == "browser":
 				page := check.File
 				if page == "" {
 					page = "/"
@@ -107,15 +112,15 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 						evidence += "; uncaught errors: " + strings.Join(rendered.Errors, " | ")
 					}
 				}
-			case "file_exists":
+			case check.Kind == "file_exists":
 				ok = err == nil
-			case "file_absent":
+			case check.Kind == "file_absent":
 				ok = errors.Is(err, os.ErrNotExist)
-			case "contains":
+			case check.Kind == "contains":
 				ok = err == nil && strings.Contains(string(data), check.Value)
-			case "not_contains":
+			case check.Kind == "not_contains":
 				ok = err == nil && !strings.Contains(string(data), check.Value)
-			case "go_symbol":
+			case check.Kind == "go_symbol":
 				if err == nil {
 					syms, e := surgeon.InspectWorkspaceSymbols(root, check.File)
 					if e == nil {
@@ -144,8 +149,11 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 		} else {
 			lower := strings.ToLower(criterion)
 			if lower == "builds cleanly" || lower == "builds" || strings.Contains(lower, "gofmt") && strings.Contains(lower, "go test") {
-				result.Passed = verified
+				result.Passed = verified || skipCommands
 				result.Evidence = "project verification pipeline result"
+				if skipCommands {
+					result.Evidence = "SKIPPED (unverified mode runs no build or test)"
+				}
 			}
 		}
 		all = all && result.Passed
