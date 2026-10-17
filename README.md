@@ -160,3 +160,7 @@ AGY แบ่ง cooldown เป็นสามกลุ่ม: Gemini Flash/Pro
 งานใน Git worktree บันทึกแผน ขั้นที่สำเร็จ และ cooldown หลังแต่ละขั้นเพื่อใช้ `apw resume`
 เมื่อ verification หรือนำผลกลับไม่สำเร็จ จะเก็บ worktree ไว้
 checkpoint ต้องตรงกับ task, plan และ snapshot manifest ของ worktree; งานเก่าที่ไม่มี manifest จะหยุดเพื่อป้องกันการเขียนทับ ให้เก็บ worktree เดิมไว้ตรวจและนำ diff มาทบทวนก่อนเริ่มงานใหม่
+
+## License
+
+MIT, see [LICENSE](LICENSE).
