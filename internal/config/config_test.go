@@ -216,3 +216,26 @@ func TestFailoverConfigValidationAndRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestRetentionIsOptionalAndRoundTrips(t *testing.T) {
+	path := writeTempConfig(t, `{"providers":{"m":{"type":"mock"}},"roles":{"architect":"m","reflex":"m"}}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); bytes.Contains(data, []byte("retention")) {
+		t.Fatalf("default retention was written into the config:\n%s", data)
+	}
+	path = writeTempConfig(t, `{"providers":{"m":{"type":"mock"}},"roles":{"architect":"m","reflex":"m"},"retention":{"succeeded_days":3,"failed_days":-1,"protect_tasks":["task-x"],"auto_cleanup":true}}`)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := cfg.Retention
+	if r.SucceededDays != 3 || r.FailedDays != -1 || !r.AutoCleanup || len(r.ProtectTasks) != 1 || r.ProtectTasks[0] != "task-x" {
+		t.Fatalf("retention = %+v", r)
+	}
+}

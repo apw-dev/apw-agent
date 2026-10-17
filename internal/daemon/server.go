@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/app"
 	"github.com/apiwat/apw-agent/internal/buildinfo"
 	"github.com/apiwat/apw-agent/internal/channels/telegram"
+	"github.com/apiwat/apw-agent/internal/retention"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 	"github.com/apiwat/apw-agent/internal/transport"
 )
@@ -31,6 +33,15 @@ func Run(ctx context.Context, cfgPath, version string) error {
 	}
 	defer backend.Close()
 	backend.ConfigPath = absCfg
+	if cfg.Retention.AutoCleanup {
+		// Startup recovery has finished and no request can arrive yet. Never exports or rotates the open log.
+		report, cleanupErr := retention.Run(ctx, cfg.Workspace, backend.Store, retention.Resolve(cfg.Retention), retention.Options{})
+		if cleanupErr != nil {
+			fmt.Fprintln(os.Stderr, "retention: automatic cleanup stopped:", cleanupErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "retention: removed %d task(s), protected %d, failed %d, events %d, reports %d\n", len(report.Removed), len(report.Protected), len(report.Failed), report.Database.Events, report.Database.Reports)
+		}
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err

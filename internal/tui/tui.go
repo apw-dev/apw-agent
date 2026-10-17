@@ -56,6 +56,7 @@ func DefaultCommands() []SlashCommand {
 		{Name: "/diff", Usage: "/diff <id>", Description: "Show the task's source diff", TakesArgs: true},
 		{Name: "/watch", Usage: "/watch <id>", Description: "Reattach to task progress; Ctrl+C detaches", TakesArgs: true},
 		{Name: "/recover", Usage: "/recover <legacy-task-id>", Description: "Export legacy work for review without applying", TakesArgs: true},
+		{Name: "/cleanup", Usage: "/cleanup [--dry-run]", Description: "Remove old finished task state under the retention policy (stop the daemon first)", TakesArgs: false},
 		{Name: "/apply", Usage: "/apply <id>", Description: "Apply verified changes after conflict checks", TakesArgs: true},
 		{Name: "/cancel", Usage: "/cancel <id>", Description: "Cancel a task and its process tree", TakesArgs: true},
 		{Name: "/trust", Usage: "/trust", Description: "Allow repository build/test in this workspace"},

@@ -11,9 +11,10 @@ import (
 )
 
 type cliOptions struct {
-	Config, RequestID, SessionID string
-	Explicit                     bool
-	Args                         []string
+	Config, RequestID, SessionID              string
+	Explicit                                  bool
+	DryRun, ExportUnapplied, Vacuum, JSONMode bool
+	Args                                      []string
 }
 
 func parseOptions(command string, args []string, stderr io.Writer) (cliOptions, int) {
@@ -25,6 +26,11 @@ func parseOptions(command string, args []string, stderr io.Writer) (cliOptions, 
 	case "run", "execute", "review", "preview", "verify":
 		fs.StringVar(&o.RequestID, "request-id", "", "stable submission ID for safe retries")
 		fs.StringVar(&o.SessionID, "session", "", "conversation ID")
+	case "cleanup":
+		fs.BoolVar(&o.DryRun, "dry-run", false, "list what would be removed without changing anything")
+		fs.BoolVar(&o.ExportUnapplied, "export-unapplied", false, "export unapplied worktree changes to .apw/recovery before removal")
+		fs.BoolVar(&o.Vacuum, "vacuum", false, "rebuild tasks.db with a full VACUUM after pruning")
+		fs.BoolVar(&o.JSONMode, "json", false, "print the cleanup report as JSON")
 	}
 	var flags []string
 	for i := 0; i < len(args); i++ {
@@ -50,6 +56,9 @@ func parseOptions(command string, args []string, stderr io.Writer) (cliOptions, 
 			o.Explicit = true
 		}
 		flags = append(flags, arg)
+		if boolFlag, ok := fs.Lookup(name).Value.(interface{ IsBoolFlag() bool }); ok && boolFlag.IsBoolFlag() {
+			continue
+		}
 		if !strings.Contains(arg, "=") {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
 				fmt.Fprintf(stderr, "flag %s requires a value\n", arg)

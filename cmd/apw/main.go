@@ -92,6 +92,8 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return runTaskCommand(args[0], args[1:], stdout, stderr)
 	case "run":
 		return runExecute(args[1:], stdout, stderr)
+	case "cleanup":
+		return runCleanup(args[1:], stdout, stderr)
 
 	case "resume":
 		return runResume(nil, args[1:], stdout, stderr)
@@ -599,6 +601,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  tasks | task <task-id>         List jobs or inspect a saved JSON report")
 	fmt.Fprintln(w, "  diff <task-id>                 Show the saved source diff")
 	fmt.Fprintln(w, "  recover <legacy-task-id>       Export old work safely for review; never apply")
+	fmt.Fprintln(w, "  cleanup [--dry-run]            Remove old finished task state under the retention policy")
 	fmt.Fprintln(w, "  watch <task-id>                Reattach to progress; Ctrl+C detaches")
 	fmt.Fprintln(w, "  review/preview/run flags: --request-id <id> --session <id> --config <path>")
 	fmt.Fprintln(w, "  cancel <task-id>               Cancel a task and its subprocess tree")

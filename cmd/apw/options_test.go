@@ -103,3 +103,14 @@ func TestWatchDetachesWhileRunCancels(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCleanupBoolFlags(t *testing.T) {
+	var stderr bytes.Buffer
+	o, code := parseOptions("cleanup", []string{"--dry-run", "--json", "--export-unapplied=false", "--vacuum"}, &stderr)
+	if code != 0 || !o.DryRun || !o.JSONMode || o.ExportUnapplied || !o.Vacuum || len(o.Args) != 0 {
+		t.Fatalf("options=%+v code=%d %s", o, code, stderr.String())
+	}
+	if _, code := parseOptions("review", []string{"--dry-run", "x"}, &stderr); code == 0 {
+		t.Fatal("cleanup flag accepted by another command")
+	}
+}
