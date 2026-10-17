@@ -113,40 +113,18 @@ func RemoveRolledBackJournal(root, id string) (bool, error) {
 	return RemoveStateFile(root, filepath.Join(".apw", "transactions"), id+".json")
 }
 
-// RetainedWorktreeName returns the directory name of path when it is a direct child of workspace/.worktrees.
-func RetainedWorktreeName(workspace, path string) (string, error) {
-	abs, err := filepath.Abs(workspace)
-	if err != nil {
-		return "", err
-	}
-	target, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(filepath.Join(abs, ".worktrees"), target)
-	if err != nil || !filepath.IsLocal(rel) || filepath.Base(rel) != rel || rel == "." {
-		return "", fmt.Errorf("worktree %s is not directly inside %s", path, filepath.Join(abs, ".worktrees"))
-	}
-	return rel, nil
-}
-
 // RemoveRetainedWorktree removes a task worktree and its apw/ branch once retention has selected it.
-// It refuses links/junctions, paths outside .worktrees, worktrees Git does not have registered on the
-// recorded branch, and worktrees or branches that moved past the snapshot base commit.
-func RemoveRetainedWorktree(ctx context.Context, workspace string, w *Worktree) error {
+// It refuses paths outside the workspace's worktree directories (the external root or the legacy
+// .worktrees), links/junctions, worktrees Git does not have registered on the recorded branch, and
+// worktrees or branches that moved past the snapshot base commit. override is apw.json worktree_root.
+func RemoveRetainedWorktree(ctx context.Context, workspace, override string, w *Worktree) error {
 	abs, err := filepath.Abs(workspace)
 	if err != nil {
 		return err
 	}
-	name, err := RetainedWorktreeName(abs, w.Path)
-	if err != nil {
+	if _, _, err := LocateWorktree(abs, override, w.Path); err != nil {
 		return err
 	}
-	r, err := openStateDir(abs, filepath.Join(".worktrees", name))
-	if err != nil {
-		return err
-	}
-	r.Close()
 	recorded, e1 := os.Stat(w.Workspace)
 	current, e2 := os.Stat(abs)
 	if e1 != nil || e2 != nil || !os.SameFile(recorded, current) {

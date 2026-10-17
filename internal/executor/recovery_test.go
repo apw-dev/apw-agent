@@ -15,7 +15,7 @@ func TestRecoveryExportsWithoutChangingSourceOrWorktree(t *testing.T) {
 	}
 	source, _ := os.ReadFile(filepath.Join(root, "main.go"))
 	working, _ := os.ReadFile(filepath.Join(wt.Path, "main.go"))
-	result, err := RecoverLegacyTask(context.Background(), root, cp.TaskID)
+	result, err := RecoverLegacyTask(context.Background(), root, "", cp.TaskID)
 	if err != nil {
 		t.Fatal(err)
 	}

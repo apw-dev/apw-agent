@@ -55,11 +55,11 @@ For a legacy task without a snapshot manifest, use `apw recover --config <path> 
 
 ## Durable state and daemon
 
-State lives under the workspace:
+State lives under the workspace, except task worktrees (see [Worktree location](#worktree-location)):
 
 - `.apw/tasks.db`: owner-bound jobs, events, Telegram inbox/outbox.
 - `.apw/plans/` (plan and checkpoint files): saved plan/progress, source-read context, pending mutation and failover cooldowns.
-- `.worktrees/<task-id>/`: retained source snapshot and edits.
+- `<worktree root>/<workspace-key>/<short-id>/`: retained source snapshot and edits, outside the workspace. Older tasks keep theirs in `.worktrees/<task-id>/`.
 - `.apw/transactions/`: prepared journals and committed apply receipts.
 - `.apw/daemon.json`: local endpoint and authentication token; `daemon.log`: startup/runtime output.
 
@@ -70,6 +70,30 @@ The loopback API uses Bearer authentication, loopback Host checks, same-origin b
 Model/trust changes in the daemon's configuration file are reloaded before new work. Environment-variable credentials belong to the daemon process; restart it after changing those variables. A workspace-root change requires restarting the daemon. Configuration paths must refer to the same workspace; use one configuration per running daemon.
 
 Legacy checkpoints without a matching snapshot manifest are preserved but cannot safely apply/resume through the new pipeline. Inspect their worktree and review/export their diff manually before creating a new task. Do not delete a worktree containing needed changes.
+
+## Worktree location
+
+Task worktrees live outside the workspace:
+
+```text
+<base>/<workspace-key>/<short-id>/
+```
+
+- `<base>` is `worktree_root` in `apw.json` (an absolute path outside the workspace), else the `APW_WORKTREE_ROOT` environment variable, else the user cache directory: `%LOCALAPPDATA%\apw\wt` on Windows, `$XDG_CACHE_HOME/apw/wt` (or `~/.cache/apw/wt`) on Linux, `~/Library/Caches/apw/wt` on macOS.
+- `<workspace-key>` is the first 8 hex digits of SHA-256 over the workspace's resolved absolute path (lower-cased on Windows), so several workspaces share one base.
+- `<short-id>` is the first 12 hex digits of a generated `task-<32 hex>` ID (short IDs are kept, other long IDs are hashed). The Git branch keeps the full name, `apw/<task-id>`.
+
+Why: tools run from the project (Vitest, Jest, `eslint .`) used to discover APW's retained copies under `.worktrees/`, including broken tests of failed tasks, and the extra ~50 characters pushed pnpm's nested `node_modules` past the 260-character Windows limit. The external path no longer grows with the project path. With a long profile path, set a short `worktree_root` such as `D:\apw-wt`.
+
+Checkpoints, reports and manifests store the worktree's absolute path. Resume, apply, recovery export and cleanup accept a worktree only when it is a direct child of one of the workspace's worktree directories: the configured root, `APW_WORKTREE_ROOT`, the default root, or the legacy `<workspace>/.worktrees`. Resume, apply and export additionally require a Git worktree root on the checkpoint's branch that shares the workspace's `git-common-dir`, so a directory from another repository placed in the root is refused. Changing `worktree_root` while tasks are open strands their worktrees until it is set back (the default root is always searched).
+
+Security:
+
+- The trusted parent (the user cache directory, or the parent of `worktree_root`) is used as given. Every component APW creates below it (`apw`, `wt`, the configured root's last component, `<workspace-key>`, and the task directory) must be a plain directory: links and Windows junctions are refused on create, locate, list and remove.
+- APW creates those directories with user-only permissions: on Windows a protected DACL that grants full control to the current user and SYSTEM only (worktrees inherit it); elsewhere mode `0700`. An existing directory owned by another account (on Windows anyone other than the user, Administrators or SYSTEM; elsewhere another uid, or group/world-writable) is refused, so a directory planted under a shared parent such as `C:\` cannot capture worktrees.
+- `worktree_root` must be absolute, must not be a volume root, and must not be inside the workspace.
+
+Legacy compatibility: tasks created before this layout keep working from `<workspace>/.worktrees/<task-id>/`. They resume, apply, export and clean up there; APW never moves or deletes legacy work automatically, and new tasks never create `.worktrees/`. Remove an empty `.worktrees/` by hand once its tasks are applied or cleaned up.
 
 ## Retention and cleanup
 
@@ -100,7 +124,7 @@ Never removed automatically, whatever its age:
 - A task whose apply journal is not finalized (`prepared`); service startup recovery owns it.
 - A task with more than one checkpoint, a worktree whose HEAD moved past the snapshot base (commits were made inside it), a worktree not registered with Git, or one reached through a link/junction.
 - A worktree that contains unapplied changes relative to its snapshot, unless a completed export already exists in `.apw/recovery/<task-id>-*` or `--export-unapplied` produces one first. If the export fails, the worktree stays.
-- Unknown directories under `.worktrees/` (listed as orphans, never removed).
+- Unknown entries in this workspace's worktree directory or in a legacy `.worktrees/` (listed as orphans, never removed). Cleanup never removes anything outside those directories.
 - The source workspace itself, `.apw/recovery` exports, conversation history, configuration and committed apply receipts.
 
 For an eligible task cleanup removes, in order: the worktree through `git worktree remove --force` and its `apw/` branch through `git branch -D` (both through the bounded Git runner, only after confirming the registered path, branch and base commit), the task's `.apw/plans/<plan>.json` and `.checkpoint.json`, and a `rolled_back` apply journal. Committed apply receipts stay because they prove the task was applied. Only when every file step succeeded does one SQLite transaction delete the task's events and clear its report BLOB; the `tasks`/`task_runs` rows keep status and error, and a single `retention` event records the pruning. A failed step leaves that task's evidence for the next run.

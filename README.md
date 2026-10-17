@@ -155,8 +155,8 @@ APW ตรวจชนิดโปรเจกต์จากไฟล์ที�
 - **test:** รันด้วย `CI=true` เพื่อให้ Vitest และ Jest รันครั้งเดียว ไม่ค้างใน watch mode
 - **ข้อกำหนด:** `node_modules/` และไฟล์ output ของ build (`dist/`) ต้องอยู่ใน `.gitignore` ไม่อย่างนั้น APW จะนับเป็นไฟล์ที่เปลี่ยนโดยไม่ได้วางแผน
 - **pnpm 10 ขึ้นไป:** pnpm บล็อก build script ของ dependency (เช่น esbuild ที่ Vite ใช้) และ install จะล้มด้วย `ERR_PNPM_IGNORED_BUILDS` ให้รัน `pnpm approve-builds esbuild` ครั้งเดียว แล้ว commit `pnpm-workspace.yaml` ที่ได้ (`allowBuilds: esbuild: true`)
-- **ไม่ให้ test runner ไปรันสำเนาใน `.worktrees/`:** APW เก็บ worktree ของแต่ละงานไว้ใน `.worktrees/` ของโปรเจกต์ ซึ่ง Vitest, Jest และ `eslint .` จะค้นเจอด้วย ให้ exclude โฟลเดอร์นี้ เช่นใน `vite.config.ts`: `test: { exclude: [...configDefaults.exclude, '.worktrees/**'] }` (import `configDefaults` จาก `vitest/config`) และลบงานเก่าด้วย `apw cleanup`
-- **Path บน Windows:** worktree อยู่ลึกกว่าโฟลเดอร์โปรเจกต์ราว 50 ตัวอักษร และ dependency ของ pnpm ซ้อนลึกมาก ควรวางโปรเจกต์ไว้ใน path สั้น (เช่น `D:\src\app`) ไม่อย่างนั้นอาจติดข้อจำกัด 260 ตัวอักษร ซึ่ง APW จะแจ้งไว้ใน error
+- **worktree อยู่นอกโปรเจกต์:** APW สร้าง worktree ของแต่ละงานไว้ที่ `%LOCALAPPDATA%\apw\wt\<workspace>\<task>` (Linux: `~/.cache/apw/wt/...`) ไม่ใช่ในโฟลเดอร์โปรเจกต์ Vitest, Jest และ `eslint .` จึงไม่ค้นเจอสำเนาของ APW และ path ไม่ยาวขึ้นตามโปรเจกต์ ถ้ายังติดข้อจำกัด 260 ตัวอักษรของ Windows (dependency ของ pnpm ซ้อนลึกมาก) ให้ตั้ง `"worktree_root": "D:\\apw-wt"` ใน `apw.json` (ต้องเป็น absolute path นอกโปรเจกต์) หรือเปิด Windows long paths ซึ่ง APW จะแจ้งไว้ใน error
+- **งานเก่าใน `.worktrees/`:** งานที่สร้างก่อน rc.12 ยังอยู่ใน `.worktrees/` ของโปรเจกต์และยัง resume/apply/cleanup ได้ตามเดิม (APW ไม่ย้ายหรือลบให้เอง) ระหว่างนั้นถ้า test runner ค้นเจอ ให้ exclude `.worktrees/**` ชั่วคราว แล้วลบงานเก่าด้วย `apw cleanup`
 
 **ภาษาอื่นหรือ framework ที่เขียนเอง:** กำหนด pipeline เองใน `apw.json` ได้ ค่านี้จะแทน pipeline ที่ตรวจเจอ แต่ละขั้นเป็นคำสั่งแบบ argument vector (ไม่ผ่าน shell) และชื่อขั้นใช้ใน acceptance check ได้ เช่น `{"kind":"verification","value":"test"}`:
 

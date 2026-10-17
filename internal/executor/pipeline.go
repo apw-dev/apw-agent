@@ -63,7 +63,7 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	}
 	e.emit(ProgressEvent{Stage: "plan_ready", Message: plan.Objective, TotalSteps: len(plan.Subtasks)})
 	e.emit(ProgressEvent{Stage: "worktree_start", Message: "Snapshotting workspace"})
-	wt, err := surgeon.CreateWorktree(ctx, e.Workspace, surgeon.WorktreeOptions{TaskID: plan.TaskID, SyncDirtyFiles: true})
+	wt, err := surgeon.CreateWorktree(ctx, e.Workspace, surgeon.WorktreeOptions{TaskID: plan.TaskID, SyncDirtyFiles: true, Root: e.WorktreeRoot})
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionRep
 	if err != nil {
 		return nil, err
 	}
-	if err = validateResumeWorktree(ctx, e.Workspace, cp); err != nil {
+	if err = validateResumeWorktree(ctx, e.Workspace, e.WorktreeRoot, cp); err != nil {
 		return nil, err
 	}
 	wt, err := surgeon.LoadWorktree(cp.WorktreePath)
@@ -313,7 +313,7 @@ func (e *Executor) Apply(ctx context.Context, cp PlanCheckpoint) (*ExecutionRepo
 	if _, err := loadResumePlan(e.Workspace, cp); err != nil {
 		return nil, err
 	}
-	if err := validateResumeWorktree(ctx, e.Workspace, cp); err != nil {
+	if err := validateResumeWorktree(ctx, e.Workspace, e.WorktreeRoot, cp); err != nil {
 		return nil, err
 	}
 	wt, err := surgeon.LoadWorktree(cp.WorktreePath)

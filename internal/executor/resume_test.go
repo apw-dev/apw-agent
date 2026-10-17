@@ -204,3 +204,78 @@ func TestExecuteAppliesAdditionalReflexRepairFile(t *testing.T) {
 		t.Fatalf("verified repair was dropped during apply: %s %v", data, err)
 	}
 }
+
+// moveToLegacyWorktree relocates the fixture worktree to <workspace>/.worktrees/<task-id>, where
+// APW kept worktrees before the external root, and rewrites manifest and checkpoint to match.
+func moveToLegacyWorktree(t *testing.T, ws string, wt *surgeon.Worktree, cp *PlanCheckpoint) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(ws, ".git", "info", "exclude"), []byte(".worktrees/\n.apw/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(ws, surgeon.LegacyWorktreeDir, wt.TaskID)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", ws, "worktree", "move", wt.Path, legacy).CombinedOutput(); err != nil {
+		t.Fatalf("git worktree move: %v (%s)", err, out)
+	}
+	wt.Path = legacy
+	if err := wt.SaveManifest(); err != nil {
+		t.Fatal(err)
+	}
+	cp.WorktreePath = legacy
+	if err := SaveCheckpoint(ws, *cp); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLegacyWorktreeStillResumesAndApplies(t *testing.T) {
+	ws, wt, cp := resumeFixture(t)
+	moveToLegacyWorktree(t, ws, wt, &cp)
+	mp := mock.New(`{"old_content":"return \"old\"","new_content":"return \"new\""}`, "done")
+	ex := New(ws, mp, mp, "working", "working", 1)
+	ex.Trusted = true
+	report, err := ex.Resume(context.Background(), cp)
+	if err != nil || !report.Passed || report.WorktreePath != wt.Path {
+		t.Fatalf("legacy resume failed: %+v %v", report, err)
+	}
+	applyPreparedTest(t, ex, report)
+	for path, want := range map[string]string{"main.go": `"hello"`, "helper.go": `"new"`} {
+		data, err := os.ReadFile(filepath.Join(ws, path))
+		if err != nil || !strings.Contains(string(data), want) {
+			t.Fatalf("%s missing legacy changes: %s %v", path, data, err)
+		}
+	}
+	if _, err := os.Stat(wt.Path); err != nil {
+		t.Fatalf("legacy worktree was moved or removed: %v", err)
+	}
+}
+
+func TestResumeRefusesWorktreeOutsideRootsOrFromAnotherRepository(t *testing.T) {
+	ws, wt, cp := resumeFixture(t)
+	if err := validateResumeWorktree(context.Background(), ws, "", cp); err != nil {
+		t.Fatalf("external-root worktree rejected: %v", err)
+	}
+	// The same repository's worktree outside every worktree root.
+	stray := filepath.Join(t.TempDir(), "stray")
+	if out, err := exec.Command("git", "-C", ws, "worktree", "add", "-b", "apw/stray", stray, "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v (%s)", err, out)
+	}
+	outside := cp
+	outside.WorktreePath, outside.WorktreeBranch = stray, "apw/stray"
+	if err := validateResumeWorktree(context.Background(), ws, "", outside); err == nil || !strings.Contains(err.Error(), "not directly inside") {
+		t.Fatalf("worktree outside roots accepted: %v", err)
+	}
+	// Another repository's worktree placed inside this workspace's worktree directory.
+	other, _, _ := resumeFixture(t)
+	foreign := filepath.Join(filepath.Dir(wt.Path), "foreign")
+	if out, err := exec.Command("git", "-C", other, "worktree", "add", "-b", "apw/foreign", foreign, "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v (%s)", err, out)
+	}
+	defer exec.Command("git", "-C", other, "worktree", "remove", "--force", foreign).Run()
+	alien := cp
+	alien.WorktreePath, alien.WorktreeBranch = foreign, "apw/foreign"
+	if err := validateResumeWorktree(context.Background(), ws, "", alien); err == nil || !strings.Contains(err.Error(), "different repository") {
+		t.Fatalf("foreign repository worktree accepted: %v", err)
+	}
+}

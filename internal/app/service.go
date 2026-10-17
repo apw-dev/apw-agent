@@ -351,6 +351,7 @@ func (s *Service) run(j *store.Job) {
 		}
 		e.Session = sess
 		e.VerifyOverride = project.FromConfig(cfg.Verify)
+		e.WorktreeRoot = cfg.WorktreeRoot
 
 		e.TaskID = j.ID
 		e.Mode = core.TaskMode(j.Mode)

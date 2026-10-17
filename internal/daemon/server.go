@@ -35,7 +35,7 @@ func Run(ctx context.Context, cfgPath, version string) error {
 	backend.ConfigPath = absCfg
 	if cfg.Retention.AutoCleanup {
 		// Startup recovery has finished and no request can arrive yet. Never exports or rotates the open log.
-		report, cleanupErr := retention.Run(ctx, cfg.Workspace, backend.Store, retention.Resolve(cfg.Retention), retention.Options{})
+		report, cleanupErr := retention.Run(ctx, cfg.Workspace, backend.Store, retention.Resolve(cfg.Retention), retention.Options{WorktreeRoot: cfg.WorktreeRoot})
 		if cleanupErr != nil {
 			fmt.Fprintln(os.Stderr, "retention: automatic cleanup stopped:", cleanupErr)
 		} else {

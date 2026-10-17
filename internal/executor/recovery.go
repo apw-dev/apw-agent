@@ -25,7 +25,9 @@ type RecoveryExport struct {
 	Note             string                       `json:"note"`
 }
 
-func RecoverLegacyTask(ctx context.Context, root, id string) (*RecoveryExport, error) {
+// RecoverLegacyTask exports a task worktree's changes to .apw/recovery without applying them.
+// worktreeRoot is apw.json worktree_root (empty for the default).
+func RecoverLegacyTask(ctx context.Context, root, worktreeRoot, id string) (*RecoveryExport, error) {
 	lock, err := workspace.Acquire(root, "write")
 	if err != nil {
 		return nil, err
@@ -38,7 +40,7 @@ func RecoverLegacyTask(ctx context.Context, root, id string) (*RecoveryExport, e
 	if _, err := loadResumePlan(root, *cp); err != nil {
 		return nil, err
 	}
-	if err := validateResumeWorktree(ctx, root, *cp); err != nil {
+	if err := validateResumeWorktree(ctx, root, worktreeRoot, *cp); err != nil {
 		return nil, err
 	}
 	parent := filepath.Join(root, ".apw", "recovery")

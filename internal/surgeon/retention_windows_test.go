@@ -35,7 +35,7 @@ func TestRetentionRefusesJunctions(t *testing.T) {
 	}
 	junction(".worktrees", outside)
 	wt := &Worktree{Workspace: root, Path: filepath.Join(root, ".worktrees", "task-x"), Branch: "apw/task-x", BaseCommit: "0"}
-	if err := RemoveRetainedWorktree(context.Background(), root, wt); err == nil {
+	if err := RemoveRetainedWorktree(context.Background(), root, "", wt); err == nil {
 		t.Fatal("worktree removed through a junction")
 	}
 	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "keep" {

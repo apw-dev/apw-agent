@@ -89,6 +89,8 @@ type Executor struct {
 	OnProgress           ProgressCallback
 	// VerifyOverride replaces the detected verification pipeline (apw.json verify.stages).
 	VerifyOverride []project.Stage
+	// WorktreeRoot overrides where task worktrees are created (apw.json worktree_root).
+	WorktreeRoot string
 }
 
 // Profile detects the project at root, applying any configured verification override.

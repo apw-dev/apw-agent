@@ -260,3 +260,21 @@ func TestVerifyStagesConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestWorktreeRootConfig(t *testing.T) {
+	base := `{"providers":{"m":{"type":"mock"}},"roles":{"architect":"m","reflex":"m"},"worktree_root":%q}`
+	abs := filepath.Join(t.TempDir(), "apw-wt")
+	cfg, err := Load(writeTempConfig(t, fmt.Sprintf(base, abs)))
+	if err != nil || cfg.WorktreeRoot != abs {
+		t.Fatalf("worktree_root = %q, %v", cfg.WorktreeRoot, err)
+	}
+	volume := string(filepath.Separator)
+	if v := filepath.VolumeName(abs); v != "" {
+		volume = v + volume
+	}
+	for _, bad := range []string{"relative/wt", volume} {
+		if _, err := Load(writeTempConfig(t, fmt.Sprintf(base, bad))); err == nil || !strings.Contains(err.Error(), "worktree_root") {
+			t.Fatalf("%q: expected worktree_root error, got %v", bad, err)
+		}
+	}
+}

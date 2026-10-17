@@ -42,8 +42,10 @@ type Worktree struct {
 }
 type WorktreeOptions struct {
 	TaskID, BranchPrefix string
-	SyncDirtyFiles       bool
-	Timeout              time.Duration
+	// Root overrides the worktree base (apw.json worktree_root); see WorktreeDir.
+	Root           string
+	SyncDirtyFiles bool
+	Timeout        time.Duration
 }
 
 var (
@@ -102,6 +104,8 @@ func GetHeadCommit(ctx context.Context, workspace string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// shouldSkipSync excludes dependency trees and protected paths, including a legacy in-workspace
+// .worktrees directory (AllowedPath); current task worktrees live outside the workspace.
 func shouldSkipSync(rel string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
 		if part == "vendor" || part == "node_modules" {
@@ -216,26 +220,14 @@ func CreateWorktree(ctx context.Context, workspace string, opts WorktreeOptions)
 	if prefix == "" {
 		prefix = "apw/"
 	}
-	root, err := os.OpenRoot(abs)
+	dir, err := ensureWorktreeDir(abs, opts.Root)
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
-	if err := root.Mkdir(".worktrees", 0700); err != nil && !errors.Is(err, os.ErrExist) {
-		return nil, err
-	}
-	stateDir, err := root.Lstat(".worktrees")
-	if err != nil {
-		return nil, err
-	}
-	if !stateDir.IsDir() || stateDir.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("worktree directory must not be a link")
-	}
-	path := filepath.Join(abs, ".worktrees", id)
+	path := filepath.Join(dir, TaskWorktreeName(task))
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		return nil, ErrWorktreeExists
 	}
-	ensureGitExclude(abs, ".worktrees/")
 	ensureGitExclude(abs, ".apw/")
 	paths, err := workspaceFiles(ctx, abs)
 	if err != nil {

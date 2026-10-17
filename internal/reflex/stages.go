@@ -345,5 +345,5 @@ func longPathHint(workspace, out string) string {
 	if runtime.GOOS != "windows" || len(workspace) <= windowsPathBudget || !strings.Contains(out, "ENOENT") {
 		return ""
 	}
-	return fmt.Sprintf("likely Windows path length limit: the isolated worktree path is %d characters and dependency paths below it exceed 260; move the project to a shorter path (for example D:\\src\\app) or enable Windows long paths", len(workspace))
+	return fmt.Sprintf("likely Windows path length limit: the isolated worktree path is %d characters and dependency paths below it exceed 260; set a short worktree_root in apw.json (for example D:\\apw-wt) or enable Windows long paths", len(workspace))
 }

@@ -59,7 +59,7 @@ func runCleanup(args []string, stdout, stderr io.Writer) int {
 	}
 	defer db.Close()
 	report, err := retention.Run(ctx, cfg.Workspace, db, retention.Resolve(cfg.Retention), retention.Options{
-		DryRun: options.DryRun, ExportUnapplied: options.ExportUnapplied, Vacuum: options.Vacuum, RotateLog: true,
+		DryRun: options.DryRun, ExportUnapplied: options.ExportUnapplied, Vacuum: options.Vacuum, RotateLog: true, WorktreeRoot: cfg.WorktreeRoot,
 	})
 	if report != nil {
 		if options.JSONMode {

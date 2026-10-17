@@ -380,3 +380,62 @@ func TestRotateLog(t *testing.T) {
 		t.Fatalf("expected exactly one rotated file, got %d", len(entries))
 	}
 }
+
+// TestCleanupCoversExternalAndLegacyRoots removes eligible worktrees in both the external root and
+// the legacy .worktrees directory (with or without a checkpoint) and lists unknown entries of both.
+func TestCleanupCoversExternalAndLegacyRoots(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(filepath.Join(f.root, ".git", "info", "exclude"), []byte(".worktrees/\n.apw/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.task("task-new", core.StatusSucceeded)
+	external := f.worktree("task-new", false)
+	f.task("task-old", core.StatusSucceeded)
+	legacy := f.worktree("task-old", false)
+	legacyPath := filepath.Join(f.root, surgeon.LegacyWorktreeDir, "task-old")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	git(t, f.root, "worktree", "move", legacy.Path, legacyPath)
+	legacy.Path = legacyPath
+	if err := legacy.SaveManifest(); err != nil {
+		t.Fatal(err)
+	}
+	// No checkpoint: cleanup must still find the external worktree by its short name.
+	if _, err := executor.RemoveCheckpointFiles(f.root, "plan-task-new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.RemoveCheckpointFiles(f.root, "plan-task-old"); err != nil {
+		t.Fatal(err)
+	}
+	legacyStray := filepath.Join(f.root, surgeon.LegacyWorktreeDir, "stray")
+	externalStray := filepath.Join(filepath.Dir(external.Path), "stray")
+	for _, dir := range []string{legacyStray, externalStray} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := Run(context.Background(), f.root, f.db, Resolve(config.RetentionConfig{}), Options{Now: later})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := ids(report.Removed)
+	for _, id := range []string{"task-new", "task-old"} {
+		if _, ok := removed[id]; !ok {
+			t.Fatalf("%s not removed: %+v", id, report)
+		}
+	}
+	for _, wt := range []*surgeon.Worktree{external, legacy} {
+		if exists(t, wt.Path) || branchExists(t, f.root, wt.Branch) {
+			t.Fatalf("worktree %s or branch kept", wt.Path)
+		}
+	}
+	orphans := map[string]bool{}
+	for _, item := range report.Orphans {
+		orphans[item.Worktree] = true
+	}
+	if len(report.Orphans) != 2 || !orphans[legacyStray] || !orphans[externalStray] || !exists(t, legacyStray) || !exists(t, externalStray) {
+		t.Fatalf("orphans = %+v", report.Orphans)
+	}
+}

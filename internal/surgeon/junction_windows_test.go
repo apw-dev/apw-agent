@@ -36,8 +36,11 @@ func TestWindowsJunctionsCannotRedirectSourceOrState(t *testing.T) {
 	if err := RemoveInRoot(root, "escape/main.go"); err == nil {
 		t.Fatal("junction delete escaped the source root")
 	}
-	junction(".worktrees")
-	if _, err := CreateWorktree(context.Background(), root, WorktreeOptions{TaskID: "junction"}); err == nil {
+	external := filepath.Join(t.TempDir(), "wt")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", external, outside).CombinedOutput(); err != nil {
+		t.Fatalf("create test junction: %s %v", out, err)
+	}
+	if _, err := CreateWorktree(context.Background(), root, WorktreeOptions{TaskID: "junction", Root: external}); err == nil {
 		t.Fatal("worktree was created through a junction")
 	}
 	junction(".apw")

@@ -53,26 +53,21 @@ func appendModifiedFile(files *[]string, path string) {
 	*files = append(*files, path)
 }
 
-func validateResumeWorktree(ctx context.Context, workspace string, cp PlanCheckpoint) error {
-	root, err := filepath.Abs(filepath.Join(workspace, ".worktrees"))
-	if err != nil {
-		return err
+// validateResumeWorktree proves that the checkpoint's worktree is a task worktree of this workspace:
+// a plain directory directly inside the external worktree root (worktreeRoot is apw.json worktree_root)
+// or the legacy .worktrees directory, a Git worktree root on the recorded branch, and sharing the
+// workspace's Git common directory.
+func validateResumeWorktree(ctx context.Context, workspace, worktreeRoot string, cp PlanCheckpoint) error {
+	if _, _, err := surgeon.LocateWorktree(workspace, worktreeRoot, cp.WorktreePath); err != nil {
+		return fmt.Errorf("resume worktree: %w", err)
 	}
 	path, err := filepath.Abs(cp.WorktreePath)
 	if err != nil {
 		return err
 	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return fmt.Errorf("resolve resume worktree directory: %w", err)
-	}
 	path, err = filepath.EvalSymlinks(path)
 	if err != nil {
 		return fmt.Errorf("resolve resume worktree: %w", err)
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil || !filepath.IsLocal(rel) || rel == "." {
-		return fmt.Errorf("resume worktree must be inside %s", root)
 	}
 	gitValue := func(dir string, args ...string) (string, error) {
 		// Use the bounded runner like every other git call: the daemon runs detached

@@ -165,7 +165,7 @@ func runTaskCommand(action string, args []string, stdout, stderr io.Writer) int 
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		report, err := executor.RecoverLegacyTask(ctx, cfg.Workspace, id)
+		report, err := executor.RecoverLegacyTask(ctx, cfg.Workspace, cfg.WorktreeRoot, id)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1

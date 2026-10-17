@@ -1,6 +1,7 @@
 // Package retention removes old task state under an explicit, conservative policy.
-// It never touches source workspace files: only task worktrees under .worktrees, task plan/checkpoint
-// files, rolled-back apply journals, task events/reports, delivered Telegram rows and the daemon log.
+// It never touches source workspace files: only task worktrees in the workspace's worktree directories
+// (the external root or the legacy .worktrees), task plan/checkpoint files, rolled-back apply
+// journals, task events/reports, delivered Telegram rows and the daemon log.
 package retention
 
 import (
@@ -9,7 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/config"
@@ -67,7 +70,9 @@ type Options struct {
 	Vacuum bool
 	// RotateLog rotates .apw/daemon.log; only safe while no daemon writes to it.
 	RotateLog bool
-	Now       time.Time
+	// WorktreeRoot is apw.json worktree_root (empty for the default external root).
+	WorktreeRoot string
+	Now          time.Time
 }
 
 type Item struct {
@@ -175,11 +180,11 @@ func (r *runner) task(ctx context.Context, t store.TaskSummary) bool {
 			worktree = cp.WorktreePath
 		}
 	}
-	if worktree == "" && t.ID != "" && filepath.IsLocal(t.ID) && filepath.Base(t.ID) == t.ID {
-		worktree = filepath.Join(r.root, ".worktrees", t.ID)
+	if worktree == "" {
+		worktree = r.findWorktree(t.ID)
 	}
-	if name, err := surgeon.RetainedWorktreeName(r.root, worktree); err == nil {
-		r.claimed[name] = true
+	if dir, name, err := surgeon.LocateWorktree(r.root, r.opts.WorktreeRoot, worktree); err == nil {
+		r.claimed[pathKey(filepath.Join(dir, name))] = true
 	}
 	if r.policy.Protect[t.ID] {
 		return r.protect(t, "", "protected by policy (legacy or retention.protect_tasks)")
@@ -222,7 +227,7 @@ func (r *runner) task(ctx context.Context, t store.TaskSummary) bool {
 	}
 	var wt *surgeon.Worktree
 	if hasWorktree {
-		if _, err := surgeon.RetainedWorktreeName(r.root, worktree); err != nil {
+		if _, _, err := surgeon.LocateWorktree(r.root, r.opts.WorktreeRoot, worktree); err != nil {
 			return r.protect(t, worktree, err.Error())
 		}
 		if wt, err = surgeon.LoadWorktree(worktree); err != nil {
@@ -247,7 +252,7 @@ func (r *runner) task(ctx context.Context, t store.TaskSummary) bool {
 		return true
 	}
 	if wt != nil {
-		if err := surgeon.RemoveRetainedWorktree(ctx, r.root, wt); err != nil {
+		if err := surgeon.RemoveRetainedWorktree(ctx, r.root, r.opts.WorktreeRoot, wt); err != nil {
 			return r.failed(t, worktree, nil, err)
 		}
 	}
@@ -300,7 +305,7 @@ func (r *runner) unappliedSafe(ctx context.Context, t store.TaskSummary, wt *sur
 		r.report.Exported = append(r.report.Exported, Item{TaskID: t.ID, Status: string(t.Status), Worktree: wt.Path, Reason: "would export " + summary})
 		return true
 	}
-	result, err := executor.RecoverLegacyTask(ctx, r.root, t.ID)
+	result, err := executor.RecoverLegacyTask(ctx, r.root, r.opts.WorktreeRoot, t.ID)
 	if err != nil {
 		r.failed(t, wt.Path, nil, fmt.Errorf("export unapplied changes: %w", err))
 		return false
@@ -309,24 +314,52 @@ func (r *runner) unappliedSafe(ctx context.Context, t store.TaskSummary, wt *sur
 	return true
 }
 
-// orphans lists .worktrees entries that no task record accounts for. They are never removed.
-func (r *runner) orphans() error {
-	entries, err := os.ReadDir(filepath.Join(r.root, ".worktrees"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+// findWorktree locates a task's worktree when no checkpoint records it: <root>/<short-id> in an
+// external root or <workspace>/.worktrees/<task-id> (legacy). It returns "" when none exists.
+func (r *runner) findWorktree(id string) string {
+	if id == "" || !filepath.IsLocal(id) || filepath.Base(id) != id {
+		return ""
 	}
-	if err != nil {
-		return err
-	}
-	var names []string
-	for _, entry := range entries {
-		if !r.claimed[entry.Name()] {
-			names = append(names, entry.Name())
+	for _, dir := range surgeon.WorktreeDirs(r.root, r.opts.WorktreeRoot) {
+		for _, name := range []string{surgeon.TaskWorktreeName(id), id} {
+			path := filepath.Join(dir, name)
+			if _, err := os.Lstat(path); err == nil {
+				return path
+			}
 		}
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		r.report.Orphans = append(r.report.Orphans, Item{Worktree: filepath.Join(r.root, ".worktrees", name), Reason: "no task record; kept"})
+	return ""
+}
+
+func pathKey(path string) string {
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(path)
+	}
+	return path
+}
+
+// orphans lists entries of the worktree directories (external root and legacy .worktrees) that no
+// task record accounts for. They are never removed.
+func (r *runner) orphans() error {
+	for _, dir := range surgeon.WorktreeDirs(r.root, r.opts.WorktreeRoot) {
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var names []string
+		for _, entry := range entries {
+			if !r.claimed[pathKey(filepath.Join(dir, entry.Name()))] {
+				names = append(names, entry.Name())
+			}
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			r.report.Orphans = append(r.report.Orphans, Item{Worktree: filepath.Join(dir, name), Reason: "no task record; kept"})
+		}
 	}
 	return nil
 }

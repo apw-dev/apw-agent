@@ -111,6 +111,9 @@ type Config struct {
 	} `json:"budget"`
 	Retention RetentionConfig `json:"retention,omitzero"`
 	Verify    VerifyConfig    `json:"verify,omitzero"`
+	// WorktreeRoot is an absolute directory outside the workspace that holds task worktrees
+	// (one subdirectory per workspace). Empty selects APW_WORKTREE_ROOT, else the user cache directory.
+	WorktreeRoot string `json:"worktree_root,omitempty"`
 }
 
 // VerifyConfig overrides the detected verification pipeline. It is how a project in
@@ -336,6 +339,14 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Providers) == 0 {
 		return errors.New("config: at least one provider must be configured")
+	}
+	if root := c.WorktreeRoot; root != "" {
+		if !filepath.IsAbs(root) {
+			return fmt.Errorf("config: worktree_root %q must be an absolute path", root)
+		}
+		if filepath.Dir(filepath.Clean(root)) == filepath.Clean(root) {
+			return fmt.Errorf("config: worktree_root %q must not be a volume or file-system root", root)
+		}
 	}
 	seenStage := map[string]bool{}
 	for i, s := range c.Verify.Stages {
