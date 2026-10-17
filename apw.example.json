@@ -45,5 +45,16 @@
     "inbox_keep": 1000,
     "log_max_mb": 8,
     "auto_cleanup": false
+  },
+  "sandbox": {
+    "mode": "off",
+    "network": "install"
+  },
+  "research": {
+    "enabled": false
+  },
+  "planning": {
+    "proposals": 1,
+    "judge": false
   }
 }

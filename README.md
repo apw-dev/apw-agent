@@ -171,6 +171,44 @@ APW ตรวจชนิดโปรเจกต์จากไฟล์ที�
 ```
 ถ้าตรวจชนิดโปรเจกต์ไม่ได้และไม่ได้กำหนด `verify.stages` ไว้ `apw run` และ `apw verify` จะไม่ผ่าน พร้อมบอกให้กำหนด pipeline (APW ไม่ถือว่างานผ่านถ้าไม่มีอะไรตรวจ)
 
+### Sandbox สำหรับคำสั่งตรวจสอบ
+
+ขั้นตรวจสอบจะรันโค้ดของโปรเจกต์ (install script, build, test) ค่าเริ่มต้น (`off`) รันด้วยสิทธิ์ของผู้ใช้และ environment ทั้งหมด ถ้าไม่ไว้ใจโค้ดในโปรเจกต์ ให้เปิด sandbox ใน `apw.json`:
+
+```json
+"sandbox": { "mode": "restricted", "network": "install", "memory_mb": 4096, "pass_env": ["NPM_TOKEN"] }
+```
+
+- **`restricted` บน Windows:** รันด้วย token ระดับ low integrity ใน job object ที่จำกัด UI และหน่วยความจำ เขียนได้เฉพาะใน worktree เขียนโปรเจกต์ต้นทาง, `.git` ของ repo หลัก (จึงฝัง hook ไม่ได้), manifest ของงาน และไฟล์อื่นของผู้ใช้ไม่ได้ แต่ยังอ่านไฟล์ของผู้ใช้ได้และยังออก network ได้
+- **`restricted` บน Linux:** ใช้ bubblewrap (`bwrap`) โดย root เป็น read-only, worktree เขียนได้, มี `/tmp` แยก และไม่มี network ยกเว้นขั้น install
+- **`docker`:** แต่ละขั้นรันใน container ใหม่จาก `sandbox.image` (ต้องมี toolchain ของโปรเจกต์ เช่น `node:22`) โดย mount เฉพาะ worktree, ตัด capability ทั้งหมด และไม่มี network ยกเว้นขั้น install เหมาะกับ repo ที่ไม่ไว้ใจ
+- โหมด `restricted` และ `docker` จะลบตัวแปรที่ดูเป็นความลับ (ชื่อมี KEY, TOKEN, SECRET, PASSWORD, ... และ `APW_*`) ออกจาก environment ยกเว้นที่ระบุใน `pass_env` ส่วน cache และไฟล์ชั่วคราวของเครื่องมือจะย้ายไปอยู่ใน `<worktree>/.apw-sandbox`
+- cache เริ่มใหม่ทุกงาน: Go รอบแรกช้าขึ้นราว 10-20 วินาที และ pnpm/npm จะดาวน์โหลดแพ็กเกจใหม่ รายละเอียดและข้อจำกัดดูที่ `docs/task-lifecycle.md` หัวข้อ "Verification sandbox"
+
+### ตรวจหน้าเว็บด้วย browser
+
+ถ้าเครื่องมี Microsoft Edge, Google Chrome หรือ Chromium (หรือระบุไฟล์ด้วย `APW_BROWSER`) โปรเจกต์เว็บฝั่ง client (Vite, React, Vue, Svelte, Preact, Solid ที่มี script `build`; ไม่รวม Next.js) และเว็บ HTML ล้วนจะมีขั้น `browser` เพิ่มหลัง build: APW เสิร์ฟไฟล์ใน `dist/` เองผ่าน server ที่ฟังเฉพาะ 127.0.0.1 แล้วเปิด `index.html` แบบ headless
+- ไม่ผ่านถ้ามี error ที่ไม่ถูกจับในหน้า หรือหน้าว่างเปล่า (อาการจอขาวหลัง runtime crash) และส่งให้รอบซ่อมเหมือน error จาก compiler
+- promise rejection ที่ไม่ถูกจับ (เช่น API ไม่ออนไลน์ระหว่างตรวจ) จะรายงานไว้แต่ไม่นับว่าไม่ผ่าน และเก็บ screenshot ไว้ที่ `<worktree>/.apw/browser/index.png`
+- แผนใส่ acceptance check ชนิด `browser` ได้ เช่น `{"criterion":"ตัวนับแสดง 10","kind":"browser","file":"/","value":"count is 10"}`
+- ปิดขั้นนี้ด้วย `"verify": { "browser": "off" }`
+
+### อ่านเอกสารก่อนวางแผน (research)
+
+เปิดด้วย `"research": { "enabled": true }` แล้ว Architect จะขอหน้าเอกสารที่ต้องใช้ก่อนวางแผน และ APW จะดึงมาให้เอง:
+- ดึงเฉพาะ HTTPS GET ไปยังเว็บเอกสารใน allowlist (เช่น pkg.go.dev, docs.rs, developer.mozilla.org, react.dev, vite.dev, registry.npmjs.org) และ host ที่เพิ่มเองใน `research.hosts`; ไม่รับ query string, credential, cookie หรือ IP ภายในเครือข่าย
+- เนื้อหาที่ดึงมาถูกใส่ใน prompt โดยระบุว่าเป็นข้อมูลอ้างอิงที่ไม่น่าไว้ใจ และห้ามทำตามคำสั่งในนั้น
+- ค้นเว็บได้ด้วย `"search": "brave"` และ key ใน `BRAVE_API_KEY`
+- ถ้าดึงไม่สำเร็จ งานยังวางแผนต่อได้ตามปกติ และรายงานจะบอกว่าใช้แหล่งไหนบ้าง
+
+### ให้หลายโมเดลเสนอแผน
+
+```json
+"planning": { "proposals": 3, "judge": true }
+```
+
+ถ้ามี Architect มากกว่าหนึ่งตัว (`roles.architect` และ `failover.architect`) APW จะให้แต่ละตัววางแผนพร้อมกัน แล้วให้คะแนนแต่ละแผนตามกฎ: ทุกเกณฑ์ต้องมี check ที่รันได้จริง, check อ้างถึงขั้นที่มีอยู่จริง, ระบุขอบเขตไฟล์และการตรวจสอบ, แก้เฉพาะไฟล์ที่ประกาศไว้ และแผนที่เล็กกว่าได้คะแนนดีกว่า ถ้า `judge` เป็น `true` จะให้ Architect หลักให้คะแนน 0-10 เพิ่ม แล้วเฉลี่ยกับคะแนนตามกฎ แผนที่คะแนนสูงสุดจะถูกใช้ และ `plan.ranking` จะเก็บทุกข้อเสนอพร้อมคะแนนและเหตุผล (`apw plan` แสดงให้ดู)
+
 ### การสลับโมเดลและโควตา
 
 การค้นพบโมเดลทำให้เลือกใช้ได้ แต่ไม่ได้เพิ่มทุกโมเดลเป็น fallback อัตโนมัติ

@@ -21,7 +21,7 @@ apw desktop
 
 Review and preview still contact the configured model provider. Source context is bounded to 96 KiB and marks truncation; it is not a complete repository audit. The built-in mock provider is for offline workflow checks.
 
-Execute/verify require an explicit trusted workspace and a Git repository with an initial commit. Trust authorizes repository Go code, tests and build tooling to run with the current user's permissions. The worktree isolates ordinary edits; it is not an OS security sandbox for hostile tests.
+Execute/verify require an explicit trusted workspace and a Git repository with an initial commit. Trust authorizes repository Go code, tests and build tooling to run with the current user's permissions. The worktree isolates ordinary edits; it is not an OS security sandbox for hostile tests unless a verification sandbox is configured (see [Verification sandbox](#verification-sandbox)).
 
 Provider CLIs run from a separate temporary directory with the selected model, stdin prompts and their restricted tool/sandbox settings. The executor itself enforces mode restrictions. Review never enters mutation or verification code. Preview supports structured source edits but skips repository commands. Go verification uses `-mod=readonly` and sends build output to the null device. Formatting uses Go's formatter to compare source, accepts equivalent CRLF/LF endings without rewriting files, and skips state folders, dependencies, generated files and test fixtures.
 
@@ -61,6 +61,7 @@ State lives under the workspace, except task worktrees (see [Worktree location](
 - `.apw/plans/` (plan and checkpoint files): saved plan/progress, source-read context, pending mutation and failover cooldowns.
 - `<worktree root>/<workspace-key>/<short-id>/`: retained source snapshot and edits, outside the workspace. Older tasks keep theirs in `.worktrees/<task-id>/`.
 - `.apw/transactions/`: prepared journals and committed apply receipts.
+- `<worktree>/.apw-sandbox/`: sandboxed tool caches and temp files (only with `sandbox.mode` restricted or docker); `<worktree>/.apw/browser/`: browser-check screenshots.
 - `.apw/daemon.json`: local endpoint and authentication token; `daemon.log`: startup/runtime output.
 
 Status performs an authenticated health request and verifies process, workspace and protocol. It never invents a daemon process. `apw daemon start` starts it; `apw daemon stop` requests authenticated shutdown. One service owns the workspace. Jobs interrupted by shutdown/restart remain `interrupted` and require explicit resume; the daemon does not silently repeat model calls. Cancellation terminates process descendants using Windows jobs or Unix process groups. Persistence failure stops the service.
@@ -94,6 +95,83 @@ Security:
 - `worktree_root` must be absolute, must not be a volume root, and must not be inside the workspace.
 
 Legacy compatibility: tasks created before this layout keep working from `<workspace>/.worktrees/<task-id>/`. They resume, apply, export and clean up there; APW never moves or deletes legacy work automatically, and new tasks never create `.worktrees/`. Remove an empty `.worktrees/` by hand once its tasks are applied or cleaned up.
+
+## Verification sandbox
+
+Verification runs repository code: dependency install scripts, linters, builds and tests. The worktree keeps edits away from the source workspace, but by default that code runs as the current user with the full environment. `sandbox` in `apw.json` adds isolation:
+
+```json
+"sandbox": {
+  "mode": "restricted",
+  "network": "install",
+  "memory_mb": 4096,
+  "pass_env": ["NPM_TOKEN"]
+}
+```
+
+| Mode | Isolation |
+| --- | --- |
+| `off` (default) | Previous behavior: commands run as the user with the full environment. |
+| `restricted` (Windows) | Each command runs with a low-integrity copy of the user's token in a job object with UI restrictions (no desktop switching, clipboard, global atoms or foreign USER handles) and the optional memory cap. The worktree is labeled low integrity; its `.git` link and `.apw` manifest stay medium. Project code can write only the worktree: not the source workspace, the main repository's `.git` (so it cannot plant hooks), the snapshot manifest, the user's profile or other projects. |
+| `restricted` (Linux) | bubblewrap (`bwrap`): read-only root file system, writable worktree, private `/tmp`, new namespaces, no network except where allowed. |
+| `docker` | Each stage runs in a fresh container from `sandbox.image` that mounts only the worktree at `/workspace`, drops all capabilities, sets `no-new-privileges` and a pids limit, runs as the user's uid on Linux, and is removed on cancel. The image must contain the project toolchain (for example `node:22` with corepack, `golang:1.27`). |
+
+`network`: `install` (default) gives network only to the dependency-install stage, `none` never, `all` always. Restricted mode on Windows cannot block network access; use `docker` when network isolation matters.
+
+In `restricted` and `docker` modes the command environment is scrubbed: variables whose names contain KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, AUTH, COOKIE, SESSION or PRIVATE, and all `APW_*` variables, are removed unless listed in `pass_env`. Docker passes no host environment at all except `pass_env`. Tool caches and temp files (`TEMP`, `GOCACHE`, npm, pnpm store, yarn, bun, pip, `CARGO_HOME`, XDG directories and, on Windows, `LOCALAPPDATA`) move into `<worktree>/.apw-sandbox`, which is Git-excluded, never counts as a task change and is removed with the worktree.
+
+Costs and limits:
+
+- Caches start cold for every task: the first Go verification rebuilds the standard library (about 10-20 seconds), and pnpm/npm download packages into the task's store. Rust under restricted mode gets a fresh `CARGO_HOME`; with Linux `network: install` a `cargo build` that needs to download crates fails unless dependencies are vendored or `network` is `all`.
+- pnpm 11 and later keep store locks in `%LOCALAPPDATA%\pnpm-store-operation-locks` regardless of environment variables. Restricted mode labels that one directory, which holds only lock files, low integrity so sandboxed pnpm can lock its own store.
+- Low integrity limits writes, not reads: sandboxed code can still read files the user can read. Together with Windows network access this means a hostile test could read and send user data; the scrubbed environment removes the most common secrets from its reach. Use `docker` for untrusted repositories.
+- A sandbox that cannot be prepared (no `bwrap`, no Docker engine, labeling failure) fails verification with stage `sandbox` before any model repair. Reports name the sandbox that was used.
+- None of these modes is a virtual-machine boundary; kernel or container escapes are out of scope.
+
+## Browser check
+
+For client-side web apps (Vite, React, Vue, Svelte, Preact or Solid with a `build` script; not Next.js) and static HTML sites, the pipeline gains a `browser` stage when Microsoft Edge, Google Chrome or Chromium is installed (`APW_BROWSER` can name the executable). After the build, APW serves the build output (`dist/`, `build/` for react-scripts, the site root for static HTML) from its own loopback-only static server and renders `index.html` headlessly:
+
+- It fails on uncaught page errors and on a page with no visible content (the classic blank page after a runtime crash). These failures go to the repair loop like compiler errors.
+- Unhandled promise rejections (for example an API that is offline during verification) and console messages are reported but do not fail.
+- It is skipped when the build produced no `index.html` (library builds).
+- A screenshot is kept at `<worktree>/.apw/browser/index.png`.
+- APW's server is read-only (GET/HEAD), hides `.git`, `.apw` and `.apw-sandbox`, and falls back to `index.html` for client-side routes. No project server code runs; page scripts run inside the browser's own sandbox. With an active `sandbox` the page cannot resolve any host other than APW's server.
+
+Plans can add acceptance checks of kind `browser`: `file` is the page path (default `/`) and `value` is text the rendered page must visibly show, for example `{"criterion":"Counter shows 10","kind":"browser","file":"/","value":"count is 10"}`. The check runs only after verification passes and fails if the page also throws an uncaught error. Disable the stage with `"verify": {"browser": "off"}`.
+
+## Documentation research
+
+With `research` enabled the Architect may read documentation before it plans:
+
+```json
+"research": {
+  "enabled": true,
+  "hosts": ["docs.example.com"],
+  "search": "brave",
+  "search_key_env": "BRAVE_API_KEY",
+  "max_sources": 4
+}
+```
+
+The Architect first answers with the pages it needs (`{"fetch": [...], "search": [...]}`); APW fetches them itself and adds the text to the planning prompt, marked as untrusted reference material whose instructions must not be followed. Rules:
+
+- HTTPS GET only, to hosts on the allowlist: built-in documentation sites (pkg.go.dev, go.dev, docs.rs, developer.mozilla.org, nodejs.org, registry.npmjs.org, react.dev, vite.dev, vitest.dev, typescriptlang.org, docs.python.org, readthedocs.io, learn.microsoft.com and others) plus `research.hosts` (bare host names; subdomains are included). github.com is not on the default list because repository owners can see which paths were fetched.
+- No query strings (they could carry workspace data), credentials, cookies, proxies or custom ports; IP-literal hosts are refused.
+- Connections to private, loopback, link-local, CGNAT and other non-public addresses are refused when connecting, so DNS rebinding cannot reach the local network. At most three redirects, each checked by the same rules.
+- Text responses only, at most 1 MiB downloaded, 12 KiB of text per source and 40 KiB in total. npm and crate registry documents contribute their README.
+- `search: "brave"` sends the Architect's short queries to the Brave Search API with the key from `search_key_env` and adds result titles, URLs and snippets. Result pages are not fetched automatically.
+- Research is best effort: a malformed request or failed fetch only removes that context. Progress events and the report list every source and why it was not used.
+
+Residual risk: a URL path on an allowed host still reaches that host, so a model following hostile instructions in the repository could encode data in a path. Research is off by default; enable it for repositories you trust and keep `hosts` short.
+
+## Plan proposals
+
+```json
+"planning": { "proposals": 3, "judge": true }
+```
+
+With `proposals` greater than 1 and at least two architect candidates (`roles.architect` plus `failover.architect`), up to that many candidates plan in parallel (candidates in a quota cooldown are skipped). Every valid plan gets a rule score from 0 to 100 that predicts whether APW can execute and prove it: each acceptance criterion needs an executable check, verification checks must name real pipeline stages, browser checks need a browser stage, the plan should state verification and an `only_changes` scope, edits should stay within `affected_files`, and smaller plans are preferred. With `judge: true` the primary architect also rates the plans from 0 to 10 and the combined score is the average of both. The highest score runs. `plan.ranking` records every proposal (model, score, reasons, judge rating or error); `apw plan` prints it and task reports list it. Failed candidates are cooled down exactly as in sequential failover. With a single architect candidate, planning is unchanged.
 
 ## Retention and cleanup
 
