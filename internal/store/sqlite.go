@@ -152,12 +152,28 @@ func (s *Store) CountTasks(ctx context.Context) (int, error) {
 }
 
 // Close closes the writer and read-only database handles.
+// OpenReadOnly opens an existing store for inspection only (for example a cleanup dry run):
+// it runs no migrations and both handles are read-only, so the database file is never
+// written and any accidental write fails instead of changing state.
+func OpenReadOnly(path string) (*Store, error) {
+	ro, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)", path))
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite %q read-only: %w", path, err)
+	}
+	ro.SetMaxOpenConns(4)
+	if err := ro.Ping(); err != nil {
+		_ = ro.Close()
+		return nil, fmt.Errorf("open sqlite %q read-only: %w", path, err)
+	}
+	return &Store{db: ro, ro: ro}, nil
+}
+
 func (s *Store) Close() error {
 	var errs []error
 	if s.ro != nil {
 		errs = append(errs, s.ro.Close())
 	}
-	if s.db != nil {
+	if s.db != nil && s.db != s.ro {
 		errs = append(errs, s.db.Close())
 	}
 	return errors.Join(errs...)

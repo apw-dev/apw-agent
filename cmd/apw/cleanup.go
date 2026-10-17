@@ -47,7 +47,12 @@ func runCleanup(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	db, err := store.Open(dbPath)
+	// A dry run must not write: the read-only store skips migrations and WAL checkpoints.
+	openStore := store.Open
+	if options.DryRun {
+		openStore = store.OpenReadOnly
+	}
+	db, err := openStore(dbPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

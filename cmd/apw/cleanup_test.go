@@ -39,6 +39,32 @@ func TestCleanupDryRunAndServiceLease(t *testing.T) {
 	}
 	db.Close()
 
+	// A dry run must leave the database file byte-for-byte untouched (no migrations or checkpoints).
+	dbFile := filepath.Join(root, ".apw", "tasks.db")
+	before, err := os.ReadFile(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeInfo, err := os.Stat(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if code := run([]string{"cleanup", "--config", cfgPath, "--dry-run"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("dry run failed: %d %s", code, stderr.String())
+	}
+	after, err := os.ReadFile(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterInfo, err := os.Stat(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("cleanup --dry-run modified tasks.db")
+	}
+
 	lease, err := workspace.Acquire(root, "service")
 	if err != nil {
 		t.Fatal(err)

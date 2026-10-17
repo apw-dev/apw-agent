@@ -102,3 +102,30 @@ func TestPruneDryRunMatchesAndKeepsProtectedRows(t *testing.T) {
 		t.Fatalf("full compact = %q, %v", action, err)
 	}
 }
+
+func TestOpenReadOnlyRejectsWritesAndSkipsMigrations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasks.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.db.Exec(`DROP INDEX tasks_updated`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	ro, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if err := ro.SetPhase(context.Background(), "task-x", core.StatusFailed); err == nil {
+		t.Fatal("write through a read-only store succeeded")
+	}
+	var n int
+	if err := ro.ro.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='tasks_updated'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("read-only open ran migrations: n=%d err=%v", n, err)
+	}
+	if _, err := OpenReadOnly(filepath.Join(t.TempDir(), "missing.db")); err == nil {
+		t.Fatal("read-only open created a missing database")
+	}
+}
