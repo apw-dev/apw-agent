@@ -76,7 +76,7 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 		instructionCommand := head == "run" || head == "review" || head == "preview" || head == "plan"
 		parseArgs := false
 		switch head {
-		case "verify", "symbols", "resume", "apply", "task", "tasks", "cancel", "trust", "watch", "diff", "recover", "daemon", "model", "models", "config", "auth", "login":
+		case "verify", "symbols", "resume", "apply", "task", "tasks", "cancel", "trust", "watch", "diff", "recover", "cleanup", "daemon", "model", "models", "config", "auth", "login":
 			parseArgs = true
 		}
 		var args []string
@@ -150,6 +150,8 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 			_ = runSubmit(mode, withConfig(args), stdout, stderr)
 		case "resume", "apply", "task", "tasks", "cancel", "trust", "watch", "diff", "recover":
 			_ = runTaskCommand(head, withConfig(args), stdout, stderr)
+		case "cleanup":
+			_ = runCleanup(withConfig(args), stdout, stderr)
 		case "verify":
 			if len(args) == 0 {
 				args = withConfig(args)

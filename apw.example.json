@@ -37,5 +37,13 @@
   },
   "policy": {
     "trusted": false
+  },
+  "retention": {
+    "succeeded_days": 14,
+    "failed_days": 30,
+    "outbox_sent_days": 7,
+    "inbox_keep": 1000,
+    "log_max_mb": 8,
+    "auto_cleanup": false
   }
 }

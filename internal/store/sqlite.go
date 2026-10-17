@@ -20,7 +20,8 @@ type Store struct {
 
 // Open opens or creates a SQLite database at path with WAL mode and busy_timeout enabled.
 func Open(path string) (*Store, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", path)
+	// auto_vacuum only takes effect for a new database (or after VACUUM); it lets retention return freed pages incrementally.
+	dsn := fmt.Sprintf("file:%s?_pragma=auto_vacuum(incremental)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)

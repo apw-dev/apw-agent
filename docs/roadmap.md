@@ -33,7 +33,7 @@ Remaining before claiming all supported transports and channels production ready
 - Opt-in real-provider run for each supported transport: API/local, AGY, Claude CLI, Codex CLI.
 - Obtain model identity evidence where the provider exposes it; AGY currently accepts an explicit model argument but emits no identity metadata. Verify real quota/reset behavior with the relevant account; offline error classification does not establish account quota accuracy.
 - Complete a clean Windows VM install check; the portable/upgrade checks on this host have a narrower scope.
-- Define retention/export/cleanup for completed worktrees, events and reports; preserve legacy task work before cleanup.
+- Retention/cleanup: policy and explicit `apw cleanup [--dry-run]` are implemented (see [task lifecycle](task-lifecycle.md#retention-and-cleanup)); legacy task work stays protected. Remaining: a dry run and cleanup on the real workspace, reviewing the listed protections before removal.
 - Verify the existing Telegram channel against the real service before declaring live chat delivery complete. Discord remains a separate future adapter.
 
 Unconfigured lanes require external service access and appropriate credentials. Desktop work remains deferred; passing the selected CLI workflow does not close unrelated transport/channel gates.

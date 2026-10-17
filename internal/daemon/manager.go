@@ -15,6 +15,7 @@ import (
 
 	"github.com/apiwat/apw-agent/internal/buildinfo"
 	"github.com/apiwat/apw-agent/internal/config"
+	"github.com/apiwat/apw-agent/internal/retention"
 	"github.com/apiwat/apw-agent/internal/transport"
 )
 
@@ -114,6 +115,8 @@ func Connect(ctx context.Context, cfgPath string) (*transport.Client, error) {
 	if err := os.MkdirAll(filepath.Join(cfg.Workspace, ".apw"), 0700); err != nil {
 		return nil, err
 	}
+	// No healthy daemon owns the log here. Rotation is best effort: a failure keeps appending.
+	_, _ = retention.RotateLog(cfg.Workspace, retention.Resolve(cfg.Retention).LogMaxBytes, false)
 	logFile, err := os.OpenFile(filepath.Join(cfg.Workspace, ".apw", "daemon.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err

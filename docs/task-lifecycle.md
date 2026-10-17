@@ -71,6 +71,58 @@ Model/trust changes in the daemon's configuration file are reloaded before new w
 
 Legacy checkpoints without a matching snapshot manifest are preserved but cannot safely apply/resume through the new pipeline. Inspect their worktree and review/export their diff manually before creating a new task. Do not delete a worktree containing needed changes.
 
+## Retention and cleanup
+
+Nothing is deleted while a task runs, and nothing is deleted silently by default. Cleanup is an explicit command that runs with the workspace service lease, so it refuses while the daemon owns the workspace:
+
+```powershell
+apw cleanup --dry-run            # list what would be removed and why others are kept
+apw daemon stop
+apw cleanup                      # remove eligible state
+apw cleanup --export-unapplied   # export unapplied worktree changes to .apw/recovery first, then remove
+apw cleanup --vacuum             # also rebuild tasks.db (VACUUM) to return freed pages to the OS
+```
+
+`--dry-run` is read-only and also works while the daemon runs. `--json` prints the machine-readable report.
+
+Eligible tasks (age is measured from the task's last status change):
+
+| State | Default age | Notes |
+| --- | --- | --- |
+| `succeeded` (applied, or review/verify) | 14 days | Applied work already lives in the source workspace. |
+| `failed`, `cancelled`, `provider_unavailable` | 30 days | After cleanup the task can no longer be resumed. |
+
+Never removed automatically, whatever its age:
+
+- `ready_to_apply`, `preview_ready`, `interrupted` and every non-terminal state (resumable or unapplied work).
+- Task IDs in `retention.protect_tasks`, and the legacy task `task-1792166521189239500`.
+- Any worktree without a snapshot manifest (legacy work): export it with `apw recover` and remove it by hand after review.
+- A task whose apply journal is not finalized (`prepared`); service startup recovery owns it.
+- A task with more than one checkpoint, a worktree whose HEAD moved past the snapshot base (commits were made inside it), a worktree not registered with Git, or one reached through a link/junction.
+- A worktree that contains unapplied changes relative to its snapshot, unless a completed export already exists in `.apw/recovery/<task-id>-*` or `--export-unapplied` produces one first. If the export fails, the worktree stays.
+- Unknown directories under `.worktrees/` (listed as orphans, never removed).
+- The source workspace itself, `.apw/recovery` exports, conversation history, configuration and committed apply receipts.
+
+For an eligible task cleanup removes, in order: the worktree through `git worktree remove --force` and its `apw/` branch through `git branch -D` (both through the bounded Git runner, only after confirming the registered path, branch and base commit), the task's `.apw/plans/<plan>.json` and `.checkpoint.json`, and a `rolled_back` apply journal. Committed apply receipts stay because they prove the task was applied. Only when every file step succeeded does one SQLite transaction delete the task's events and clear its report BLOB; the `tasks`/`task_runs` rows keep status and error, and a single `retention` event records the pruning. A failed step leaves that task's evidence for the next run.
+
+The same transaction deletes delivered Telegram outbox rows older than 7 days (undelivered rows are kept) and keeps only the newest 1000 inbox update IDs per account, which preserves the Telegram offset and recent deduplication. Afterwards SQLite runs `incremental_vacuum` when the database uses incremental auto-vacuum (new databases do), or a full `VACUUM` with `--vacuum`. `.apw/daemon.log` is rotated to `daemon.log.1` (one rotated file kept) when it exceeds 8 MiB, both when the CLI starts the daemon and during cleanup.
+
+Configuration (`apw.json`; omitted or `0` uses the default, a negative value disables that rule):
+
+```json
+"retention": {
+  "succeeded_days": 14,
+  "failed_days": 30,
+  "outbox_sent_days": 7,
+  "inbox_keep": 1000,
+  "log_max_mb": 8,
+  "auto_cleanup": false,
+  "protect_tasks": []
+}
+```
+
+`auto_cleanup: true` makes `apwd` run the same conservative pass once at startup, before it accepts requests. It never exports, never runs a full `VACUUM` and never rotates its own log; results go to `daemon.log`.
+
 ## Telegram
 
 Set `APW_TELEGRAM_TOKEN` and `APW_TELEGRAM_ALLOW` (comma-separated numeric user IDs) before starting `apwd`. Commands are restricted to allowlisted private users and that workspace; each user's tasks are isolated by owner:

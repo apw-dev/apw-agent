@@ -109,6 +109,18 @@ type Config struct {
 		MaxRepairs     int `json:"max_repairs"`      // default 3
 		TaskTimeoutSec int `json:"task_timeout_sec"` // default 600
 	} `json:"budget"`
+	Retention RetentionConfig `json:"retention,omitzero"`
+}
+
+// RetentionConfig bounds retained task state. Zero selects the default; a negative value disables that rule.
+type RetentionConfig struct {
+	SucceededDays  int      `json:"succeeded_days,omitempty"`   // default 14
+	FailedDays     int      `json:"failed_days,omitempty"`      // failed/cancelled/provider_unavailable; default 30
+	OutboxSentDays int      `json:"outbox_sent_days,omitempty"` // delivered Telegram replies; default 7
+	InboxKeep      int      `json:"inbox_keep,omitempty"`       // newest Telegram update IDs per account; default 1000
+	LogMaxMB       int      `json:"log_max_mb,omitempty"`       // daemon.log rotation threshold; default 8
+	AutoCleanup    bool     `json:"auto_cleanup,omitempty"`     // conservative pass at daemon startup
+	ProtectTasks   []string `json:"protect_tasks,omitempty"`
 }
 
 // FailoverConfig lists explicitly allowed fallback providers, in priority order.
