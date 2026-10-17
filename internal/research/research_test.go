@@ -144,7 +144,7 @@ func TestSearchAndRun(t *testing.T) {
 	if !strings.Contains(ctxText, "UNTRUSTED") || !strings.Contains(ctxText, "doc /a") || !strings.Contains(ctxText, "web search: vite config outDir") {
 		t.Fatalf("context = %s", ctxText)
 	}
-	if !strings.Contains(c.Prompt("task", "overview"), `"search": ["short web search query"`) {
+	if !strings.Contains(c.PromptRules(), `"search": ["short web search query"`) || c.MaxSources() != 3 {
 		t.Fatal("prompt does not offer search")
 	}
 }

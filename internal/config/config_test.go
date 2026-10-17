@@ -298,6 +298,7 @@ func TestSandboxResearchPlanningConfig(t *testing.T) {
 		"host with scheme": `"research":{"hosts":["https://docs.example.com"]}`,
 		"too many sources": `"research":{"max_sources":11}`,
 		"proposals":        `"planning":{"proposals":6}`,
+		"lookup":           `"planning":{"lookup":"sometimes"}`,
 	} {
 		if _, err := Load(writeTempConfig(t, fmt.Sprintf(base, body))); err == nil {
 			t.Fatalf("%s: invalid config accepted", name)

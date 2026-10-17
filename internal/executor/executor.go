@@ -106,6 +106,9 @@ type Executor struct {
 	// also asks the primary architect to rate them.
 	Proposals      int
 	JudgeProposals bool
+	// Lookup is apw.json planning.lookup: "auto" (default) offers read-only code lookup when the
+	// code context was truncated, "always" always, "off" never.
+	Lookup string
 }
 
 // Profile detects the project at root, applying any configured verification override.
@@ -225,7 +228,7 @@ func (e *Executor) formatReportSummary(instruction string, plan *architect.Execu
 		}
 	}
 	if len(e.ResearchSources) > 0 {
-		sb.WriteString("\n#### 📚 Documentation read before planning:\n")
+		sb.WriteString("\n#### 📚 Context gathered before planning:\n")
 		for _, s := range e.ResearchSources {
 			label := s.URL
 			if s.Query != "" {

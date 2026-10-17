@@ -70,6 +70,7 @@ func configurePlanning(e *executor.Executor, cfg *config.Config) {
 	e.Research = research.New(cfg.Research)
 	e.Proposals = cfg.Planning.Proposals
 	e.JudgeProposals = cfg.Planning.Judge
+	e.Lookup = cfg.Planning.Lookup
 }
 
 func NewID() string {

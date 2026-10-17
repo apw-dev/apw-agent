@@ -165,6 +165,12 @@ The Architect first answers with the pages it needs (`{"fetch": [...], "search":
 
 Residual risk: a URL path on an allowed host still reaches that host, so a model following hostile instructions in the repository could encode data in a path. Research is off by default; enable it for repositories you trust and keep `hosts` short.
 
+## Project instructions and planning context
+
+- **Project instructions:** the first of `APW.md` or `AGENTS.md` in the workspace root (read like any source file: links refused, at most 12 KiB) is added to planning, review and patch prompts. Use it for conventions such as language, style, folder layout or test commands to prefer. It comes from the repository, so the prompt states that it never overrides APW's rules, the response format or the user's task; APW's checks enforce those rules regardless of any prompt.
+- **Code lookup:** when the code context does not fit the prompt (96 KiB; files that did not fit are listed by name), the Architect may first ask for read-only lookups in the same pre-planning request as documentation research: `grep` (RE2 pattern, optional glob), `glob` (for example `src/**/*.test.ts`) and `read` (a file and line range, at most 300 lines). At most six lookups run, each bounded (40 matches, 200 files, 240 characters per line) and 32 KiB in total. Lookups read the source workspace only: no repository code runs, `.git`, `.apw`, `.env*`, key files, dependency and build directories stay invisible, and links are not followed. `"planning": {"lookup": "always"}` offers lookup on every task and `"off"` disables it (default `"auto"`).
+- **Session memory:** conversation sessions stay bounded however long they run. The last three turns are shown in detail, older turns as one-line digests (outcome, request, files) within 3 KiB, turns that leave the 50-turn history survive as digests (at most 30), and only the newest 40 changed files are listed. Compaction is deterministic and never calls a model.
+
 ## Plan proposals
 
 ```json

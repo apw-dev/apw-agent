@@ -14,6 +14,9 @@ import (
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
+// contextTruncatedMarker starts the index of files that did not fit the code context.
+const contextTruncatedMarker = "[context budget reached;"
+
 const (
 	contextBudget    = 96 * 1024
 	contextFileLimit = 48 * 1024
@@ -102,7 +105,7 @@ func CodeContext(root string) string {
 		fmt.Fprintf(&b, "\nFile: %s\n```\n%s\n```\n", filepath.ToSlash(rel), data)
 	}
 	if len(omitted) > 0 {
-		b.WriteString("\n[context budget reached; these files exist but were not included (plan a read step to see one):\n")
+		b.WriteString("\n" + contextTruncatedMarker + " these files exist but were not included (plan a read step to see one):\n")
 		written := 0
 		for i, rel := range omitted {
 			line := filepath.ToSlash(rel) + "\n"

@@ -16,57 +16,139 @@ import (
 	"github.com/apiwat/apw-agent/internal/research"
 )
 
-// researchContext lets the Architect request documentation before planning (apw.json research).
-// Research is best effort: a failed request or fetch only removes that context, except that
-// cancellation is returned.
-func (e *Executor) researchContext(ctx context.Context, task core.Task, overview string) (string, error) {
+// contextRequest is the Architect's pre-planning request: documentation (research) and read-only
+// code lookups (grep, glob, read). Each part is honored only when that capability is enabled.
+type contextRequest struct {
+	Fetch  []string    `json:"fetch"`
+	Search []string    `json:"search"`
+	Grep   []grepQuery `json:"grep"`
+	Glob   []string    `json:"glob"`
+	Read   []readRange `json:"read"`
+}
+
+// lookupWanted reports whether the Architect gets code lookup: planning.lookup "always", or "auto"
+// (default) when the code context did not fit the prompt.
+func (e *Executor) lookupWanted(overview string) bool {
+	switch e.Lookup {
+	case "off":
+		return false
+	case "always":
+		return true
+	}
+	return strings.Contains(overview, contextTruncatedMarker)
+}
+
+func (e *Executor) gatherPrompt(instruction, overview string, lookup bool) string {
+	limit := lookupMaxQueries
+	if e.Research != nil && e.Research.MaxSources() > limit {
+		limit = e.Research.MaxSources()
+	}
+	var abilities []string
+	keys := []string{}
+	if lookup {
+		abilities = append(abilities, `Code lookup (read-only searches of the source workspace): "grep": [{"pattern":"RE2 regular expression","glob":"optional, e.g. src/**/*.ts"}], "glob": ["src/**/*.test.ts"], "read": [{"file":"relative/path","start":1,"end":120}]. Use it to see files the code context below omits or truncates.`)
+		keys = append(keys, `"grep":[]`, `"glob":[]`, `"read":[]`)
+	}
+	if e.Research != nil {
+		abilities = append(abilities, e.Research.PromptRules())
+		keys = append(keys, `"fetch":[]`, `"search":[]`)
+		if !lookup {
+			overview = headUTF8(overview, 24*1024)
+		}
+	}
+	return fmt.Sprintf(`You are the ARCHITECT in the APW Triad Agent Engine, preparing to plan a code change.
+Before planning you may gather more context in one request. Ask only for what materially helps with this task; use at most %d items in total. If you need nothing, return empty lists.
+
+Available:
+- %s
+
+User Task:
+%s
+
+Codebase Overview:
+%s
+
+Respond with ONLY a JSON object: {%s}`, limit, strings.Join(abilities, "\n- "), instruction, overview, strings.Join(keys, ","))
+}
+
+// gatherContext lets the Architect request documentation (apw.json research) and read-only code
+// lookups before planning. It is best effort: a failed request or fetch only removes that context,
+// except that cancellation is returned.
+func (e *Executor) gatherContext(ctx context.Context, task core.Task, overview string) (string, error) {
 	e.ResearchSources = nil
-	if e.Research == nil {
+	lookup := e.lookupWanted(overview)
+	if e.Research == nil && !lookup {
 		return "", nil
 	}
-	e.emit(ProgressEvent{Stage: "research", Message: "Asking the architect which documentation to read"})
-	var req research.Request
+	e.emit(ProgressEvent{Stage: "research", Message: "Asking the architect which context to gather before planning"})
+	var req contextRequest
+	prompt := e.gatherPrompt(task.Instruction, overview, lookup)
 	err := e.withArchitectFailover(ctx, "research", func(ctx context.Context, c FailoverCandidate) error {
-		resp, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: task.ID + "-research", Model: c.Model, Prompt: e.Research.Prompt(task.Instruction, overview)})
+		resp, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: task.ID + "-research", Model: c.Model, Prompt: prompt})
 		if err != nil {
 			return err
 		}
 		if resp == nil || !resp.Completed || strings.TrimSpace(resp.Content) == "" {
 			return errReviewIncomplete
 		}
-		req, err = research.ParseRequest(resp.Content)
-		return err
+		raw := resp.Content
+		start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
+		if start < 0 || end <= start {
+			return errors.New("context request has no JSON object")
+		}
+		req = contextRequest{}
+		if err := json.Unmarshal([]byte(raw[start:end+1]), &req); err != nil {
+			return fmt.Errorf("context request: %w", err)
+		}
+		return nil
 	})
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
 	if err != nil {
-		e.emit(ProgressEvent{Stage: "research_skipped", Message: "Planning without external documentation: " + err.Error()})
+		e.emit(ProgressEvent{Stage: "research_skipped", Message: "Planning without extra context: " + err.Error()})
 		return "", nil
 	}
-	if len(req.Fetch)+len(req.Search) == 0 {
-		e.emit(ProgressEvent{Stage: "research_done", Message: "No external documentation requested"})
-		return "", nil
+	var out strings.Builder
+	if lookup && len(req.Grep)+len(req.Glob)+len(req.Read) > 0 {
+		text, labels := e.codeLookup(ctx, req.Grep, req.Glob, req.Read)
+		for _, label := range labels {
+			e.ResearchSources = append(e.ResearchSources, research.Source{Query: "code " + label})
+			e.emit(ProgressEvent{Stage: "research_source", Message: "code " + label})
+		}
+		out.WriteString(text)
 	}
-	e.ResearchSources = e.Research.Run(ctx, req)
-	if ctx.Err() != nil {
-		return "", ctx.Err()
+	if e.Research != nil && len(req.Fetch)+len(req.Search) > 0 {
+		sources := e.Research.Run(ctx, research.Request{Fetch: req.Fetch, Search: req.Search})
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		for _, s := range sources {
+			label := s.URL
+			if s.Query != "" {
+				label = "search: " + s.Query
+			}
+			if s.Error != "" {
+				e.emit(ProgressEvent{Stage: "research_source", Message: label + " — " + s.Error})
+			} else {
+				e.emit(ProgressEvent{Stage: "research_source", Message: fmt.Sprintf("%s — %d bytes", label, s.Bytes)})
+			}
+		}
+		e.ResearchSources = append(e.ResearchSources, sources...)
+		out.WriteString(research.Context(sources))
 	}
-	read := 0
+	used := 0
 	for _, s := range e.ResearchSources {
-		label := s.URL
-		if s.Query != "" {
-			label = "search: " + s.Query
+		if s.Error == "" {
+			used++
 		}
-		if s.Error != "" {
-			e.emit(ProgressEvent{Stage: "research_source", Message: label + " — " + s.Error})
-			continue
-		}
-		read++
-		e.emit(ProgressEvent{Stage: "research_source", Message: fmt.Sprintf("%s — %d bytes", label, s.Bytes)})
 	}
-	e.emit(ProgressEvent{Stage: "research_done", Message: fmt.Sprintf("Read %d of %d requested documentation sources", read, len(e.ResearchSources))})
-	return research.Context(e.ResearchSources), nil
+	if len(e.ResearchSources) == 0 {
+		e.emit(ProgressEvent{Stage: "research_done", Message: "No extra context requested"})
+	} else {
+		e.emit(ProgressEvent{Stage: "research_done", Message: fmt.Sprintf("Gathered %d of %d requested context items", used, len(e.ResearchSources))})
+	}
+	return out.String(), nil
 }
 
 type proposal struct {

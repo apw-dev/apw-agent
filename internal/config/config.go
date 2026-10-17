@@ -148,6 +148,9 @@ type ResearchConfig struct {
 type PlanningConfig struct {
 	Proposals int  `json:"proposals,omitempty"`
 	Judge     bool `json:"judge,omitempty"` // ask the primary architect to score the proposals too
+	// Lookup offers the Architect read-only grep/glob/read before planning: "auto" (default) when
+	// the code context was truncated, "always", or "off".
+	Lookup string `json:"lookup,omitempty"`
 }
 
 // VerifyConfig overrides the detected verification pipeline. It is how a project in
@@ -419,6 +422,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Research.MaxSources < 0 || c.Research.MaxSources > 10 {
 		return errors.New("config: research.max_sources must be between 0 and 10")
+	}
+	switch c.Planning.Lookup {
+	case "", "auto", "always", "off":
+	default:
+		return fmt.Errorf("config: planning.lookup %q must be auto, always or off", c.Planning.Lookup)
 	}
 	if c.Planning.Proposals < 0 || c.Planning.Proposals > 5 {
 		return errors.New("config: planning.proposals must be between 0 and 5")

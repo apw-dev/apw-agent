@@ -277,7 +277,7 @@ func (e *Executor) withArchitectFailover(ctx context.Context, stage string, atte
 // With research enabled the Architect may first read documentation; with planning.proposals > 1
 // and several architect candidates, plans are proposed in parallel and ranked.
 func (e *Executor) PlanTask(ctx context.Context, task core.Task, overview string) (*architect.ExecutionPlan, error) {
-	docs, err := e.researchContext(ctx, task, overview)
+	docs, err := e.gatherContext(ctx, task, overview)
 	if err != nil {
 		return nil, err
 	}

@@ -160,7 +160,7 @@ func TestResearchRunsBeforePlanning(t *testing.T) {
 	if err != nil || plan.Objective != "change greeting" {
 		t.Fatalf("plan = %+v err = %v", plan, err)
 	}
-	if !strings.Contains(arch.prompts[0], "read external documentation") || len(ex.ResearchSources) != 2 {
+	if !strings.Contains(arch.prompts[0], "Documentation (external") || len(ex.ResearchSources) != 2 {
 		t.Fatalf("research prompt/sources: %q %+v", arch.prompts[0], ex.ResearchSources)
 	}
 	for _, s := range ex.ResearchSources {
@@ -171,7 +171,7 @@ func TestResearchRunsBeforePlanning(t *testing.T) {
 	if strings.Contains(arch.prompts[1], "External documentation") {
 		t.Fatal("failed sources added documentation context")
 	}
-	if !strings.Contains(strings.Join(stages, "\n"), "research_done: Read 0 of 2") {
+	if !strings.Contains(strings.Join(stages, "\n"), "research_done: Gathered 0 of 2") {
 		t.Fatalf("progress = %v", stages)
 	}
 

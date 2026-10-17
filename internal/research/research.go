@@ -345,25 +345,17 @@ func (c *Client) Run(ctx context.Context, req Request) []Source {
 // SearchEnabled reports whether web search can run.
 func (c *Client) SearchEnabled() bool { return c.search != "" && c.searchKey != "" }
 
-// Prompt asks the Architect which documentation it needs before planning.
-func (c *Client) Prompt(instruction, overview string) string {
+// PromptRules describes the documentation part of the Architect's pre-planning request.
+func (c *Client) PromptRules() string {
 	search := `"search": [] (web search is not available)`
 	if c.SearchEnabled() {
 		search = `"search": ["short web search query", ...]`
 	}
-	return fmt.Sprintf(`You are the ARCHITECT in the APW Triad Agent Engine, preparing to plan a code change.
-Before planning you may read external documentation. Ask only for pages that materially help with this task, such as API references for libraries the change uses. Ask for at most %d items.
-Rules: https URLs on documentation sites (for example pkg.go.dev, docs.rs, developer.mozilla.org, react.dev, vite.dev, registry.npmjs.org/<package>); no query strings; never put workspace content, secrets or identifiers from the code into URLs or queries.
-If no documentation is needed, return empty lists.
-
-User Task:
-%s
-
-Codebase Overview:
-%s
-
-Respond with ONLY a JSON object: {"fetch": ["https://..."], %s}`, c.maxSources, instruction, clipText(overview, 24*1024), search)
+	return `Documentation (external, read by APW for you): "fetch": ["https://..."] with https URLs on documentation sites (for example pkg.go.dev, docs.rs, developer.mozilla.org, react.dev, vite.dev, registry.npmjs.org/<package>), no query strings; ` + search + `. Never put workspace content, secrets or identifiers from the code into URLs or queries.`
 }
+
+// MaxSources is the most documentation items one request may use.
+func (c *Client) MaxSources() int { return c.maxSources }
 
 // ParseRequest extracts the JSON research request from a model response.
 func ParseRequest(raw string) (Request, error) {
