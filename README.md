@@ -154,6 +154,9 @@ APW ตรวจชนิดโปรเจกต์จากไฟล์ที�
 - **typecheck:** ใช้ script `typecheck` ถ้ามี ไม่มีแต่มี `tsconfig.json` กับ `typescript` จะรัน `tsc --noEmit` (ข้ามถ้า script `build` รัน `tsc` อยู่แล้ว เช่น template ของ Vite)
 - **test:** รันด้วย `CI=true` เพื่อให้ Vitest และ Jest รันครั้งเดียว ไม่ค้างใน watch mode
 - **ข้อกำหนด:** `node_modules/` และไฟล์ output ของ build (`dist/`) ต้องอยู่ใน `.gitignore` ไม่อย่างนั้น APW จะนับเป็นไฟล์ที่เปลี่ยนโดยไม่ได้วางแผน
+- **pnpm 10 ขึ้นไป:** pnpm บล็อก build script ของ dependency (เช่น esbuild ที่ Vite ใช้) และ install จะล้มด้วย `ERR_PNPM_IGNORED_BUILDS` ให้รัน `pnpm approve-builds esbuild` ครั้งเดียว แล้ว commit `pnpm-workspace.yaml` ที่ได้ (`allowBuilds: esbuild: true`)
+- **ไม่ให้ test runner ไปรันสำเนาใน `.worktrees/`:** APW เก็บ worktree ของแต่ละงานไว้ใน `.worktrees/` ของโปรเจกต์ ซึ่ง Vitest, Jest และ `eslint .` จะค้นเจอด้วย ให้ exclude โฟลเดอร์นี้ เช่นใน `vite.config.ts`: `test: { exclude: [...configDefaults.exclude, '.worktrees/**'] }` (import `configDefaults` จาก `vitest/config`) และลบงานเก่าด้วย `apw cleanup`
+- **Path บน Windows:** worktree อยู่ลึกกว่าโฟลเดอร์โปรเจกต์ราว 50 ตัวอักษร และ dependency ของ pnpm ซ้อนลึกมาก ควรวางโปรเจกต์ไว้ใน path สั้น (เช่น `D:\src\app`) ไม่อย่างนั้นอาจติดข้อจำกัด 260 ตัวอักษร ซึ่ง APW จะแจ้งไว้ใน error
 
 **ภาษาอื่นหรือ framework ที่เขียนเอง:** กำหนด pipeline เองใน `apw.json` ได้ ค่านี้จะแทน pipeline ที่ตรวจเจอ แต่ละขั้นเป็นคำสั่งแบบ argument vector (ไม่ผ่าน shell) และชื่อขั้นใช้ใน acceptance check ได้ เช่น `{"kind":"verification","value":"test"}`:
 
