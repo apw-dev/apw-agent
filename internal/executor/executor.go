@@ -15,6 +15,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/provider"
 	"github.com/apiwat/apw-agent/internal/reflex"
+	"github.com/apiwat/apw-agent/internal/research"
 	"github.com/apiwat/apw-agent/internal/sandbox"
 	"github.com/apiwat/apw-agent/internal/session"
 	"github.com/apiwat/apw-agent/internal/surgeon"
@@ -46,6 +47,7 @@ type ExecutionReport struct {
 	Acceptance     []CheckResult              `json:"acceptance,omitempty"`
 	Applied        bool                       `json:"applied"`
 	Diagnostics    *DiagnosticComparison      `json:"diagnostic_comparison,omitempty"`
+	Research       []research.Source          `json:"research,omitempty"`
 }
 
 // ProgressEvent describes a real-time progress update during Triad execution.
@@ -96,6 +98,14 @@ type Executor struct {
 	Sandbox sandbox.Policy
 	// BrowserCheck is apw.json verify.browser: "off" drops the headless page check.
 	BrowserCheck string
+	// Research, when set, lets the Architect read allowlisted documentation before planning.
+	Research *research.Client
+	// ResearchSources lists what the last planning run fetched (text omitted from reports).
+	ResearchSources []research.Source
+	// Proposals > 1 asks that many architect candidates for plans and ranks them; JudgeProposals
+	// also asks the primary architect to rate them.
+	Proposals      int
+	JudgeProposals bool
 }
 
 // Profile detects the project at root, applying any configured verification override.
@@ -199,6 +209,34 @@ func (e *Executor) formatReportSummary(instruction string, plan *architect.Execu
 		sb.WriteString(fmt.Sprintf("- 📊 สถิติการทำงาน: อ่านบริบท %d จุด, ผ่าตัดโค้ด %d จุด, สร้างไฟล์ใหม่ %d จุด\n", reads, patches, creates))
 	} else {
 		sb.WriteString(fmt.Sprintf("- ❌ การตรวจสอบไม่ผ่านหลังจากใช้เวลา %v\n", duration.Round(time.Millisecond)))
+	}
+	if r := plan.Ranking; r != nil {
+		sb.WriteString("\n#### 🧭 Plan proposals:\n")
+		for i, p := range r.Proposals {
+			mark := ""
+			if i == r.Chosen {
+				mark = " (chosen)"
+			}
+			if p.Error != "" {
+				sb.WriteString(fmt.Sprintf("- %s: failed — %s\n", p.Model, p.Error))
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("- %s%s: score %d, %d steps — %s\n", p.Model, mark, p.Score, p.Steps, p.Objective))
+		}
+	}
+	if len(e.ResearchSources) > 0 {
+		sb.WriteString("\n#### 📚 Documentation read before planning:\n")
+		for _, s := range e.ResearchSources {
+			label := s.URL
+			if s.Query != "" {
+				label = "search: " + s.Query
+			}
+			if s.Error != "" {
+				sb.WriteString(fmt.Sprintf("- %s — not used: %s\n", label, s.Error))
+			} else {
+				sb.WriteString(fmt.Sprintf("- %s (%d bytes)\n", label, s.Bytes))
+			}
+		}
 	}
 	return sb.String()
 }

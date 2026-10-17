@@ -274,9 +274,19 @@ func (e *Executor) withArchitectFailover(ctx context.Context, stage string, atte
 
 // PlanTask asks the architect pool for an execution plan, failing over to the
 // explicitly configured architect fallbacks.
+// With research enabled the Architect may first read documentation; with planning.proposals > 1
+// and several architect candidates, plans are proposed in parallel and ranked.
 func (e *Executor) PlanTask(ctx context.Context, task core.Task, overview string) (*architect.ExecutionPlan, error) {
+	docs, err := e.researchContext(ctx, task, overview)
+	if err != nil {
+		return nil, err
+	}
+	overview += docs
+	if e.Proposals > 1 && len(e.architectCandidates()) > 1 {
+		return e.planProposals(ctx, task, overview)
+	}
 	var plan *architect.ExecutionPlan
-	err := e.withArchitectFailover(ctx, "planning", func(ctx context.Context, c FailoverCandidate) error {
+	err = e.withArchitectFailover(ctx, "planning", func(ctx context.Context, c FailoverCandidate) error {
 		a := architect.NewArchitect(c.Provider)
 		a.Model = c.Model
 		p, err := a.Plan(ctx, task, overview)

@@ -278,3 +278,29 @@ func TestWorktreeRootConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestSandboxResearchPlanningConfig(t *testing.T) {
+	base := `{"providers":{"m":{"type":"mock"}},"roles":{"architect":"m","reflex":"m"},%s}`
+	cfg, err := Load(writeTempConfig(t, fmt.Sprintf(base, `"sandbox":{"mode":"docker","image":"node:22","network":"none","memory_mb":2048,"pass_env":["NPM_TOKEN"]},"research":{"enabled":true,"hosts":["docs.example.com"],"search":"brave","max_sources":3},"planning":{"proposals":3,"judge":true},"verify":{"browser":"off"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sandbox.Image != "node:22" || cfg.Sandbox.PassEnv[0] != "NPM_TOKEN" || !cfg.Research.Enabled || cfg.Planning.Proposals != 3 || !cfg.Planning.Judge || cfg.Verify.Browser != "off" {
+		t.Fatalf("config not loaded: %+v", cfg)
+	}
+	for name, body := range map[string]string{
+		"sandbox mode":     `"sandbox":{"mode":"vm"}`,
+		"docker no image":  `"sandbox":{"mode":"docker"}`,
+		"sandbox network":  `"sandbox":{"network":"some"}`,
+		"negative memory":  `"sandbox":{"memory_mb":-1}`,
+		"browser":          `"verify":{"browser":"always"}`,
+		"search provider":  `"research":{"search":"google"}`,
+		"host with scheme": `"research":{"hosts":["https://docs.example.com"]}`,
+		"too many sources": `"research":{"max_sources":11}`,
+		"proposals":        `"planning":{"proposals":6}`,
+	} {
+		if _, err := Load(writeTempConfig(t, fmt.Sprintf(base, body))); err == nil {
+			t.Fatalf("%s: invalid config accepted", name)
+		}
+	}
+}

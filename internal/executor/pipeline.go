@@ -173,7 +173,7 @@ func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionRep
 func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.ExecutionPlan, wt *surgeon.Worktree, completed int, files []string, instruction string) (*ExecutionReport, error) {
 	start := time.Now()
 	modified := append([]string{}, files...)
-	report := &ExecutionReport{TaskID: plan.TaskID, Plan: plan, Mode: e.Mode, WorktreePath: wt.Path, Baseline: e.VerificationBaseline, Steps: append([]StepReport{}, e.RecoveredSteps...)}
+	report := &ExecutionReport{TaskID: plan.TaskID, Plan: plan, Mode: e.Mode, WorktreePath: wt.Path, Baseline: e.VerificationBaseline, Steps: append([]StepReport{}, e.RecoveredSteps...), Research: e.ResearchSources}
 	save := func() error {
 		report.ModifiedFiles = append([]string{}, modified...)
 		report.Duration = time.Since(start)

@@ -21,6 +21,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/executor"
 	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/provider/factory"
+	"github.com/apiwat/apw-agent/internal/research"
 	"github.com/apiwat/apw-agent/internal/sandbox"
 	"github.com/apiwat/apw-agent/internal/store"
 	"github.com/apiwat/apw-agent/internal/surgeon"
@@ -62,6 +63,13 @@ type Service struct {
 	cfgCache     *config.Config
 	cfgMod       time.Time
 	cfgSize      int64
+}
+
+// configurePlanning applies apw.json research and planning settings to an executor.
+func configurePlanning(e *executor.Executor, cfg *config.Config) {
+	e.Research = research.New(cfg.Research)
+	e.Proposals = cfg.Planning.Proposals
+	e.JudgeProposals = cfg.Planning.Judge
 }
 
 func NewID() string {
@@ -355,6 +363,7 @@ func (s *Service) run(j *store.Job) {
 		e.WorktreeRoot = cfg.WorktreeRoot
 		e.Sandbox = sandbox.FromConfig(cfg.Sandbox)
 		e.BrowserCheck = cfg.Verify.Browser
+		configurePlanning(e, cfg)
 
 		e.TaskID = j.ID
 		e.Mode = core.TaskMode(j.Mode)
@@ -482,6 +491,9 @@ func (s *Service) Plan(ctx context.Context, owner, instruction string) (*archite
 	defer closeProvider()
 	closeFallbacks, _ := e.AddArchitectFallbacks(cfg) // unusable fallbacks must not block planning
 	defer closeFallbacks()
+	e.VerifyOverride = project.FromConfig(cfg.Verify)
+	e.BrowserCheck = cfg.Verify.Browser
+	configurePlanning(e, cfg)
 	return e.PlanTask(ctx, core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: instruction, Mode: "preview"}, executor.ProjectOverview(cfg.Workspace, executor.ConfiguredProfile(cfg.Workspace, cfg.Verify)))
 }
 

@@ -47,6 +47,8 @@ type ExecutionPlan struct {
 	AcceptanceCriteria []string          `json:"acceptance_criteria"`
 	Checks             []AcceptanceCheck `json:"checks,omitempty"`
 	CreatedAt          time.Time         `json:"created_at"`
+	// Ranking is set by APW when several models proposed plans (planning.proposals).
+	Ranking *PlanRanking `json:"ranking,omitempty"`
 }
 
 type AcceptanceCheck struct {
@@ -274,6 +276,7 @@ func ParsePlan(taskID, raw string) (*ExecutionPlan, error) {
 		return nil, fmt.Errorf("invalid execution plan: %w", err)
 	}
 
+	plan.Ranking = nil
 	plan.PlanID = fmt.Sprintf("plan-%d", time.Now().UnixNano())
 	plan.TaskID = taskID
 	plan.CreatedAt = time.Now()
