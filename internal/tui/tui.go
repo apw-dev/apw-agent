@@ -67,7 +67,7 @@ func DefaultCommands() []SlashCommand {
 		{Name: "/symbols", Usage: "/symbols <file.go>", Description: "Inspect Go AST symbols (functions, structs, methods) using Surgeon", TakesArgs: true},
 		{Name: "/skills", Usage: "/skills", Description: "List all loaded skills and Triad engines by category", TakesArgs: false},
 		{Name: "/daemon", Usage: "/daemon [status|start|stop]", Description: "Manage 24/7 apwd background daemon process", TakesArgs: false},
-		{Name: "/desktop", Usage: "/desktop", Description: "Launch Apiwat Agent Desktop App window (Claude Code Desktop style)", TakesArgs: false},
+		{Name: "/desktop", Usage: "/desktop", Description: "Launch the APW Desktop window", TakesArgs: false},
 		{Name: "/new", Usage: "/new", Description: "Start a new session (fresh session ID + reset context)", TakesArgs: false},
 		{Name: "/clear", Usage: "/clear", Description: "Clear screen and redraw the full APW dashboard", TakesArgs: false},
 		{Name: "/status", Usage: "/status", Description: "Show system health, active Dual-Brain models, and daemon PID", TakesArgs: false},

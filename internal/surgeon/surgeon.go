@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	ErrReadRequired    = errors.New("surgeon: file must be read before editing (Claude Code read-before-write principle)")
+	ErrReadRequired    = errors.New("surgeon: file must be read before editing (read-before-edit)")
 	ErrContentDrift    = errors.New("surgeon: file content has drifted on disk; base hash mismatch")
 	ErrTargetNotFound  = errors.New("surgeon: target string not found in file")
 	ErrMultipleMatches = errors.New("surgeon: target string found multiple times; include more surrounding context for uniqueness")
@@ -137,7 +137,7 @@ func (s *Surgeon) ReadFile(path string) (string, string, error) {
 	return content, hash, nil
 }
 
-// ApplyPatch performs surgical targeted replacement adhering to Claude Code principles
+// ApplyPatch performs a surgical, targeted replacement: the file must have been read, the old text must match exactly once, and line endings are preserved
 func (s *Surgeon) ApplyPatch(op PatchOperation) (string, error) {
 	if op.OldContent == "" {
 		return "", ErrEmptyTarget

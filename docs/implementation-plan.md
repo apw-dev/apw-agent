@@ -64,7 +64,7 @@ AST ใช้หาขอบเขตและ symbol ได้ แต่ semant
 
 ### 3.0 ปรัชญาแกนกลาง: Triad of Next-Gen Agent (Architect, Surgeon, Reflex)
 
-apw ออกแบบขึ้นภายใต้แกนปรัชญาสามประสาน (Triad Engine) เพื่อยกระดับความแม่นยำและความปลอดภัยในการดัดแปลงโค้ดเทียบเท่ามาตรฐานของ **Claude Code** และโมเดลเอเจนต์ชั้นนำยุคใหม่:
+apw ออกแบบขึ้นภายใต้แกนปรัชญาสามประสาน (Triad Engine) เพื่อให้การดัดแปลงโค้ดแม่นยำ ตรวจสอบได้ และปลอดภัย:
 
 1. **The Architect (การคิดเชิงสถาปัตยกรรมและวางผังงาน)** — `internal/architect`
    - **หน้าที่:** ถอดรหัสความต้องการของผู้ใช้ (intent analysis), ทำความเข้าใจโครงสร้างโปรเจกต์เชิงลึก (system & symbol topology), และแตกงานเป็นขั้นตอนย่อยที่มีลำดับขึ้นต่อกัน (DAG of atomic subtasks)
@@ -72,7 +72,7 @@ apw ออกแบบขึ้นภายใต้แกนปรัชญา�
    - **สัญญาการทำงาน:** สถาปัตย์จะไม่ลงมือแก้ไขไฟล์โดยตรง แต่ส่งมอบ `ExecutionPlan` ที่ระบุเป้าหมาย, ไฟล์ที่เกี่ยวข้อง, symbol ที่กระทบ และ acceptance criteria; `ExecutionPlan.Validate()` ปฏิเสธ action ที่ไม่รู้จักและ `target_file` ที่ออกนอก workspace ก่อนส่งต่อ
    - **ทำแล้ว:** planning prompt, `ParsePlan` + `Validate` · **ยังไม่ทำ:** DAG dependencies, เชื่อม provider จริง
 
-2. **The Surgeon (ศัลยแพทย์โค้ดตามหลักการ Claude Code)** — `internal/surgeon`
+2. **The Surgeon (ศัลยแพทย์โค้ดแบบแก้เฉพาะจุด)** — `internal/surgeon`
    - **หลักการ Read-Before-Write:** ห้ามแก้ไขไฟล์ใดๆ โดยไม่อ่านบริบทจริงล่าสุด (snapshot อ้างอิงด้วย absolute path)
    - **Precision Surgical Patching:** ไม่เขียนทับทั้งไฟล์หากไม่จำเป็น ใช้การแทนที่เฉพาะจุดที่ต้องตรงแบบ unique และรักษาชนิดขึ้นบรรทัด (CRLF/LF) เดิมของไฟล์
    - **Base Hash & Integrity Fingerprint:** ทุก patch ตรวจ SHA-256 ของไฟล์ตั้งต้น หากไฟล์บนดิสก์ถูกแก้จากภายนอกระหว่างทำงาน ปฏิเสธการแก้ทับทันที (Refuse on drift)

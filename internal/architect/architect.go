@@ -157,7 +157,7 @@ Codebase Overview:
 %s
 
 Rules:
-1. Adhere to the Claude Code Surgeon philosophy: Plan minimal, surgical, targeted edits. Avoid rewriting entire files.
+1. Plan minimal, surgical, targeted edits that keep the existing code intact. Avoid rewriting entire files.
 2. Decompose into atomic subtasks (actions: read, patch, create, delete, verify). For read/patch/create/delete, target_file must be a specific relative file path (e.g. "src/components/Button.tsx" or "internal/surgeon/worktree.go"), never a directory or ".".
    Follow the project's language, framework and conventions shown in the Project profile and source. Files listed as not included exist; add a read step before patching one.
 3. Explicitly list all affected files and acceptance criteria.

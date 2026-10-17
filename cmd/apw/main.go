@@ -592,7 +592,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage: apw [command] [arguments]")
 	fmt.Fprintln(w, "\nInteractive & Desktop:")
 	fmt.Fprintln(w, "  apw                            Launch interactive Triad CLI shell (apw > _)")
-	fmt.Fprintln(w, "  apw desktop (or apw ui)        Launch Claude Code Desktop-style Windows App")
+	fmt.Fprintln(w, "  apw desktop (or apw ui)        Launch the APW Desktop window")
 	fmt.Fprintln(w, "  Ctrl+C twice (within 2s)       Safely exit the interactive shell (Ctrl+D exits immediately)")
 	fmt.Fprintln(w, "\nCommands:")
 	fmt.Fprintln(w, "  review [--config path] <task>   Read source and report findings")
