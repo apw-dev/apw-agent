@@ -96,9 +96,13 @@ apw-agent/
 ## 4. การเริ่มต้นใช้งาน (Quick Start)
 
 ### ติดตั้งไบนารี (`apw` และ `apwd`)
+ต้องใช้ Go 1.27 ขึ้นไป (`go.mod` ระบุ `go 1.27.0`) จากนั้น clone repository และเข้าโฟลเดอร์ก่อนติดตั้ง:
 ```bash
+git clone https://github.com/apw-dev/apw-agent.git
+cd apw-agent
 go install ./cmd/...
 ```
+หรือใช้ชุด portable (`apw.exe` + `apwd.exe`) ตาม [docs/release.md](docs/release.md) โดยวางไฟล์ทั้งสองไว้ในโฟลเดอร์เดียวกัน
 
 ### 1) โหมด Interactive CLI (`apw > _`)
 พิมพ์ `apw` จากโฟลเดอร์โปรเจกต์ใดก็ได้ ระบบจะปลุก `apwd` เบื้องหลังอัตโนมัติและเข้าสู่หน้าต่างโต้ตอบทันที:
@@ -124,13 +128,15 @@ apw desktop
 ```bash
 apw review "ตรวจโค้ดและรายงานปัญหา"       # อ่าน source เพื่อ review
 apw preview "เตรียมการเปลี่ยนแปลง"         # สร้าง diff ใน worktree
-apw trust                               # อนุญาต build/test สำหรับ repo นี้
-apw run "อธิบายหรือสั่งงานที่ต้องการ"       # เตรียมและ verify จากนั้นรอ apply
+apw trust                               # อนุญาต build/test สำหรับ repo นี้ (จำเป็นก่อน run และ verify)
+apw run "อธิบายหรือสั่งงานที่ต้องการ"       # ต้อง trust: เตรียมและ verify จากนั้นรอ apply
 apw plan "วางแผนงานก่อนแก้ไขจริง"        # สร้างแผน ExecutionPlan (.apw/plans/<id>.json)
-apw verify .                           # รัน Reflex ตรวจสอบโค้ด (fmt -> vet -> build -> test)
+apw verify .                           # ต้อง trust: รัน Reflex ตรวจสอบโค้ด (fmt -> vet -> build -> test)
+apw cleanup --dry-run                  # ดูว่า retention policy จะลบ task เก่าอะไรบ้าง (ไม่เปลี่ยนอะไร)
 apw symbols internal/surgeon/surgeon.go # สกัดโครงสร้าง AST Symbols ในไฟล์
 apw daemon status                      # ตรวจสอบสถานะบริการเบื้องหลัง apwd
 ```
+`review`, `preview` และ `plan` ใช้ได้โดยไม่ต้อง trust เพราะไม่รันโค้ดของ repository ส่วน `run` และ `verify` จะรัน build/test จึงถูกปฏิเสธจนกว่าจะ `apw trust` (Git worktree แยกไฟล์ออกจาก workspace แต่ไม่ได้ sandbox โค้ดที่ถูกรัน)
 
 ### การสลับโมเดลและโควตา
 
