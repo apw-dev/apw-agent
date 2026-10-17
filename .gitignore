@@ -25,3 +25,7 @@ apw.json
 Thumbs.db
 .vscode/
 .idea/
+
+# Python bytecode (release/acceptance scripts)
+__pycache__/
+*.pyc
