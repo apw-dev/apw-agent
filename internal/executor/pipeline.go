@@ -38,7 +38,7 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	if !surgeon.IsGitRepo(e.Workspace) {
 		return nil, errors.New("preview/execute requires a Git repository with an initial commit")
 	}
-	contextText := overview + "\n" + CodeContext(e.Workspace)
+	contextText := overview + "\n" + ProjectOverview(e.Workspace, e.VerifyOverride)
 	if e.Session != nil {
 		contextText = e.Session.BuildContextSummary() + "\n" + contextText
 	}
@@ -76,7 +76,7 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	}
 	if e.Mode == core.ModeExecute {
 		e.emit(ProgressEvent{Stage: "baseline", Message: "Checking baseline before editing"})
-		e.VerificationBaseline = reflex.NewVerifier(wt.Path).Verify(ctx)
+		e.VerificationBaseline = reflex.NewVerifierForProfile(wt.Path, e.Profile(wt.Path)).Verify(ctx)
 	}
 	return e.runPreparedPlan(ctx, plan, wt, 0, nil, instruction)
 }
@@ -89,7 +89,7 @@ func (e *Executor) review(ctx context.Context, instruction, overview string) (*E
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})
-	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + CodeContext(e.Workspace)
+	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + ProjectOverview(e.Workspace, e.VerifyOverride)
 	var summary string
 	err := e.withArchitectFailover(ctx, "review", func(ctx context.Context, c FailoverCandidate) error {
 		response, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: e.TaskID, Model: c.Model, Prompt: prompt})
@@ -216,7 +216,7 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		report.Summary = "Preview prepared in isolated worktree. No repository commands were executed; verification and apply are still required."
 	} else {
 		e.emit(ProgressEvent{Stage: "verifying", Message: "Verifying isolated changes"})
-		engine := reflex.NewReflexEngine(wt.Path, e.Reflex.MaxRetries)
+		engine := reflex.NewReflexEngineForProfile(wt.Path, e.Reflex.MaxRetries, e.Profile(wt.Path))
 		attempts, err := engine.Run(ctx, func(ctx context.Context, diagnostics string) error {
 			if e.Mode == core.ModeVerify {
 				return errors.New("verification failed; verification mode does not repair files")

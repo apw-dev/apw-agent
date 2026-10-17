@@ -38,7 +38,7 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 			switch check.Kind {
 			case "verification":
 				ok = verified
-				evidence = "fixed fmt/vet/build/test pipeline: " + check.Value
+				evidence = "project verification pipeline (" + check.Value + ")"
 			case "unchanged":
 				if wt != nil {
 					state, stateErr := surgeon.StateInRoot(root, check.File)
@@ -97,7 +97,7 @@ func acceptanceSnapshot(root string, plan *architect.ExecutionPlan, verified boo
 			lower := strings.ToLower(criterion)
 			if lower == "builds cleanly" || lower == "builds" || strings.Contains(lower, "gofmt") && strings.Contains(lower, "go test") {
 				result.Passed = verified
-				result.Evidence = "fmt/vet/build/test verification result"
+				result.Evidence = "project verification pipeline result"
 			}
 		}
 		all = all && result.Passed

@@ -239,3 +239,24 @@ func TestRetentionIsOptionalAndRoundTrips(t *testing.T) {
 		t.Fatalf("retention = %+v", r)
 	}
 }
+
+func TestVerifyStagesConfig(t *testing.T) {
+	base := `{"providers":{"m":{"type":"mock"}},"roles":{"architect":"m","reflex":"m"},"verify":{"stages":%s}}`
+	cfg, err := Load(writeTempConfig(t, fmt.Sprintf(base, `[{"name":"lint","run":["pnpm","lint"]},{"name":"test","run":["pnpm","test"],"env":{"CI":"true"},"timeout_sec":600}]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Verify.Stages) != 2 || cfg.Verify.Stages[1].Env["CI"] != "true" || cfg.Verify.Stages[1].TimeoutSec != 600 {
+		t.Fatalf("stages not loaded: %+v", cfg.Verify)
+	}
+	for name, stages := range map[string]string{
+		"empty run":      `[{"name":"lint","run":[]}]`,
+		"bad name":       `[{"name":"Lint Check","run":["x"]}]`,
+		"duplicate name": `[{"name":"t","run":["a"]},{"name":"t","run":["b"]}]`,
+		"neg timeout":    `[{"name":"t","run":["a"],"timeout_sec":-1}]`,
+	} {
+		if _, err := Load(writeTempConfig(t, fmt.Sprintf(base, stages))); err == nil || !strings.Contains(err.Error(), "verify.stages") {
+			t.Fatalf("%s: expected verify.stages error, got %v", name, err)
+		}
+	}
+}

@@ -207,3 +207,13 @@ func TestParsePlanKeepsFencesInsideStrings(t *testing.T) {
 		t.Fatalf("truncated plan must still fail clearly, got %v", err)
 	}
 }
+
+func TestVerificationCheckAcceptsProjectStageNames(t *testing.T) {
+	base := `{"objective":"x","subtasks":[{"id":"1","action":"verify"}],"acceptance_criteria":["ok"],"checks":[{"criterion":"ok","kind":"verification","value":"%s"}]}`
+	for value, ok := range map[string]bool{"all": true, "test": true, "typecheck": true, "lint:ci": true, "e2e_smoke": true, "": false, "Test": false, "rm -rf": false, "1test": false} {
+		_, err := ParsePlan("task-1", strings.Replace(base, "%s", value, 1))
+		if (err == nil) != ok {
+			t.Fatalf("value %q: err=%v want ok=%v", value, err, ok)
+		}
+	}
+}

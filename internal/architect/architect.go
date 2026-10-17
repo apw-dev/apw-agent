@@ -90,8 +90,8 @@ func (p *ExecutionPlan) Validate() error {
 		switch c.Kind {
 		case "file_exists", "file_absent", "unchanged":
 		case "verification":
-			if c.Value != "all" && c.Value != "test" && c.Value != "build" && c.Value != "vet" && c.Value != "fmt" {
-				return errors.New("verification check requires all/test/build/vet/fmt")
+			if !validStageValue(c.Value) {
+				return errors.New(`verification check requires "all" or a verification stage name (e.g. test, build, lint, typecheck)`)
 			}
 		case "only_changes":
 			if len(c.Files) == 0 {
@@ -149,16 +149,17 @@ Codebase Overview:
 
 Rules:
 1. Adhere to the Claude Code Surgeon philosophy: Plan minimal, surgical, targeted edits. Avoid rewriting entire files.
-2. Decompose into atomic subtasks (actions: read, patch, create, delete, verify). For read/patch/create/delete, target_file must be a specific relative file path (e.g. "internal/surgeon/worktree.go"), never a directory or ".".
+2. Decompose into atomic subtasks (actions: read, patch, create, delete, verify). For read/patch/create/delete, target_file must be a specific relative file path (e.g. "src/components/Button.tsx" or "internal/surgeon/worktree.go"), never a directory or ".".
+   Follow the project's language, framework and conventions shown in the Project profile and source. Files listed as not included exist; add a read step before patching one.
 3. Explicitly list all affected files and acceptance criteria.
    For EVERY acceptance criterion, including verification and scope restrictions, include a matching entry in checks. Do not leave any criterion without an executable check.
    Supported check kinds:
-   - file_exists/file_absent/contains/not_contains/go_symbol: use file and value as applicable.
+   - file_exists/file_absent/contains/not_contains: use file and value as applicable. go_symbol (Go files only): value is a top-level Go identifier.
    - unchanged: use file; APW compares its state with the original snapshot.
    - only_changes: use files (an array of allowed relative paths); APW compares all snapshot changes.
-   - verification: use value "all", "test", "build", "vet" or "fmt"; APW uses its fixed Go verification pipeline, never arbitrary commands.
-   Example scope check: {"criterion":"Only main.go changes","kind":"only_changes","files":["main.go"]}.
-   Example test check: {"criterion":"Go tests pass","kind":"verification","value":"test"}.
+   - verification: use value "all" or a stage name from the Verification pipeline in the Project profile; APW runs only that detected or configured pipeline, never commands you propose.
+   Example scope check: {"criterion":"Only src/App.tsx changes","kind":"only_changes","files":["src/App.tsx"]}.
+   Example test check: {"criterion":"Tests pass","kind":"verification","value":"test"}.
    Checks must use source evidence; do not substitute a generic build-pass criterion for requested behavior.
 4. Output valid JSON adhering to the ExecutionPlan schema:
 {
@@ -176,7 +177,7 @@ Rules:
     }
   ],
   "acceptance_criteria": ["..."],
-  "checks": [{"criterion":"...","kind":"contains","file":"relative/file.go","value":"expected behavior in source"}]
+  "checks": [{"criterion":"...","kind":"contains","file":"relative/path/to/file","value":"expected behavior in source"}]
 }
 Respond with ONLY the JSON object, wrapped in a single `+"```json ... ```"+` block.`, task.Instruction, task.Workspace, codebaseOverview)
 }
@@ -296,4 +297,18 @@ func (a *Architect) Plan(ctx context.Context, task core.Task, codebaseOverview s
 	}
 
 	return ParsePlan(task.ID, res.Content)
+}
+
+// validStageValue accepts "all" or a verification stage name (same rule as
+// apw.json verify.stages names).
+func validStageValue(v string) bool {
+	if v == "" || len(v) > 32 || v[0] < 'a' || v[0] > 'z' {
+		return false
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ':') {
+			return false
+		}
+	}
+	return true
 }

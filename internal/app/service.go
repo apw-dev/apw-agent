@@ -19,6 +19,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/core"
 	"github.com/apiwat/apw-agent/internal/executor"
+	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/provider/factory"
 	"github.com/apiwat/apw-agent/internal/store"
 	"github.com/apiwat/apw-agent/internal/surgeon"
@@ -349,6 +350,7 @@ func (s *Service) run(j *store.Job) {
 			sess.ID = sessionID
 		}
 		e.Session = sess
+		e.VerifyOverride = project.FromConfig(cfg.Verify)
 
 		e.TaskID = j.ID
 		e.Mode = core.TaskMode(j.Mode)
@@ -476,7 +478,7 @@ func (s *Service) Plan(ctx context.Context, owner, instruction string) (*archite
 	defer closeProvider()
 	closeFallbacks, _ := e.AddArchitectFallbacks(cfg) // unusable fallbacks must not block planning
 	defer closeFallbacks()
-	return e.PlanTask(ctx, core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: instruction, Mode: "preview"}, executor.CodeContext(cfg.Workspace))
+	return e.PlanTask(ctx, core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: instruction, Mode: "preview"}, executor.ProjectOverview(cfg.Workspace, project.FromConfig(cfg.Verify)))
 }
 
 // taskConfig returns the effective per-task config. The parsed file and the

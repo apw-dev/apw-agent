@@ -110,6 +110,22 @@ type Config struct {
 		TaskTimeoutSec int `json:"task_timeout_sec"` // default 600
 	} `json:"budget"`
 	Retention RetentionConfig `json:"retention,omitzero"`
+	Verify    VerifyConfig    `json:"verify,omitzero"`
+}
+
+// VerifyConfig overrides the detected verification pipeline. It is how a project in
+// any language (or with a custom framework) tells Reflex what proves a change works.
+// Stages run in order inside the isolated worktree and only after `apw trust`.
+type VerifyConfig struct {
+	Stages []VerifyStage `json:"stages,omitempty"`
+}
+
+// VerifyStage is one command; Run is an argument vector (no shell).
+type VerifyStage struct {
+	Name       string            `json:"name"`
+	Run        []string          `json:"run"`
+	Env        map[string]string `json:"env,omitempty"`
+	TimeoutSec int               `json:"timeout_sec,omitempty"`
 }
 
 // RetentionConfig bounds retained task state. Zero selects the default; a negative value disables that rule.
@@ -321,6 +337,22 @@ func (c *Config) Validate() error {
 	if len(c.Providers) == 0 {
 		return errors.New("config: at least one provider must be configured")
 	}
+	seenStage := map[string]bool{}
+	for i, s := range c.Verify.Stages {
+		if !validStageName(s.Name) {
+			return fmt.Errorf("config: verify.stages[%d].name %q must be lowercase letters, digits, '-', '_' or ':'", i, s.Name)
+		}
+		if seenStage[s.Name] {
+			return fmt.Errorf("config: verify.stages has duplicate name %q", s.Name)
+		}
+		seenStage[s.Name] = true
+		if len(s.Run) == 0 || strings.TrimSpace(s.Run[0]) == "" {
+			return fmt.Errorf("config: verify.stages[%d] (%s) requires a run command", i, s.Name)
+		}
+		if s.TimeoutSec < 0 {
+			return fmt.Errorf("config: verify.stages[%d] (%s) timeout_sec must not be negative", i, s.Name)
+		}
+	}
 
 	for name, p := range c.Providers {
 		switch p.Type {
@@ -356,4 +388,17 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// validStageName matches verification stage names usable in plan checks.
+func validStageName(name string) bool {
+	if name == "" || len(name) > 32 || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ':') {
+			return false
+		}
+	}
+	return true
 }

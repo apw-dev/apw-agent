@@ -63,7 +63,7 @@ func DefaultCommands() []SlashCommand {
 		{Name: "/plan", Usage: "/plan <instruction>", Description: "Spec-First Planning: create ExecutionPlan (.apw/plans/) before touching code", TakesArgs: true},
 		{Name: "/run", Usage: "/run <instruction>", Description: "Execute full Triad loop (Architect -> Surgeon -> Reflex) on a task", TakesArgs: true},
 		{Name: "/resume", Usage: "/resume [task-id]", Description: "Resume interrupted task from checkpoint in isolated worktree without losing completed work", TakesArgs: false},
-		{Name: "/verify", Usage: "/verify [dir]", Description: "Run Reflex closed-loop verification (gofmt -> go vet -> go build -> go test)", TakesArgs: false},
+		{Name: "/verify", Usage: "/verify [dir]", Description: "Run Reflex verification with the detected or configured project pipeline", TakesArgs: false},
 		{Name: "/symbols", Usage: "/symbols <file.go>", Description: "Inspect Go AST symbols (functions, structs, methods) using Surgeon", TakesArgs: true},
 		{Name: "/skills", Usage: "/skills", Description: "List all loaded skills and Triad engines by category", TakesArgs: false},
 		{Name: "/daemon", Usage: "/daemon [status|start|stop]", Description: "Manage 24/7 apwd background daemon process", TakesArgs: false},

@@ -131,12 +131,42 @@ apw preview "เตรียมการเปลี่ยนแปลง"      
 apw trust                               # อนุญาต build/test สำหรับ repo นี้ (จำเป็นก่อน run และ verify)
 apw run "อธิบายหรือสั่งงานที่ต้องการ"       # ต้อง trust: เตรียมและ verify จากนั้นรอ apply
 apw plan "วางแผนงานก่อนแก้ไขจริง"        # สร้างแผน ExecutionPlan (.apw/plans/<id>.json)
-apw verify .                           # ต้อง trust: รัน Reflex ตรวจสอบโค้ด (fmt -> vet -> build -> test)
+apw verify .                           # ต้อง trust: รัน Reflex ตาม pipeline ของโปรเจกต์ (ดูหัวข้อภาษาที่รองรับ)
 apw cleanup --dry-run                  # ดูว่า retention policy จะลบ task เก่าอะไรบ้าง (ไม่เปลี่ยนอะไร)
 apw symbols internal/surgeon/surgeon.go # สกัดโครงสร้าง AST Symbols ในไฟล์
 apw daemon status                      # ตรวจสอบสถานะบริการเบื้องหลัง apwd
 ```
 `review`, `preview` และ `plan` ใช้ได้โดยไม่ต้อง trust เพราะไม่รันโค้ดของ repository ส่วน `run` และ `verify` จะรัน build/test จึงถูกปฏิเสธจนกว่าจะ `apw trust` (Git worktree แยกไฟล์ออกจาก workspace แต่ไม่ได้ sandbox โค้ดที่ถูกรัน)
+
+### ภาษาและเครื่องมือที่รองรับ
+APW ตรวจชนิดโปรเจกต์จากไฟล์ที่ root แล้วเลือก pipeline ตรวจสอบ (Reflex) ให้เอง ทุกขั้นรันใน worktree ที่แยกออกมา และต้อง `apw trust` ก่อน:
+
+| โปรเจกต์ (ไฟล์ที่ใช้ตรวจ) | Pipeline |
+| --- | --- |
+| Go (`go.mod`) | `gofmt` → `go vet` → `go build` → `go test` |
+| Node.js / TypeScript (`package.json`) | install → `format:check` → `lint` → typecheck → `build` → `test` (เฉพาะ script ที่มีจริง) |
+| Rust (`Cargo.toml`) | `cargo fmt --check` → `cargo build` → `cargo test` |
+| Python (`pyproject.toml`, `requirements.txt`) | `ruff check` (ถ้าติดตั้ง) → `pytest` (ถ้ามี tests) |
+| HTML/CSS ล้วน (`index.html`) | ตรวจว่า `src`/`href` ที่ชี้ไฟล์ในเครื่องมีอยู่จริง |
+
+**Node.js:** เลือก package manager จาก `packageManager` ใน `package.json` หรือจาก lockfile (`bun.lock` → bun, `pnpm-lock.yaml` → pnpm, `package-lock.json` → npm, `yarn.lock` → yarn)
+- **install:** มี lockfile จะติดตั้งตาม lock เท่านั้น (`npm ci`, `pnpm install --frozen-lockfile`, `bun install --frozen-lockfile`) ไม่มี lockfile จะไม่สร้าง lockfile ใหม่ และรอบซ่อมถัดไปจะข้าม install ถ้า `package.json` กับ lockfile ไม่เปลี่ยน
+- **typecheck:** ใช้ script `typecheck` ถ้ามี ไม่มีแต่มี `tsconfig.json` กับ `typescript` จะรัน `tsc --noEmit` (ข้ามถ้า script `build` รัน `tsc` อยู่แล้ว เช่น template ของ Vite)
+- **test:** รันด้วย `CI=true` เพื่อให้ Vitest และ Jest รันครั้งเดียว ไม่ค้างใน watch mode
+- **ข้อกำหนด:** `node_modules/` และไฟล์ output ของ build (`dist/`) ต้องอยู่ใน `.gitignore` ไม่อย่างนั้น APW จะนับเป็นไฟล์ที่เปลี่ยนโดยไม่ได้วางแผน
+
+**ภาษาอื่นหรือ framework ที่เขียนเอง:** กำหนด pipeline เองใน `apw.json` ได้ ค่านี้จะแทน pipeline ที่ตรวจเจอ แต่ละขั้นเป็นคำสั่งแบบ argument vector (ไม่ผ่าน shell) และชื่อขั้นใช้ใน acceptance check ได้ เช่น `{"kind":"verification","value":"test"}`:
+
+```json
+"verify": {
+  "stages": [
+    { "name": "lint", "run": ["pnpm", "lint"] },
+    { "name": "typecheck", "run": ["pnpm", "exec", "tsc", "--noEmit"] },
+    { "name": "test", "run": ["pnpm", "test"], "env": { "CI": "true" }, "timeout_sec": 600 }
+  ]
+}
+```
+ถ้าตรวจชนิดโปรเจกต์ไม่ได้และไม่ได้กำหนด `verify.stages` ไว้ `apw run` และ `apw verify` จะไม่ผ่าน พร้อมบอกให้กำหนด pipeline (APW ไม่ถือว่างานผ่านถ้าไม่มีอะไรตรวจ)
 
 ### การสลับโมเดลและโควตา
 

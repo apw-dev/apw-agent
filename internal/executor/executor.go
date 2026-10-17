@@ -12,6 +12,7 @@ import (
 
 	"github.com/apiwat/apw-agent/internal/architect"
 	"github.com/apiwat/apw-agent/internal/core"
+	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/provider"
 	"github.com/apiwat/apw-agent/internal/reflex"
 	"github.com/apiwat/apw-agent/internal/session"
@@ -86,6 +87,13 @@ type Executor struct {
 	Session              *session.Session
 	SkipReflexOnEmpty    bool
 	OnProgress           ProgressCallback
+	// VerifyOverride replaces the detected verification pipeline (apw.json verify.stages).
+	VerifyOverride []project.Stage
+}
+
+// Profile detects the project at root, applying any configured verification override.
+func (e *Executor) Profile(root string) project.Profile {
+	return project.Detect(root, e.VerifyOverride)
 }
 
 func (e *Executor) emit(ev ProgressEvent) {
@@ -175,7 +183,8 @@ func (e *Executor) formatReportSummary(instruction string, plan *architect.Execu
 	}
 	sb.WriteString("\n#### ⚡ ผลการตรวจสอบด้วย Reflex (Closed-Loop Verification):\n")
 	if passed {
-		sb.WriteString(fmt.Sprintf("- ✅ ตรวจสอบสำเร็จสมบูรณ์ (`gofmt`, `go vet`, `go build`, `go test`) ในเวลา %v\n", duration.Round(time.Millisecond)))
+		stages := strings.Join(e.Profile(e.Workspace).StageNames(), "`, `")
+		sb.WriteString(fmt.Sprintf("- ✅ ตรวจสอบสำเร็จสมบูรณ์ (`%s`) ในเวลา %v\n", stages, duration.Round(time.Millisecond)))
 		sb.WriteString(fmt.Sprintf("- 📊 สถิติการทำงาน: อ่านบริบท %d จุด, ผ่าตัดโค้ด %d จุด, สร้างไฟล์ใหม่ %d จุด\n", reads, patches, creates))
 	} else {
 		sb.WriteString(fmt.Sprintf("- ❌ การตรวจสอบไม่ผ่านหลังจากใช้เวลา %v\n", duration.Round(time.Millisecond)))

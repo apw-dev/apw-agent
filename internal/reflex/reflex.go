@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/apiwat/apw-agent/internal/process"
+	"github.com/apiwat/apw-agent/internal/project"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 	"go/format"
 	"io/fs"
@@ -42,6 +43,16 @@ type Verifier struct {
 	Workspace string
 	Timeout   time.Duration
 	Packages  []string
+	// Profile selects the pipeline. Nil detects it from Workspace; a Go module
+	// without a configured override keeps gofmt -> go vet -> go build -> go test.
+	Profile *project.Profile
+}
+
+// NewVerifierForProfile creates a Verifier that runs the given project pipeline.
+func NewVerifierForProfile(workspace string, profile project.Profile) *Verifier {
+	v := NewVerifier(workspace)
+	v.Profile = &profile
+	return v
 }
 
 // NewVerifier creates a new Verifier
@@ -112,7 +123,7 @@ func (v *Verifier) RunCommand(ctx context.Context, name string, args ...string) 
 }
 
 func failed(stage, out string, err error, start time.Time) *VerificationResult {
-	diags := ParseGoErrors(stage, out)
+	diags := ParseDiagnostics(stage, out)
 	if len(diags) == 0 && err != nil {
 		diags = []Diagnostic{{Stage: stage, Message: err.Error(), RawError: err.Error()}}
 	}
@@ -202,11 +213,51 @@ func (v *Verifier) checkFormat(ctx context.Context) (string, error) {
 	return output.String(), nil
 }
 
-// Verify runs closed-loop verification: gofmt -> go vet -> go build -> go test
+// Verify runs the project's verification pipeline. A Go module without a configured
+// override runs gofmt -> go vet -> go build -> go test; any other project runs its
+// detected or configured stages (see package project).
 func (v *Verifier) Verify(ctx context.Context) *VerificationResult {
+	profile := v.Profile
+	if profile == nil {
+		detected := project.Detect(v.Workspace, nil)
+		profile = &detected
+	}
+	if profile.Kind != "go" || profile.Custom {
+		return v.verifyStages(ctx, *profile)
+	}
 	start := time.Now()
 
 	// Stage 0: gofmt
+	if res := v.goFmtResult(ctx, start); res != nil {
+		return res
+	}
+
+	// Stage 1: go vet
+	out, err := v.RunCommand(ctx, "go", append([]string{"vet", "-mod=readonly"}, v.Packages...)...)
+	if err != nil {
+		return failed("vet", out, err, start)
+	}
+
+	// Stage 2: go build
+	out, err = v.RunCommand(ctx, "go", append([]string{"build", "-mod=readonly", "-o", os.DevNull}, v.Packages...)...)
+	if err != nil {
+		return failed("build", out, err, start)
+	}
+
+	// Stage 3: go test
+	out, err = v.RunCommand(ctx, "go", append([]string{"test", "-mod=readonly"}, v.Packages...)...)
+	if err != nil {
+		return failed("test", out, err, start)
+	}
+
+	return &VerificationResult{
+		Passed:   true,
+		Duration: time.Since(start),
+	}
+}
+
+// goFmtResult returns a failed result when Go sources are not gofmt-formatted, else nil.
+func (v *Verifier) goFmtResult(ctx context.Context, start time.Time) *VerificationResult {
 	out, err := v.checkFormat(ctx)
 	if err != nil {
 		return failed("fmt", out, err, start)
@@ -232,29 +283,7 @@ func (v *Verifier) Verify(ctx context.Context) *VerificationResult {
 			Duration:    time.Since(start),
 		}
 	}
-
-	// Stage 1: go vet
-	out, err = v.RunCommand(ctx, "go", append([]string{"vet", "-mod=readonly"}, v.Packages...)...)
-	if err != nil {
-		return failed("vet", out, err, start)
-	}
-
-	// Stage 2: go build
-	out, err = v.RunCommand(ctx, "go", append([]string{"build", "-mod=readonly", "-o", os.DevNull}, v.Packages...)...)
-	if err != nil {
-		return failed("build", out, err, start)
-	}
-
-	// Stage 3: go test
-	out, err = v.RunCommand(ctx, "go", append([]string{"test", "-mod=readonly"}, v.Packages...)...)
-	if err != nil {
-		return failed("test", out, err, start)
-	}
-
-	return &VerificationResult{
-		Passed:   true,
-		Duration: time.Since(start),
-	}
+	return nil
 }
 
 // Fixer receives formatted diagnostics and applies a surgical fix (typically via Surgeon)
@@ -270,6 +299,13 @@ type Attempt struct {
 type ReflexEngine struct {
 	Verifier   *Verifier
 	MaxRetries int
+}
+
+// NewReflexEngineForProfile creates a ReflexEngine that verifies with the given pipeline.
+func NewReflexEngineForProfile(workspace string, maxRetries int, profile project.Profile) *ReflexEngine {
+	e := NewReflexEngine(workspace, maxRetries)
+	e.Verifier.Profile = &profile
+	return e
 }
 
 // NewReflexEngine creates a new ReflexEngine
@@ -343,8 +379,8 @@ func FormatDiagnostics(res *VerificationResult) string {
 			sb.WriteString(fmt.Sprintf("- %s\n", d.Message))
 		}
 	}
-	sb.WriteString("\n### Raw Compiler Output:\n```\n")
-	sb.WriteString(res.RawOutput)
+	sb.WriteString("\n### Raw Output:\n```\n")
+	sb.WriteString(tailOutput(res.RawOutput, maxPromptOutput))
 	sb.WriteString("\n```\n")
 	sb.WriteString("\n**Action required:** Apply minimal surgical correction to fix the errors above.")
 	return sb.String()
