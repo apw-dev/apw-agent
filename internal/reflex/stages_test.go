@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -199,3 +200,32 @@ func TestFormatDiagnosticsBoundsRawOutput(t *testing.T) {
 		t.Fatalf("raw output not bounded to its tail (len %d)", len(text))
 	}
 }
+
+func TestInstallFailureSkipsSourceRepair(t *testing.T) {
+	root := t.TempDir()
+	install := helperStage("install", "ERR_PNPM_EXECUTOR_LIFECYCLE_SCRIPT_FAILED", true, "")
+	install.Once, install.StampDir = true, "node_modules"
+	engine := NewReflexEngineForProfile(root, 3, project.Profile{Stages: []project.Stage{install}})
+	fixed := false
+	attempts, err := engine.Run(context.Background(), func(context.Context, string) error {
+		fixed = true
+		return nil
+	})
+	if fixed || err == nil || !strings.Contains(err.Error(), "source repair was not attempted") || !strings.Contains(err.Error(), "LIFECYCLE_SCRIPT_FAILED") || len(attempts) != 1 {
+		t.Fatalf("install failure must stop without repair: fixed=%v attempts=%d err=%v", fixed, len(attempts), err)
+	}
+}
+
+func TestLongPathHint(t *testing.T) {
+	long := "C:/" + strings.Repeat("d", windowsPathBudget)
+	if runtimeIsWindows() {
+		if longPathHint(long, "spawnSync esbuild.exe ENOENT") == "" {
+			t.Fatal("expected a hint for a long worktree path with ENOENT")
+		}
+	}
+	if longPathHint("C:/short", "ENOENT") != "" || longPathHint(long, "some other failure") != "" {
+		t.Fatal("hint must only appear for long paths with ENOENT")
+	}
+}
+
+func runtimeIsWindows() bool { return runtime.GOOS == "windows" }

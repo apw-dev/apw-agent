@@ -340,6 +340,12 @@ func (e *ReflexEngine) Run(ctx context.Context, fix Fixer) ([]Attempt, error) {
 		if err := ctx.Err(); err != nil {
 			return attempts, err
 		}
+		if e.Verifier.isInstallStage(res.FailedStage) {
+			// A failing dependency install is an environment problem (registry, network,
+			// build-script policy, path length); asking a model to patch source cannot fix it.
+			return attempts, fmt.Errorf("dependency install (stage %q) failed in the isolated worktree; source repair was not attempted:\n%s",
+				res.FailedStage, tailOutput(strings.TrimSpace(res.RawOutput), 2000))
+		}
 		if err := fix(ctx, FormatDiagnostics(res)); err != nil {
 			return attempts, err
 		}

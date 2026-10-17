@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -75,7 +76,12 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 		}
 		out, err := v.runStage(ctx, s)
 		if err != nil {
-			return failed(s.Name, out, err, start)
+			res := failed(s.Name, out, err, start)
+			if hint := longPathHint(v.Workspace, out); hint != "" {
+				res.Diagnostics = append([]Diagnostic{{Stage: s.Name, Message: hint, RawError: hint}}, res.Diagnostics...)
+				res.RawOutput = hint + "\n" + res.RawOutput
+			}
+			return res
 		}
 		if s.Once && stamp != "" {
 			v.writeStamp(s, stamp)
@@ -314,4 +320,30 @@ func tailOutput(s string, max int) string {
 		start++
 	}
 	return "[earlier output omitted]\n" + s[start:]
+}
+
+// isInstallStage reports whether name is the profile's dependency-install stage.
+func (v *Verifier) isInstallStage(name string) bool {
+	if v.Profile == nil || name == "" {
+		return false
+	}
+	for _, s := range v.Profile.Stages {
+		if s.Name == name {
+			return s.Once
+		}
+	}
+	return false
+}
+
+// windowsPathBudget approximates how much of the 260-character Windows path limit
+// a deep dependency tree (for example pnpm's node_modules/.pnpm layout) needs.
+const windowsPathBudget = 260 - 120
+
+// longPathHint explains a "file not found" failure that is most likely caused by
+// the Windows path length limit rather than by the project.
+func longPathHint(workspace, out string) string {
+	if runtime.GOOS != "windows" || len(workspace) <= windowsPathBudget || !strings.Contains(out, "ENOENT") {
+		return ""
+	}
+	return fmt.Sprintf("likely Windows path length limit: the isolated worktree path is %d characters and dependency paths below it exceed 260; move the project to a shorter path (for example D:\\src\\app) or enable Windows long paths", len(workspace))
 }
