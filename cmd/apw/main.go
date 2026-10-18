@@ -98,6 +98,8 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return runEval(args[1:], stdout, stderr)
 	case "issue":
 		return runIssue(args[1:], stdin, stdout, stderr)
+	case "acp":
+		return runACP(args[1:], stdin, stdout, stderr)
 
 	case "resume":
 		return runResume(nil, args[1:], stdout, stderr)
@@ -608,6 +610,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  cleanup [--dry-run]            Remove old finished task state under the retention policy")
 	fmt.Fprintln(w, "  eval [--suite eval/testdata]   Measure APW on fixture tasks with hidden tests (--only, --baseline, --keep)")
 	fmt.Fprintln(w, "  issue <number|url> [--yes]     Turn a GitHub issue into a verified change on a branch and a draft PR (gh)")
+	fmt.Fprintln(w, "  acp [--config path]            Serve the Agent Client Protocol on stdio (for ACP editors and agent hubs)")
 	fmt.Fprintln(w, "  watch <task-id>                Reattach to progress; Ctrl+C detaches")
 	fmt.Fprintln(w, "  review/preview/run flags: --request-id <id> --session <id> --config <path>")
 	fmt.Fprintln(w, "  cancel <task-id>               Cancel a task and its subprocess tree")

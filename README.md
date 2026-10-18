@@ -228,6 +228,19 @@ APW ตรวจชนิดโปรเจกต์จากไฟล์ที�
 
 ถ้ามี Architect มากกว่าหนึ่งตัว (`roles.architect` และ `failover.architect`) APW จะให้แต่ละตัววางแผนพร้อมกัน แล้วให้คะแนนแต่ละแผนตามกฎ: ทุกเกณฑ์ต้องมี check ที่รันได้จริง, check อ้างถึงขั้นที่มีอยู่จริง, ระบุขอบเขตไฟล์และการตรวจสอบ, แก้เฉพาะไฟล์ที่ประกาศไว้ และแผนที่เล็กกว่าได้คะแนนดีกว่า ถ้า `judge` เป็น `true` จะให้ Architect หลักให้คะแนน 0-10 เพิ่ม แล้วเฉลี่ยกับคะแนนตามกฎ แผนที่คะแนนสูงสุดจะถูกใช้ และ `plan.ranking` จะเก็บทุกข้อเสนอพร้อมคะแนนและเหตุผล (`apw plan` แสดงให้ดู)
 
+### วัดผล, GitHub issue และ ACP
+
+```bash
+apw eval                         # วัดผล APW กับชุดงานใน eval/testdata (มี hidden test) แล้วสรุป solved / false positive
+apw eval --baseline .apw/eval/<ไฟล์เก่า>.json   # เทียบกับรอบก่อน
+apw issue 42                     # เปลี่ยน GitHub issue เป็นงานที่ verify แล้ว เปิด draft PR (ใช้ gh) โดยไม่แตะไฟล์ในโปรเจกต์
+apw acp                          # ให้ editor หรือ agent hub ที่รองรับ Agent Client Protocol เรียกใช้ APW ผ่าน stdio
+```
+
+- **`apw eval`:** แต่ละงานเริ่มจาก repo ตัวอย่าง ให้ APW วางแผน แก้ verify และ apply ตามปกติ แล้วค่อยใส่ hidden test ที่ APW ไม่เคยเห็นเข้าไปตรวจ ตัวเลขที่สำคัญที่สุดคือ false positive (APW บอกว่าผ่านแต่ hidden test ไม่ผ่าน) รายละเอียดดู `docs/eval.md`
+- **`apw issue`:** อ่าน issue ด้วย `gh` รันเป็นงานปกติ (ต้อง trust) ถามก่อนเผยแพร่ แล้ว commit เฉพาะไฟล์ที่ verify แล้วบน branch ของงาน push เป็น `apw/issue-<n>-...` และเปิด draft PR ถ้างานไม่ผ่านหรือไม่ได้แก้ไฟล์ จะไม่ push อะไรเลย
+- **`apw acp`:** โหมด ask/auto/plan/unverified กลายเป็น session mode ของ ACP ความคืบหน้าแสดงเป็น tool call และจะขออนุญาตผ่าน ACP ก่อน apply
+
 ### การสลับโมเดลและโควตา
 
 การค้นพบโมเดลทำให้เลือกใช้ได้ แต่ไม่ได้เพิ่มทุกโมเดลเป็น fallback อัตโนมัติ

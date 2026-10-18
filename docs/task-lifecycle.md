@@ -84,6 +84,15 @@ apw issue 42 --yes --base main --ready         # no prompt, non-draft PR against
 
 Issue text is written by whoever filed the issue. APW frames it as a description of the change, never as instructions about tools or credentials, and the pull request is a draft for human review; still, run issue tasks from public repositories only with the verification sandbox enabled.
 
+## Agent Client Protocol (ACP)
+
+`apw acp [--config path]` speaks the Agent Client Protocol (version 1): newline-delimited JSON-RPC 2.0 on stdin/stdout, so ACP clients (editors and agent hubs) can launch APW as an agent subprocess. Only protocol messages go to stdout.
+
+- `initialize` advertises text, resource links and embedded resources in prompts; no session loading, MCP or authentication.
+- `session/new` requires the session `cwd` to be the workspace of `--config` (default `<cwd>/apw.json`) and connects to that workspace's daemon. The response lists APW's approval modes as ACP session modes (`ask`, `auto`, `plan`, `unverified`; default from `"approval"`), changeable with `session/set_mode`.
+- `session/prompt` runs one APW task. It appears as a tool call whose content streams the task's progress and finally its diff; the summary arrives as agent message chunks. In `ask` and `unverified` mode the agent asks `session/request_permission` (apply / keep in worktree) before applying; `auto` applies verified tasks without asking (never unverified ones); `plan` sends an ACP `plan` update and changes nothing. Verified runs still need a trusted workspace; otherwise the agent explains and ends the turn.
+- `session/cancel` cancels the running task and the turn ends with stop reason `cancelled`.
+
 ## Durable state and daemon
 
 State lives under the workspace, except task worktrees (see [Worktree location](#worktree-location)):
