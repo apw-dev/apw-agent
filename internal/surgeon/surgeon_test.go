@@ -176,3 +176,27 @@ func TestSurgeon_SnapshotKeyNormalized(t *testing.T) {
 		t.Fatalf("expected normalized path to match snapshot, got %v", err)
 	}
 }
+
+func TestInspectSymbolsIncludesVarsAndConsts(t *testing.T) {
+	dir := t.TempDir()
+	src := "package age\n\nimport \"errors\"\n\n// ErrInvalidAge reports bad input.\nvar ErrInvalidAge = errors.New(\"invalid age\")\n\nconst (\n\tMaxAge = 150\n\t_      = 0\n)\n\nvar a, b int\n\ntype T struct{}\n\nfunc (T) M() {}\n\nfunc Parse() {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "age.go"), []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	syms, err := InspectWorkspaceSymbols(dir, "age.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, s := range syms {
+		got[s.Name] = s.Kind
+	}
+	for name, kind := range map[string]string{"ErrInvalidAge": "var", "MaxAge": "const", "a": "var", "b": "var", "T": "type", "M": "method", "Parse": "func"} {
+		if got[name] != kind {
+			t.Fatalf("%s kind = %q, want %q (all: %v)", name, got[name], kind, got)
+		}
+	}
+	if _, ok := got["_"]; ok {
+		t.Fatal("blank identifier listed")
+	}
+}

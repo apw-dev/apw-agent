@@ -39,8 +39,20 @@ func InspectWorkspaceSymbols(base, rel string) ([]SymbolSpan, error) {
 			add(d.Name.Name, kind, d)
 		case *ast.GenDecl:
 			for _, spec := range d.Specs {
-				if t, ok := spec.(*ast.TypeSpec); ok {
-					add(t.Name.Name, "type", t)
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					add(s.Name.Name, "type", s)
+				case *ast.ValueSpec:
+					// Package-level variables and constants (for example exported sentinel errors).
+					kind := "var"
+					if d.Tok == token.CONST {
+						kind = "const"
+					}
+					for _, name := range s.Names {
+						if name.Name != "_" {
+							add(name.Name, kind, s)
+						}
+					}
 				}
 			}
 		}

@@ -163,14 +163,16 @@ Rules:
 3. Explicitly list all affected files and acceptance criteria.
    For EVERY acceptance criterion, including verification and scope restrictions, include a matching entry in checks. Do not leave any criterion without an executable check.
    Supported check kinds:
-   - file_exists/file_absent/contains/not_contains: use file and value as applicable. go_symbol (Go files only): value is a top-level Go identifier.
+   - file_exists/file_absent: use file.
+   - contains/not_contains: use file and value. The code is written later by another model, so its exact text cannot be predicted: value must be a short, distinctive token that every correct implementation must contain, such as a required identifier, a required string literal, an error message the task specifies, or a route like "/healthz". Never use an expression, a statement, a call with arguments, operators, formatting or a list of test inputs as value, and never use contains on test files to describe what the tests check.
+   - go_symbol (Go files only): value is a top-level Go identifier (function, method, type, variable or constant) that must exist.
    - unchanged: use file; APW compares its state with the original snapshot.
    - only_changes: use files (an array of allowed relative paths); APW compares all snapshot changes.
    - verification: use value "all" or a stage name from the Verification pipeline in the Project profile; APW runs only that detected or configured pipeline, never commands you propose.
    - browser (only when the Project profile lists a Browser check): file is the page path ("/" by default), value is text the rendered page must visibly show; APW renders the built page headlessly.
    Example scope check: {"criterion":"Only src/App.tsx changes","kind":"only_changes","files":["src/App.tsx"]}.
    Example test check: {"criterion":"Tests pass","kind":"verification","value":"test"}.
-   Checks must use source evidence; do not substitute a generic build-pass criterion for requested behavior.
+   Prove behavior with tests: plan test changes and use a verification check (for example value "test") for criteria about behavior, and use go_symbol or contains only for names and strings the task requires. Do not substitute a generic build-pass criterion for requested behavior.
 4. Output valid JSON adhering to the ExecutionPlan schema:
 {
   "objective": "...",

@@ -183,3 +183,27 @@ func TestResearchRunsBeforePlanning(t *testing.T) {
 		t.Fatalf("malformed research reply blocked planning: %v", err)
 	}
 }
+
+func TestBrittleContainsIsPenalized(t *testing.T) {
+	for value, brittle := range map[string]bool{
+		"ErrInvalidAge":                         false,
+		"/healthz":                              false,
+		"invalid age":                           false,
+		"err != nil || n < 0 || n > 150":        true,
+		`fmt.Errorf("%w %q", ErrInvalidAge, s)`: true,
+		`"x", "", "-1"`:                         true,
+		strings.Repeat("a", 41):                 true,
+	} {
+		if brittleContains(value) != brittle {
+			t.Fatalf("brittleContains(%q) != %v", value, brittle)
+		}
+	}
+	plan := &architect.ExecutionPlan{AffectedFiles: []string{"age.go"},
+		Subtasks:           []architect.Subtask{{ID: "1", Action: architect.ActionPatch, TargetFile: "age.go"}},
+		AcceptanceCriteria: []string{"rejects", "tests", "scope"},
+		Checks: []architect.AcceptanceCheck{{Criterion: "rejects", Kind: "contains", File: "age.go", Value: "n > 150 || n < 0"},
+			{Criterion: "tests", Kind: "verification", Value: "all"}, {Criterion: "scope", Kind: "only_changes", Files: []string{"age.go"}}}}
+	if score, reasons := scorePlan(plan, project.Profile{}); score != 90 || !strings.Contains(strings.Join(reasons, ";"), "exact code text") {
+		t.Fatalf("score %d reasons %v", score, reasons)
+	}
+}

@@ -310,6 +310,10 @@ func scorePlan(plan *architect.ExecutionPlan, profile project.Profile) (int, []s
 			if !hasBrowser {
 				penalize(15, "browser check without a browser stage")
 			}
+		case "contains", "not_contains":
+			if brittleContains(c.Value) {
+				penalize(10, fmt.Sprintf("contains check expects exact code text %q, which a correct patch may not match", clip(c.Value, 40)))
+			}
 		}
 	}
 	for _, criterion := range plan.AcceptanceCriteria {
@@ -359,6 +363,15 @@ func scorePlan(plan *architect.ExecutionPlan, profile project.Profile) (int, []s
 		reasons = []string{"all criteria have executable checks; scope and verification stated"}
 	}
 	return score, reasons
+}
+
+// brittleContains reports a contains value that looks like predicted code rather than a required
+// token: long text, or expressions, calls, operators or lists.
+func brittleContains(value string) bool {
+	if len(value) > 40 {
+		return true
+	}
+	return strings.ContainsAny(value, "(){}[];=<>|&\n") || strings.Count(value, ",") > 1
 }
 
 // judge asks the primary architect to rate the valid proposals 0-10; the combined score weighs the

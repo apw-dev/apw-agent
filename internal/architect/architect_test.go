@@ -234,3 +234,12 @@ func TestBrowserCheckValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanningPromptWarnsAgainstLiteralCodeChecks(t *testing.T) {
+	prompt := BuildPlanningPrompt(core.Task{Instruction: "x"}, "")
+	for _, want := range []string{"cannot be predicted", "variable or constant", "never use contains on test files", "Prove behavior with tests"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("planning prompt lacks %q", want)
+		}
+	}
+}
