@@ -72,6 +72,18 @@ Planning includes source contents; directives and plans reject incomplete or inv
 
 For a legacy task without a snapshot manifest, use `apw recover --config <path> <legacy-task-id>`. It exports the original plan/checkpoint, dirty source files, hashes and a binary Git diff into a fresh `.apw/recovery` directory. It preserves the old checkout and does not call a model or apply its changes. Review the evidence before preparing a new task.
 
+## GitHub issues to pull requests
+
+```powershell
+apw issue 42                                   # issue of the current repository (gh decides)
+apw issue https://github.com/owner/repo/issues/42
+apw issue 42 --yes --base main --ready         # no prompt, non-draft PR against main
+```
+
+`apw issue` reads the issue with the GitHub CLI (`gh issue view`), runs it as a normal verified task (trust required), and when the task is ready it asks before publishing. Publishing commits exactly the verified files on the task's own worktree branch (the same checks as apply: passed verification and acceptance, worktree of this repository, files unchanged since verification; repository hooks do not run), pushes that branch as `apw/issue-<n>-<slug>` without force, and opens a draft pull request with `gh pr create` whose body lists acceptance checks, verification attempts and changed files and says `Closes #<n>`. The source working tree is never touched; the task stays ready, so `apw apply <task-id>` can still apply it locally. Nothing is pushed when the task fails or changes no files.
+
+Issue text is written by whoever filed the issue. APW frames it as a description of the change, never as instructions about tools or credentials, and the pull request is a draft for human review; still, run issue tasks from public repositories only with the verification sandbox enabled.
+
 ## Durable state and daemon
 
 State lives under the workspace, except task worktrees (see [Worktree location](#worktree-location)):
