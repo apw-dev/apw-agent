@@ -55,3 +55,10 @@ func (d *keyDecoder) pop() []byte {
 	d.keys = d.keys[1:]
 	return key
 }
+
+func (d *keyDecoder) peek() []byte {
+	if len(d.keys) == 0 {
+		return nil
+	}
+	return d.keys[0]
+}

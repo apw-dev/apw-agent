@@ -74,3 +74,26 @@ func TestRegisterInterrupt_DoublePress(t *testing.T) {
 		t.Fatal("clear: expected press after ClearInterrupt to return false")
 	}
 }
+
+func TestFormatInputViewport_ThaiAndLongPaste(t *testing.T) {
+	// "ที่พบ" has runes: ท (1), ี (0), ่ (0), พ (1), บ (1) -> 3 columns, not 5.
+	if got := stringDisplayWidth("ที่พบ"); got != 3 {
+		t.Fatalf("expected display width 3 for 'ที่พบ', got %d", got)
+	}
+
+	longPrompt := "ตรวจสอบโค้ดและเอกสารใน repo นี้ โดยเน้น: (1) ความปลอดภัยของไฟล์ใน internal/surgeon และ internal/workspace ตอนทำ snapshot, apply และ recovery (2) การบังคับใช้ trust gate และโหมด review/preview/run ใน internal/executor (3) โอกาสเกิด race condition หรือ file lock ค้างบน Windows ใน internal/daemon, internal/store และ internal/retention (4) ความตรงกันของคำสั่งใน cmd/apw กับ README.md พร้อมระบุไฟล์และบรรทัดของปัญหาที่พบ"
+	display, cols := formatInputViewport(longPrompt, 80)
+	if cols > 80 {
+		t.Fatalf("expected viewport width <= 80, got %d (%q)", cols, display)
+	}
+	if !strings.HasPrefix(display, "…") {
+		t.Fatalf("expected truncated viewport to start with ellipsis, got %q", display)
+	}
+	if !strings.HasSuffix(display, "พร้อมระบุไฟล์และบรรทัดของปัญหาที่พบ") {
+		t.Fatalf("expected viewport to preserve the tail of the pasted text, got %q", display)
+	}
+	runes := []rune(display)
+	if len(runes) > 1 && isZeroWidthRune(runes[1]) {
+		t.Fatalf("expected first rune after ellipsis not to be an orphaned combining mark, got %U", runes[1])
+	}
+}

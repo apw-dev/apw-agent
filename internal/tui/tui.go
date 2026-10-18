@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode"
 
 	"github.com/apiwat/apw-agent/internal/auth"
 	"github.com/apiwat/apw-agent/internal/config"
@@ -358,7 +358,8 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			return
 		}
 
-		fmt.Fprintf(stdout, "%s>%s %s\r\n", cBold+cCyan, cReset, inputStr)
+		displayStr, displayCols := formatInputViewport(inputStr, terminalWidth()-4)
+		fmt.Fprintf(stdout, "%s>%s %s\r\n", cBold+cCyan, cReset, displayStr)
 		fmt.Fprintf(stdout, "%s\r\n", hr)
 		linesBelow := 2
 
@@ -417,7 +418,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 		}
 
 		fmt.Fprintf(stdout, "\x1b[%dA\r", linesBelow)
-		colOffset := 2 + utf8.RuneCountInString(inputStr)
+		colOffset := 2 + displayCols
 		if colOffset > 0 {
 			fmt.Fprintf(stdout, "\x1b[%dC", colOffset)
 		}
@@ -425,7 +426,7 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 
 	redraw(false)
 
-	var inBuf [32]byte
+	var inBuf [4096]byte
 	for {
 		b := s.input.pop()
 		for b == nil {
@@ -497,10 +498,11 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 		if b[0] == 3 {
 			if len(buf) > 0 {
 				s.ClearInterrupt()
+				cancelledStr, _ := formatInputViewport(string(buf), terminalWidth()-6)
 				buf = nil
 				selectedIdx = 0
 				histIdx = len(s.History)
-				fmt.Fprint(stdout, "^C\r\n")
+				fmt.Fprintf(stdout, "\r\x1b[J%s>%s %s^C\r\n", cBold+cCyan, cReset, cancelledStr)
 				redraw(false)
 				continue
 			}
@@ -569,11 +571,20 @@ func (s *Session) ReadInteractiveLine(stdout io.Writer) (string, error) {
 			continue
 		}
 
-		text := string(b)
-		for _, r := range text {
-			if r >= 32 {
-				buf = append(buf, r)
+		appendPrintable := func(chunk []byte) {
+			for _, r := range string(chunk) {
+				if r >= 32 && r != 0x7f {
+					buf = append(buf, r)
+				}
 			}
+		}
+		appendPrintable(b)
+		for {
+			next := s.input.peek()
+			if len(next) == 0 || next[0] < 32 || next[0] == 0x7f {
+				break
+			}
+			appendPrintable(s.input.pop())
 		}
 		selectedIdx = 0
 		redraw(false)
@@ -1019,9 +1030,69 @@ func promptAndSaveAPIKey(envName, label, cfgPath string, stdin io.Reader, stdout
 	return true, nil
 }
 
+func isZeroWidthRune(r rune) bool {
+	if r < 32 || r == 0x7f {
+		return true
+	}
+	return unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r)
+}
+
+func runeDisplayWidth(r rune) int {
+	if isZeroWidthRune(r) {
+		return 0
+	}
+	if (r >= 0x1100 && r <= 0x115F) ||
+		(r >= 0x2E80 && r <= 0xA4CF && r != 0x303F) ||
+		(r >= 0xAC00 && r <= 0xD7A3) ||
+		(r >= 0xF900 && r <= 0xFAFF) ||
+		(r >= 0xFE10 && r <= 0xFE19) ||
+		(r >= 0xFE30 && r <= 0xFE6F) ||
+		(r >= 0xFF00 && r <= 0xFF60) ||
+		(r >= 0xFFE0 && r <= 0xFFE6) ||
+		(r >= 0x1F300 && r <= 0x1FAFF) {
+		return 2
+	}
+	return 1
+}
+
+func stringDisplayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		w += runeDisplayWidth(r)
+	}
+	return w
+}
+
+func formatInputViewport(input string, maxCols int) (string, int) {
+	if maxCols < 10 {
+		maxCols = 10
+	}
+	totalW := stringDisplayWidth(input)
+	if totalW <= maxCols {
+		return input, totalW
+	}
+	runes := []rune(input)
+	budget := maxCols - 1
+	width := 0
+	start := len(runes)
+	for start > 0 {
+		rw := runeDisplayWidth(runes[start-1])
+		if width+rw > budget {
+			break
+		}
+		width += rw
+		start--
+	}
+	for start < len(runes) && isZeroWidthRune(runes[start]) {
+		start++
+	}
+	tail := string(runes[start:])
+	return "…" + tail, 1 + stringDisplayWidth(tail)
+}
+
 func visibleLen(s string) int {
 	plain := ansiRegex.ReplaceAllString(s, "")
-	return utf8.RuneCountInString(plain)
+	return stringDisplayWidth(plain)
 }
 
 func padRightANSI(s string, width int) string {
