@@ -1,0 +1,13 @@
+{
+  "instruction": "conf.Load must apply defaults and validation: Host defaults to \"127.0.0.1\" and Port defaults to 8080 when they are missing or empty/zero; a port outside 1-65535 must return an error that wraps a new exported sentinel error ErrInvalidPort (so errors.Is works). Add tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "feature",
+    "errors"
+  ]
+}

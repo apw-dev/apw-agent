@@ -1,0 +1,13 @@
+{
+  "instruction": "slug.Make should produce URL slugs: only lower-case ASCII letters and digits are kept, every run of any other characters becomes a single '-', and there is no leading or trailing '-'. For example \"Hello, World!\" becomes \"hello-world\" and \"  Go 1.27 -- release \" becomes \"go-1-27-release\". Add tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "feature",
+    "strings"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "instruction": "Change Stack.Pop to return (T, bool) and report false instead of panicking on an empty stack, and add Peek() (T, bool) with the same behavior that does not remove the element. rpn.Eval must return an error instead of panicking when there are not enough operands. Update callers and tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "refactor",
+    "api-change",
+    "multi-file"
+  ]
+}

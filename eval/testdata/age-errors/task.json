@@ -1,0 +1,12 @@
+{
+  "instruction": "age.Parse must return an error wrapping a new exported sentinel error ErrInvalidAge (so errors.Is works) for non-numeric input and for ages outside 0-150. The error message must still include the input. Add tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "errors"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "instruction": "words.Count should split on any whitespace (spaces, tabs, newlines), ignore empty fields, count words case-insensitively (keys in lower case), and strip leading and trailing punctuation from the set .,!?;: on each word; a word that becomes empty is ignored. Update the tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "bugfix",
+    "strings"
+  ]
+}

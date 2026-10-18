@@ -1,0 +1,13 @@
+{
+  "instruction": "page.Page returns one item too few on full pages (for example page 1 with size 2 returns only one item). Fix it, and make it return nil when page < 1 or size < 1. Add tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "bugfix",
+    "edge-cases"
+  ]
+}

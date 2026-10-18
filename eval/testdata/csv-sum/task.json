@@ -1,0 +1,13 @@
+{
+  "instruction": "csvsum.SumColumn panics when a row has fewer columns than col. Return an error that contains \"line N\" instead, where N is the 1-based line of that row in the input (the header is line 1). Also trim spaces around values before parsing them, and return an error for a negative col. Add tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "bugfix",
+    "parsing"
+  ]
+}

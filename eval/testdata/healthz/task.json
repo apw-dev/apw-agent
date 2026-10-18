@@ -1,0 +1,13 @@
+{
+  "instruction": "Add a GET /healthz endpoint to server.NewMux that responds 200 with Content-Type application/json and the body {\"status\":\"ok\"}. Other HTTP methods on /healthz must get 405 Method Not Allowed. Keep /hello working and add a test.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "feature",
+    "http"
+  ]
+}

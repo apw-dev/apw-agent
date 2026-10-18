@@ -1,0 +1,13 @@
+{
+  "instruction": "Rename the function Calc in package calc to Sum. Update every caller and test, and do not keep the old name or an alias.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "refactor",
+    "multi-file"
+  ]
+}

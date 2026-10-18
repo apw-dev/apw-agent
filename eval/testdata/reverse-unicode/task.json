@@ -1,0 +1,13 @@
+{
+  "instruction": "Fix text.Reverse so that it reverses a string by Unicode code point (rune) instead of by byte. Multi-byte characters such as é, Thai or Japanese must stay valid. Keep the existing test passing and add a test for non-ASCII input.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "bugfix",
+    "unicode"
+  ]
+}

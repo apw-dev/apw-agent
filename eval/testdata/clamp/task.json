@@ -1,0 +1,12 @@
+{
+  "instruction": "Add a function Clamp(v, lo, hi int) int to package mathx that returns v limited to the closed range [lo, hi]. If lo is greater than hi, swap them first. Add tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "feature"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "instruction": "clock.Format must render a duration as HH:MM:SS with two-digit zero padding (hours may exceed 24, for example 27:03:09), dropping fractions of a second, and prefix negative durations with '-'. Add tests.",
+  "check": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "timeout_sec": 1200,
+  "tags": [
+    "feature",
+    "formatting"
+  ]
+}
