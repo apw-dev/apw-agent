@@ -19,6 +19,13 @@ const (
 	DecisionDeny   ApprovalDecisionType = "deny"   // ปฏิเสธ
 )
 
+// maxApprovalHistory bounds how many past requests the gatekeeper remembers.
+const maxApprovalHistory = 100
+
+// applyTool is the tool name of "apply task changes to the workspace" approvals. An "always"
+// decision for it covers every later apply, whatever the task.
+const applyTool = "Apply"
+
 // ToolApprovalRequest describes a pending tool or system command awaiting user confirmation.
 type ToolApprovalRequest struct {
 	ID          string    `json:"id"`
@@ -30,19 +37,18 @@ type ToolApprovalRequest struct {
 	Status      string    `json:"status"` // "pending", "approved_once", "approved_always", "denied"
 	CreatedAt   time.Time `json:"created_at"`
 
-	// replyCh is the Go channel used to unblock the waiting goroutine with true (approved) or false (denied).
+	// replyCh unblocks the waiting caller with true (approved) or false (denied).
 	replyCh  chan bool
 	decision ApprovalDecisionType
 }
 
-// ApprovalGatekeeper coordinates Human-in-the-loop tool approvals via Go channels (`chan bool`)
-// and maintains an in-memory allowlist for commands marked "อนุญาตเสมอสำหรับคำสั่งนี้".
+// ApprovalGatekeeper coordinates human-in-the-loop approvals: callers wait for the user's decision
+// and an in-memory allowlist remembers the commands the user marked "always allow".
 type ApprovalGatekeeper struct {
 	mu          sync.Mutex
 	pending     map[string]*ToolApprovalRequest
 	history     []*ToolApprovalRequest
 	alwaysAllow map[string]bool
-	subscribers map[chan ToolApprovalRequest]struct{}
 }
 
 // NewApprovalGatekeeper initializes a new Human-in-the-loop ApprovalGatekeeper.
@@ -50,11 +56,13 @@ func NewApprovalGatekeeper() *ApprovalGatekeeper {
 	return &ApprovalGatekeeper{
 		pending:     make(map[string]*ToolApprovalRequest),
 		alwaysAllow: make(map[string]bool),
-		subscribers: make(map[chan ToolApprovalRequest]struct{}),
 	}
 }
 
 func normalizeCommandKey(toolName, command string) string {
+	if strings.EqualFold(strings.TrimSpace(toolName), applyTool) {
+		return strings.ToLower(applyTool)
+	}
 	return strings.ToLower(strings.TrimSpace(toolName)) + "::" + strings.TrimSpace(command)
 }
 
@@ -65,8 +73,8 @@ func (g *ApprovalGatekeeper) IsAlwaysAllowed(toolName, command string) bool {
 	return g.alwaysAllow[normalizeCommandKey(toolName, command)]
 }
 
-// RequestApproval creates a pending approval request and blocks on its `chan bool` until the user responds
-// in the Desktop UI ("อนุญาตครั้งเดียว", "อนุญาตเสมอสำหรับคำสั่งนี้", or "ปฏิเสธ") or ctx is cancelled.
+// RequestApproval creates a pending approval request and blocks until the user responds in the
+// Desktop UI (allow once, allow always, or deny) or ctx is cancelled.
 func (g *ApprovalGatekeeper) RequestApproval(ctx context.Context, taskID, toolName, command, targetPath, description string) (bool, error) {
 	key := normalizeCommandKey(toolName, command)
 
@@ -88,14 +96,7 @@ func (g *ApprovalGatekeeper) RequestApproval(ctx context.Context, taskID, toolNa
 		replyCh:     make(chan bool, 1),
 	}
 	g.pending[req.ID] = req
-	g.history = append(g.history, req)
-	snapshot := *req
-	for sub := range g.subscribers {
-		select {
-		case sub <- snapshot:
-		default:
-		}
-	}
+	g.remember(req)
 	g.mu.Unlock()
 
 	select {
@@ -112,8 +113,8 @@ func (g *ApprovalGatekeeper) RequestApproval(ctx context.Context, taskID, toolNa
 	}
 }
 
-// EnqueueApproval creates a non-blocking pending approval request and returns both the request metadata
-// and its `<-chan bool` confirmation channel for callers that want to wait asynchronously.
+// EnqueueApproval creates a non-blocking pending approval request and returns both the request
+// metadata and a channel that receives the decision, for callers that want to wait asynchronously.
 func (g *ApprovalGatekeeper) EnqueueApproval(taskID, toolName, command, targetPath, description string) (*ToolApprovalRequest, <-chan bool) {
 	key := normalizeCommandKey(toolName, command)
 	replyCh := make(chan bool, 1)
@@ -150,18 +151,11 @@ func (g *ApprovalGatekeeper) EnqueueApproval(taskID, toolName, command, targetPa
 		replyCh:     replyCh,
 	}
 	g.pending[req.ID] = req
-	g.history = append(g.history, req)
-	snapshot := *req
-	for sub := range g.subscribers {
-		select {
-		case sub <- snapshot:
-		default:
-		}
-	}
+	g.remember(req)
 	return req, replyCh
 }
 
-// Resolve submits the user's decision ("once", "always", or "deny") and sends the boolean result to `replyCh`.
+// Resolve submits the user's decision ("once", "always", or "deny") and releases the waiting caller.
 func (g *ApprovalGatekeeper) Resolve(id string, decision ApprovalDecisionType) (*ToolApprovalRequest, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -195,13 +189,15 @@ func (g *ApprovalGatekeeper) Resolve(id string, decision ApprovalDecisionType) (
 	}
 
 	snapshot := *req
-	for sub := range g.subscribers {
-		select {
-		case sub <- snapshot:
-		default:
-		}
-	}
 	return &snapshot, nil
+}
+
+// remember appends req to the bounded history, dropping the oldest entries. Caller holds g.mu.
+func (g *ApprovalGatekeeper) remember(req *ToolApprovalRequest) {
+	g.history = append(g.history, req)
+	if n := len(g.history); n > maxApprovalHistory {
+		g.history = append([]*ToolApprovalRequest(nil), g.history[n-maxApprovalHistory:]...)
+	}
 }
 
 // ListPending returns all currently waiting approval requests.
@@ -215,7 +211,7 @@ func (g *ApprovalGatekeeper) ListPending() []ToolApprovalRequest {
 	return out
 }
 
-// AlwaysAllowedCommands returns the list of command keys approved with "อนุญาตเสมอสำหรับคำสั่งนี้".
+// AlwaysAllowedCommands returns the keys of the commands the user approved with "always allow".
 func (g *ApprovalGatekeeper) AlwaysAllowedCommands() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -226,19 +222,4 @@ func (g *ApprovalGatekeeper) AlwaysAllowedCommands() []string {
 		}
 	}
 	return out
-}
-
-// Subscribe registers a channel to receive real-time approval request updates (for SSE/WebSocket streaming).
-func (g *ApprovalGatekeeper) Subscribe() (chan ToolApprovalRequest, func()) {
-	ch := make(chan ToolApprovalRequest, 16)
-	g.mu.Lock()
-	g.subscribers[ch] = struct{}{}
-	g.mu.Unlock()
-
-	unsubscribe := func() {
-		g.mu.Lock()
-		delete(g.subscribers, ch)
-		g.mu.Unlock()
-	}
-	return ch, unsubscribe
 }

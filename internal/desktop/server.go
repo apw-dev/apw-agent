@@ -1,27 +1,28 @@
 package desktop
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/app"
+	"github.com/apiwat/apw-agent/internal/browser"
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/core"
 	"github.com/apiwat/apw-agent/internal/daemon"
-	"github.com/apiwat/apw-agent/internal/session"
+	"github.com/apiwat/apw-agent/internal/executor"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 	"github.com/apiwat/apw-agent/internal/transport"
 )
@@ -66,17 +67,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/symbols", s.handleSymbols)
 	mux.HandleFunc("GET /api/file", s.handleFile)
-	mux.HandleFunc("POST /api/agent-md/init", s.handleInitAgentMD)
+	mux.HandleFunc("GET /api/instructions", s.handleInstructions)
+	mux.HandleFunc("POST /api/instructions/init", s.handleInstructionsInit)
 	mux.HandleFunc("POST /api/trust", s.handleTrust)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /api/approvals", s.handleListApprovals)
-	mux.HandleFunc("POST /api/approvals/request", s.handleRequestApproval)
 	mux.HandleFunc("POST /api/approvals/{id}/decide", s.handleDecideApproval)
 	mux.HandleFunc("POST /api/plan", s.handlePlan)
 	mux.HandleFunc("POST /api/run", s.handleRun)
 	mux.HandleFunc("POST /api/verify", s.handleVerify)
+	mux.HandleFunc("POST /api/tasks/{id}/apply", s.handleApply)
 	mux.Handle("/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		st, err := s.current(r.Context())
 		if err != nil {
@@ -139,80 +141,51 @@ func (s *Server) StartAndOpen(ctx context.Context, addr string, open bool) (stri
 	return url, nil
 }
 
-// OpenAppWindow launches a native app-mode WebView window (Edge/Chrome --app) on Windows,
-// falling back to the system default browser handler.
+// OpenAppWindow launches a native app-mode window (Edge/Chrome --app) when a Chromium-based
+// browser is installed, falling back to the system default browser handler on Windows.
 func OpenAppWindow(url string) {
-	if runtime.GOOS == "windows" {
-		for _, bin := range []string{"msedge", "chrome"} {
-			if p, err := exec.LookPath(bin); err == nil {
-				cmd := exec.Command(p, "--app="+url, "--window-size=1440,900")
-				if cmd.Start() == nil {
-					_ = cmd.Process.Release()
-					return
-				}
-			}
-		}
-		cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	if runtime.GOOS != "windows" {
+		return
+	}
+	if bin, ok := browser.Find(); ok {
+		cmd := exec.Command(bin, "--app="+url, "--window-size=1440,900")
 		if cmd.Start() == nil {
 			_ = cmd.Process.Release()
+			return
 		}
+	}
+	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	if cmd.Start() == nil {
+		_ = cmd.Process.Release()
 	}
 }
 
 type statusPayload struct {
-	Version        string `json:"version"`
-	Brain1Name     string `json:"brain1_name"`
-	Brain1Model    string `json:"brain1_model,omitempty"`
-	Brain1State    string `json:"brain1_state"`
-	Brain1Latency  int64  `json:"brain1_latency_ms"`
-	Brain2Name     string `json:"brain2_name"`
-	Brain2Model    string `json:"brain2_model,omitempty"`
-	Brain2State    string `json:"brain2_state"`
-	DaemonRunning  bool   `json:"daemon_running"`
-	DaemonPID      int    `json:"daemon_pid"`
-	SkillsLoaded   int    `json:"skills_loaded"`
-	Workspace      string `json:"workspace"`
-	Stack          string `json:"stack"`
-	Trusted        bool   `json:"trusted"`
-	AgentMDLoaded  bool   `json:"agent_md_loaded"`
-	AgentMDPath    string `json:"agent_md_path,omitempty"`
-	AgentMDLines   int    `json:"agent_md_lines,omitempty"`
-	AgentMDSize    int    `json:"agent_md_size,omitempty"`
-	AgentMDContent string `json:"agent_md_content,omitempty"`
-}
-
-func inspectAgentMD(workspace string) (loaded bool, relPath string, lines int, size int, content string) {
-	candidates := []string{"AGENT.md", "AGENTS.md", ".apw/AGENT.md", "CLAUDE.md"}
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return false, "AGENT.md", 0, 0, ""
-	}
-	defer root.Close()
-
-	for _, rel := range candidates {
-		f, err := root.Open(rel)
-		if err != nil {
-			continue
-		}
-		data, rErr := io.ReadAll(io.LimitReader(f, 64*1024))
-		_ = f.Close()
-		if rErr != nil {
-			continue
-		}
-		text := string(data)
-		lineCount := 0
-		if len(text) > 0 {
-			lineCount = strings.Count(text, "\n") + 1
-		}
-		return true, rel, lineCount, len(data), text
-	}
-	return false, "AGENT.md", 0, 0, ""
+	Version            string `json:"version"`
+	Brain1Name         string `json:"brain1_name"`
+	Brain1Model        string `json:"brain1_model,omitempty"`
+	Brain1State        string `json:"brain1_state"`
+	Brain1Latency      int64  `json:"brain1_latency_ms"`
+	Brain2Name         string `json:"brain2_name"`
+	Brain2Model        string `json:"brain2_model,omitempty"`
+	Brain2State        string `json:"brain2_state"`
+	DaemonRunning      bool   `json:"daemon_running"`
+	DaemonPID          int    `json:"daemon_pid"`
+	SkillsLoaded       int    `json:"skills_loaded"`
+	Workspace          string `json:"workspace"`
+	Stack              string `json:"stack"`
+	Trusted            bool   `json:"trusted"`
+	SandboxMode        string `json:"sandbox_mode"`
+	InstructionsLoaded bool   `json:"instructions_loaded"`
+	InstructionsPath   string `json:"instructions_path"`
+	InstructionsLines  int    `json:"instructions_lines"`
+	InstructionsSize   int    `json:"instructions_size"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
 		return
 	}
 	state := daemon.Status(cfg.Workspace)
@@ -223,243 +196,57 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if p, ok := cfg.Providers[cfg.Roles.Architect]; ok && p.Model != "" {
 		b2Model = p.Model
 	}
-	mdLoaded, mdPath, mdLines, mdSize, mdContent := inspectAgentMD(cfg.Workspace)
+	sandboxMode := cfg.Sandbox.Mode
+	if sandboxMode == "" {
+		sandboxMode = "off"
+	}
+	instrPath, instrText := executor.ProjectInstructions(cfg.Workspace)
+	instrLines := 0
+	if instrText != "" {
+		instrLines = strings.Count(instrText, "\n") + 1
+	}
 	writeJSON(w, statusPayload{
-		Version:        s.Version,
-		Brain1Name:     "Reflex Engine",
-		Brain1Model:    b1Model,
-		Brain1State:    "Available",
-		Brain1Latency:  state.LatencyMs,
-		Brain2Name:     "Architect",
-		Brain2Model:    b2Model,
-		Brain2State:    "Standby",
-		DaemonRunning:  state.Running,
-		DaemonPID:      state.PID,
-		SkillsLoaded:   daemon.CountSkills(cfg.Workspace),
-		Workspace:      cfg.Workspace,
-		Stack:          config.DetectStack(cfg.Workspace),
-		Trusted:        cfg.Policy.Trusted,
-		AgentMDLoaded:  mdLoaded,
-		AgentMDPath:    mdPath,
-		AgentMDLines:   mdLines,
-		AgentMDSize:    mdSize,
-		AgentMDContent: mdContent,
+		Version:            s.Version,
+		Brain1Name:         "Reflex Engine",
+		Brain1Model:        b1Model,
+		Brain1State:        "Available",
+		Brain1Latency:      state.LatencyMs,
+		Brain2Name:         "Architect",
+		Brain2Model:        b2Model,
+		Brain2State:        "Standby",
+		DaemonRunning:      state.Running,
+		DaemonPID:          state.PID,
+		SkillsLoaded:       daemon.CountSkills(cfg.Workspace),
+		Workspace:          cfg.Workspace,
+		Stack:              config.DetectStack(cfg.Workspace),
+		Trusted:            cfg.Policy.Trusted,
+		SandboxMode:        sandboxMode,
+		InstructionsLoaded: instrPath != "",
+		InstructionsPath:   instrPath,
+		InstructionsLines:  instrLines,
+		InstructionsSize:   len(instrText),
 	})
-}
-
-func (s *Server) handleInitAgentMD(w http.ResponseWriter, r *http.Request) {
-	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	stack := config.DetectStack(cfg.Workspace)
-	target := filepath.Join(cfg.Workspace, "AGENT.md")
-	if _, err := os.Stat(target); err == nil {
-		writeJSON(w, map[string]any{"ok": true, "path": "AGENT.md", "created": false})
-		return
-	}
-	starter := fmt.Sprintf(`# AGENT.md — Workspace Operating Rules
-
-## Project Context
-- **Workspace**: %s
-- **Detected Stack**: %s
-
-## Core Guidelines
-1. Always inspect existing symbols and tests before proposing changes.
-2. Isolate mutations inside Git worktrees and pass Reflex verification before applying.
-3. Require Human-in-the-Loop confirmation before executing destructive or external system commands.
-`, filepath.Base(cfg.Workspace), stack)
-
-	if err := surgeon.WriteFileAtomic(target, []byte(starter), 0644); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	writeJSON(w, map[string]any{"ok": true, "path": "AGENT.md", "created": true})
 }
 
 func (s *Server) handleTrust(w http.ResponseWriter, r *http.Request) {
-	cfg, cfgFile, err := daemon.LoadConfig(s.ConfigPath)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
+	var body struct {
+		Trusted *bool `json:"trusted"`
+	}
+	if err := transport.Decode(r, &body); err != nil || body.Trusted == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", `body must be {"trusted": true} or {"trusted": false}`)
 		return
 	}
-	cfg.Policy.Trusted = !cfg.Policy.Trusted
+	cfg, cfgFile, err := daemon.LoadConfig(s.ConfigPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
+		return
+	}
+	cfg.Policy.Trusted = *body.Trusted
 	if err := cfg.Save(cfgFile); err != nil {
-		http.Error(w, err.Error(), 500)
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
 		return
 	}
 	writeJSON(w, map[string]any{"trusted": cfg.Policy.Trusted})
-}
-
-func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
-	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	rel := filepath.Clean(strings.TrimSpace(r.URL.Query().Get("path")))
-	if rel == "" || rel == "." || !filepath.IsLocal(rel) {
-		http.Error(w, "invalid relative path", 400)
-		return
-	}
-	root, err := os.OpenRoot(cfg.Workspace)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	defer root.Close()
-	f, err := root.Open(rel)
-	if err != nil {
-		http.Error(w, err.Error(), 404)
-		return
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 256*1024))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	writeJSON(w, map[string]string{
-		"path":    filepath.ToSlash(rel),
-		"content": string(data),
-	})
-}
-
-type sessionSummary struct {
-	ID              string    `json:"id"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	TurnCount       int       `json:"turn_count"`
-	LastInstruction string    `json:"last_instruction,omitempty"`
-}
-
-func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	dir := filepath.Join(cfg.Workspace, ".apw", "sessions")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		writeJSON(w, []sessionSummary{})
-		return
-	}
-	var out []sessionSummary
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".json")
-		sess, err := session.Load(cfg.Workspace, id)
-		if err != nil {
-			continue
-		}
-		lastInstr := ""
-		if len(sess.History) > 0 {
-			lastInstr = sess.History[len(sess.History)-1].Instruction
-		}
-		out = append(out, sessionSummary{
-			ID:              sess.ID,
-			UpdatedAt:       sess.UpdatedAt,
-			TurnCount:       len(sess.History),
-			LastInstruction: lastInstr,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].UpdatedAt.After(out[j].UpdatedAt)
-	})
-	writeJSON(w, out)
-}
-
-func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
-	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	sess := session.New(cfg.Workspace)
-	if err := sess.Save(); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	writeJSON(w, sess)
-}
-
-func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	sess, err := session.Load(cfg.Workspace, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "session not found", 404)
-		return
-	}
-	writeJSON(w, sess)
-}
-
-func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
-	gk := s.gatekeeper()
-	writeJSON(w, map[string]any{
-		"pending":        gk.ListPending(),
-		"always_allowed": gk.AlwaysAllowedCommands(),
-	})
-}
-
-func (s *Server) handleRequestApproval(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		TaskID      string `json:"task_id,omitempty"`
-		ToolName    string `json:"tool_name"`
-		Command     string `json:"command"`
-		TargetPath  string `json:"target_path,omitempty"`
-		Description string `json:"description,omitempty"`
-	}
-	if err := transport.Decode(r, &body); err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	if strings.TrimSpace(body.ToolName) == "" {
-		body.ToolName = "SystemCommand"
-	}
-	if strings.TrimSpace(body.Command) == "" {
-		http.Error(w, "command is required", 400)
-		return
-	}
-	allowed, err := s.gatekeeper().RequestApproval(
-		r.Context(),
-		body.TaskID,
-		body.ToolName,
-		body.Command,
-		body.TargetPath,
-		body.Description,
-	)
-	if err != nil {
-		http.Error(w, err.Error(), 408)
-		return
-	}
-	writeJSON(w, map[string]any{
-		"approved": allowed,
-		"tool":     body.ToolName,
-		"command":  body.Command,
-	})
-}
-
-func (s *Server) handleDecideApproval(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Decision string `json:"decision"`
-	}
-	if err := transport.Decode(r, &body); err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	resolved, err := s.gatekeeper().Resolve(r.PathValue("id"), ApprovalDecisionType(body.Decision))
-	if err != nil {
-		http.Error(w, err.Error(), 404)
-		return
-	}
-	writeJSON(w, resolved)
 }
 
 type fileSymbols struct {
@@ -519,36 +306,46 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, plan)
 }
 
+// runnableMode reports whether /api/run accepts m.
+func runnableMode(m core.TaskMode) bool {
+	switch m {
+	case core.ModeExecute, core.ModePreview, core.ModeReview, core.ModeUnverified:
+		return true
+	}
+	return false
+}
+
+const untrustedMessage = "This workspace is not trusted for build and test commands. Trust it first, or use preview, review or unverified mode."
+
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		RequestID       string        `json:"request_id"`
-		SessionID       string        `json:"session_id,omitempty"`
-		Instruction     string        `json:"instruction"`
-		Mode            core.TaskMode `json:"mode"`
-		RequireApproval bool          `json:"require_approval,omitempty"`
+		RequestID   string        `json:"request_id"`
+		SessionID   string        `json:"session_id,omitempty"`
+		Instruction string        `json:"instruction"`
+		Mode        core.TaskMode `json:"mode"`
 	}
 	if err := transport.Decode(r, &payload); err != nil {
-		http.Error(w, err.Error(), 400)
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if payload.RequireApproval && (payload.Mode == core.ModeExecute || payload.Mode == "") {
-		cmdLabel := fmt.Sprintf("apw run %q", payload.Instruction)
-		allowed, err := s.gatekeeper().RequestApproval(
-			r.Context(),
-			payload.RequestID,
-			"TriadExecute",
-			cmdLabel,
-			".",
-			"ขออนุมัติรันการแก้ไขโค้ดใน Isolated Worktree และรันชุดทดสอบ Reflex Verification",
-		)
-		if err != nil || !allowed {
-			http.Error(w, "การรันคำสั่งถูกปฏิเสธโดยผู้ใช้ (Human-in-the-loop denied)", http.StatusForbidden)
+	if !runnableMode(payload.Mode) {
+		writeError(w, http.StatusBadRequest, "invalid_mode", "mode must be execute, preview, review or unverified")
+		return
+	}
+	if payload.Mode == core.ModeExecute {
+		cfg, _, err := daemon.LoadConfig(s.ConfigPath)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error())
+			return
+		}
+		if !cfg.Policy.Trusted {
+			writeError(w, http.StatusConflict, "untrusted", untrustedMessage)
 			return
 		}
 	}
 	backend, err := s.backend(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), 503)
+		writeError(w, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
 	}
 	job, err := backend.Submit(r.Context(), "local", app.Request{
@@ -558,36 +355,50 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Mode:        payload.Mode,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		writeSubmitError(w, err)
 		return
 	}
 	writeJSON(w, job)
 }
 
+// writeSubmitError maps a backend Submit failure to a JSON error.
+func writeSubmitError(w http.ResponseWriter, err error) {
+	switch {
+	case isTransportError(err):
+		writeError(w, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
+	case strings.Contains(err.Error(), "not trusted"):
+		writeError(w, http.StatusConflict, "untrusted", err.Error())
+	default:
+		writeError(w, http.StatusBadRequest, "rejected", err.Error())
+	}
+}
+
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
-	var payload struct {
-		RequireApproval bool `json:"require_approval,omitempty"`
+	// The body is optional, but a body that is present must be a JSON object.
+	data, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
 	}
-	if r.ContentLength > 0 {
-		_ = transport.Decode(r, &payload)
-	}
-	if payload.RequireApproval {
-		allowed, err := s.gatekeeper().RequestApproval(
-			r.Context(),
-			"",
-			"ReflexVerifier",
-			"apw verify .",
-			".",
-			"ขออนุมัติรัน Pipeline ตรวจสอบโค้ดของโปรเจกต์ (fmt -> vet -> build -> test)",
-		)
-		if err != nil || !allowed {
-			http.Error(w, "การรัน Verify ถูกปฏิเสธโดยผู้ใช้ (Human-in-the-loop denied)", http.StatusForbidden)
+	if len(bytes.TrimSpace(data)) > 0 {
+		var ignored map[string]json.RawMessage
+		if err := json.Unmarshal(data, &ignored); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "body must be a JSON object: "+err.Error())
 			return
 		}
 	}
+	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
+		return
+	}
+	if !cfg.Policy.Trusted {
+		writeError(w, http.StatusConflict, "untrusted", untrustedMessage)
+		return
+	}
 	backend, err := s.backend(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), 503)
+		writeError(w, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
 	}
 	job, err := backend.Submit(r.Context(), "local", app.Request{
@@ -596,13 +407,50 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		Mode:        core.ModeVerify,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		writeSubmitError(w, err)
 		return
 	}
 	writeJSON(w, job)
 }
 
+func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
+	gk := s.gatekeeper()
+	writeJSON(w, map[string]any{
+		"pending":        gk.ListPending(),
+		"always_allowed": gk.AlwaysAllowedCommands(),
+	})
+}
+
+func (s *Server) handleDecideApproval(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Decision string `json:"decision"`
+	}
+	if err := transport.Decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	switch ApprovalDecisionType(body.Decision) {
+	case DecisionOnce, DecisionAlways, DecisionDeny:
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_decision", "decision must be once, always or deny")
+		return
+	}
+	resolved, err := s.gatekeeper().Resolve(r.PathValue("id"), ApprovalDecisionType(body.Decision))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	writeJSON(w, resolved)
+}
+
 func writeJSON(w http.ResponseWriter, value any) { transport.WriteJSON(w, value) }
+
+// writeError sends the Desktop API's JSON error: {"error": "<code>", "message": "<text>"}.
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": message})
+}
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

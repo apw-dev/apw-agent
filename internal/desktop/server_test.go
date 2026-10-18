@@ -87,14 +87,14 @@ func TestServer_Endpoints(t *testing.T) {
 		t.Fatalf("POST /api/plan status = %d", resp2.StatusCode)
 	}
 
-	// 4. AGENT.md Init & Status detection
-	respInit, err := post(ts.URL+"/api/agent-md/init", `{}`)
+	// 4. Instructions init & status detection
+	respInit, err := post(ts.URL+"/api/instructions/init", `{}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	respInit.Body.Close()
 	if respInit.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/agent-md/init status = %d", respInit.StatusCode)
+		t.Fatalf("POST /api/instructions/init status = %d", respInit.StatusCode)
 	}
 
 	respStatus2, err := get(ts.URL + "/api/status")
@@ -106,11 +106,11 @@ func TestServer_Endpoints(t *testing.T) {
 	if err := json.NewDecoder(respStatus2.Body).Decode(&st2); err != nil {
 		t.Fatal(err)
 	}
-	if !st2.AgentMDLoaded || st2.AgentMDPath != "AGENT.md" || st2.AgentMDLines == 0 {
-		t.Fatalf("expected AGENT.md to be loaded in status, got %+v", st2)
+	if !st2.InstructionsLoaded || st2.InstructionsPath != "APW.md" || st2.InstructionsLines == 0 {
+		t.Fatalf("expected APW.md to be loaded in status, got %+v", st2)
 	}
 
-	// 5. Sessions create & list
+	// 5. A new conversation id does not create a session file; the list stays empty.
 	respSess, err := post(ts.URL+"/api/sessions", `{}`)
 	if err != nil {
 		t.Fatal(err)
@@ -129,15 +129,15 @@ func TestServer_Endpoints(t *testing.T) {
 	if err := json.NewDecoder(respListSess.Body).Decode(&sessions); err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 {
-		t.Fatalf("expected 1 session, got %d", len(sessions))
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions before a task is submitted, got %d", len(sessions))
 	}
 }
 
-func TestApprovalGatekeeper_HumanInTheLoopChanBool(t *testing.T) {
+func TestApprovalGatekeeper_Decisions(t *testing.T) {
 	gk := NewApprovalGatekeeper()
 
-	// 1. "once" (อนุญาตครั้งเดียว) unblocks chan bool with true, but does not persist always-allow.
+	// 1. "once" (อนุญาตครั้งเดียว) releases the waiter with true, but does not persist always-allow.
 	reqOnce, chOnce := gk.EnqueueApproval("task-1", "SystemCommand", "go test ./...", ".", "run tests")
 	if reqOnce.Status != "pending" {
 		t.Fatalf("expected pending status, got %s", reqOnce.Status)
@@ -146,28 +146,28 @@ func TestApprovalGatekeeper_HumanInTheLoopChanBool(t *testing.T) {
 		t.Fatal(err)
 	}
 	if allowed := <-chOnce; !allowed {
-		t.Fatal("expected DecisionOnce to send true on chan bool")
+		t.Fatal("expected DecisionOnce to send true to the waiter")
 	}
 	if gk.IsAlwaysAllowed("SystemCommand", "go test ./...") {
 		t.Fatal("expected DecisionOnce not to mark command as always allowed")
 	}
 
-	// 2. "deny" (ปฏิเสธ) unblocks chan bool with false.
+	// 2. "deny" (ปฏิเสธ) releases the waiter with false.
 	reqDeny, chDeny := gk.EnqueueApproval("task-2", "SystemCommand", "rm -rf /tmp/x", ".", "cleanup")
 	if _, err := gk.Resolve(reqDeny.ID, DecisionDeny); err != nil {
 		t.Fatal(err)
 	}
 	if allowed := <-chDeny; allowed {
-		t.Fatal("expected DecisionDeny to send false on chan bool")
+		t.Fatal("expected DecisionDeny to send false to the waiter")
 	}
 
-	// 3. "always" (อนุญาตเสมอสำหรับคำสั่งนี้) unblocks chan bool with true AND auto-approves next call.
+	// 3. "always" (อนุญาตเสมอสำหรับคำสั่งนี้) releases the waiter with true AND auto-approves next call.
 	reqAlways, chAlways := gk.EnqueueApproval("task-3", "SystemCommand", "go vet ./...", ".", "vet code")
 	if _, err := gk.Resolve(reqAlways.ID, DecisionAlways); err != nil {
 		t.Fatal(err)
 	}
 	if allowed := <-chAlways; !allowed {
-		t.Fatal("expected DecisionAlways to send true on chan bool")
+		t.Fatal("expected DecisionAlways to send true to the waiter")
 	}
 	if !gk.IsAlwaysAllowed("SystemCommand", "go vet ./...") {
 		t.Fatal("expected DecisionAlways to persist in alwaysAllow map")
