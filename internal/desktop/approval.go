@@ -164,6 +164,13 @@ func (g *ApprovalGatekeeper) Resolve(id string, decision ApprovalDecisionType) (
 	if !ok {
 		return nil, fmt.Errorf("approval request %q not found or already resolved", id)
 	}
+	// Validate before removing the request: an invalid decision must leave it pending so the
+	// waiting caller is still released by a later valid decision.
+	switch decision {
+	case DecisionOnce, DecisionAlways, DecisionDeny:
+	default:
+		return nil, fmt.Errorf("invalid decision %q (expected once, always, or deny)", decision)
+	}
 	delete(g.pending, id)
 	req.decision = decision
 
@@ -178,9 +185,6 @@ func (g *ApprovalGatekeeper) Resolve(id string, decision ApprovalDecisionType) (
 		allowed = true
 	case DecisionDeny:
 		req.Status = "denied"
-		allowed = false
-	default:
-		return nil, fmt.Errorf("invalid decision %q (expected once, always, or deny)", decision)
 	}
 
 	select {

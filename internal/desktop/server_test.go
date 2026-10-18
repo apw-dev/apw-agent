@@ -184,3 +184,35 @@ func mustQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+func TestResolveInvalidDecisionKeepsRequestPending(t *testing.T) {
+	gk := NewApprovalGatekeeper()
+	req, ch := gk.EnqueueApproval("task-1", applyTool, "apply task task-1", ".", "apply")
+	if _, err := gk.Resolve(req.ID, ApprovalDecisionType("maybe")); err == nil {
+		t.Fatal("invalid decision accepted")
+	}
+	if len(gk.ListPending()) != 1 {
+		t.Fatal("invalid decision removed the pending request")
+	}
+	if _, err := gk.Resolve(req.ID, DecisionDeny); err != nil {
+		t.Fatal(err)
+	}
+	if allowed := <-ch; allowed {
+		t.Fatal("deny released the caller with true")
+	}
+}
+
+func TestIndexServesStrictCSP(t *testing.T) {
+	s := NewServer(filepath.Join(t.TempDir(), "apw.json"), "test")
+	rec := httptest.NewRecorder()
+	s.handleIndex(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("CSP %q lacks %q", csp, want)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "__APW_TOKEN__") || !strings.Contains(rec.Body.String(), s.Token) {
+		t.Fatal("token not substituted")
+	}
+}

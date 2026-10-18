@@ -452,10 +452,14 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": message})
 }
 
+const desktopCSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'none'")
+	// The page holds the API token: it may load nothing from elsewhere and talk only to this
+	// server. Inline script/style are the page itself (and the sandboxed HTML preview).
+	w.Header().Set("Content-Security-Policy", desktopCSP)
 	_, _ = w.Write([]byte(strings.ReplaceAll(desktopHTML, "__APW_TOKEN__", s.Token)))
 }

@@ -424,8 +424,12 @@ async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}), Authorization: "Bearer " + apiToken };
   if (options.method === "POST") headers["Content-Type"] = "application/json";
   const request = { ...options, headers };
+  // Retry once only for reads: a POST that failed in transit may already have reached the server.
   try { return await window.fetch(path, request); }
-  catch (error) { return window.fetch(path, request); }
+  catch (error) {
+    if ((options.method || "GET") !== "GET") throw error;
+    return window.fetch(path, request);
+  }
 }
 
 /* Reads a response body once and returns {ok, status, data, error, message}. */
