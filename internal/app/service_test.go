@@ -16,6 +16,7 @@ import (
 	"github.com/apiwat/apw-agent/internal/core"
 	"github.com/apiwat/apw-agent/internal/executor"
 	"github.com/apiwat/apw-agent/internal/provider/mock"
+	"github.com/apiwat/apw-agent/internal/session"
 	"github.com/apiwat/apw-agent/internal/store"
 )
 
@@ -284,6 +285,18 @@ func TestConversationsKeepContextWithinOwnerAndSession(t *testing.T) {
 		if err != nil || stored.SessionID != request.session {
 			t.Fatal("conversation identity was not persisted")
 		}
+	}
+	for _, want := range []struct{ owner, conversation string }{{"local", "one"}, {"local", "two"}, {"telegram:111", "one"}} {
+		sess, err := session.Load(cfg.Workspace, SessionFileID(want.owner, want.conversation))
+		if err != nil {
+			t.Fatalf("session file for %v is not at SessionFileID: %v", want, err)
+		}
+		if sess.Owner != want.owner || sess.Conversation != want.conversation {
+			t.Errorf("session identity = %q/%q, want %q/%q", sess.Owner, sess.Conversation, want.owner, want.conversation)
+		}
+	}
+	if SessionFileID("local", "one") == SessionFileID("local", "two") || SessionFileID("local", "one") == SessionFileID("telegram:111", "one") {
+		t.Error("session file ids collide across owners or conversations")
 	}
 	r := Request{RequestID: "dedupe", SessionID: "one", Instruction: "same", Mode: core.ModeReview}
 	if _, err := s.Submit(context.Background(), "local", r); err != nil {

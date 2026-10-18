@@ -73,6 +73,17 @@ func configurePlanning(e *executor.Executor, cfg *config.Config) {
 	e.Lookup = cfg.Planning.Lookup
 }
 
+// SessionFileID maps a job owner and conversation id to the id of the session file that holds
+// the conversation (.apw/sessions/<id>.json).
+func SessionFileID(owner, conversation string) string {
+	key := owner
+	if conversation != "" {
+		key += string(rune(0)) + conversation
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "owner-" + hex.EncodeToString(sum[:16])
+}
+
 func NewID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -344,12 +355,7 @@ func (s *Service) run(j *store.Job) {
 	var report *executor.ExecutionReport
 	if err == nil {
 		defer closeProvider()
-		sessionOwner := j.Owner
-		if j.SessionID != "" {
-			sessionOwner += string(rune(0)) + j.SessionID
-		}
-		ownerHash := sha256.Sum256([]byte(sessionOwner))
-		sessionID := "owner-" + hex.EncodeToString(ownerHash[:16])
+		sessionID := SessionFileID(j.Owner, j.SessionID)
 		sess, loadErr := session.Load(cfg.Workspace, sessionID)
 		if loadErr != nil {
 			if !errors.Is(loadErr, os.ErrNotExist) {
@@ -358,6 +364,12 @@ func (s *Service) run(j *store.Job) {
 			}
 			sess = session.New(cfg.Workspace)
 			sess.ID = sessionID
+		}
+		if sess.Owner == "" {
+			sess.Owner = j.Owner
+		}
+		if sess.Conversation == "" {
+			sess.Conversation = j.SessionID
 		}
 		e.Session = sess
 		e.VerifyOverride = project.FromConfig(cfg.Verify)

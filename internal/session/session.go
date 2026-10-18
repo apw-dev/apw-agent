@@ -64,6 +64,10 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	History   []Turn    `json:"history"`
 	Memory    Memory    `json:"memory"`
+	// Owner and Conversation identify who the session belongs to (the job owner and the
+	// client-chosen conversation id). They let a UI list only its own conversations.
+	Owner        string `json:"owner,omitempty"`
+	Conversation string `json:"conversation,omitempty"`
 
 	mu sync.RWMutex
 }
