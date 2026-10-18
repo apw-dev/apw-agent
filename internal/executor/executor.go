@@ -302,19 +302,8 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 			return sr, "", err
 		}
 		e.rememberRead(st.TargetFile, content)
-		dir, err := e.askDirective(ctx, fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, content))
-		if err != nil {
-			return sr, "", err
-		}
-		if err = ctx.Err(); err != nil {
-			return sr, "", err
-		}
-		if _, err = surg.PatchWorkspaceFile(base, st.TargetFile, surgeon.PatchOperation{BaseHash: hash, OldContent: dir.OldContent, NewContent: dir.NewContent}, func(before, after surgeon.FileState) error {
-			if e.mutation != nil {
-				return e.mutation(st.TargetFile, before, after)
-			}
-			return nil
-		}); err != nil {
+		prompt := fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, content)
+		if _, err = e.patchWithRetry(ctx, base, surg, st.TargetFile, hash, false, prompt); err != nil {
 			return sr, "", err
 		}
 	case architect.ActionDelete:
@@ -350,33 +339,80 @@ func (e *Executor) repairWithReflex(ctx context.Context, base string, surg *surg
 	if target != "" {
 		content, _, _ = surg.ReadWorkspaceFile(base, target)
 	}
-	dir, err := e.askDirective(ctx, fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, content))
-	if err != nil {
-		return err
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if dir.TargetFile != "" {
-		target = dir.TargetFile
-	}
-	if target == "" {
-		return errors.New("repair target missing")
-	}
-	_, hash, err := surg.ReadWorkspaceFile(base, target)
-	if err != nil {
-		return err
-	}
-	_, err = surg.PatchWorkspaceFile(base, target, surgeon.PatchOperation{BaseHash: hash, OldContent: dir.OldContent, NewContent: dir.NewContent}, func(before, after surgeon.FileState) error {
-		if e.mutation != nil {
-			return e.mutation(target, before, after)
-		}
-		return nil
-	})
+	prompt := fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, content)
+	patched, err := e.patchWithRetry(ctx, base, surg, target, "", true, prompt)
 	if err == nil {
-		appendModifiedFile(files, target)
+		appendModifiedFile(files, patched)
 	}
 	return err
+}
+
+// patchMatchAttempts bounds how often one patch is requested when its old_content does not match
+// the file exactly once.
+const patchMatchAttempts = 3
+
+// retryablePatch reports Surgeon errors that the patch model can fix by choosing old_content again.
+func retryablePatch(err error) bool {
+	return errors.Is(err, surgeon.ErrTargetNotFound) || errors.Is(err, surgeon.ErrMultipleMatches) || errors.Is(err, surgeon.ErrEmptyTarget)
+}
+
+// patchWithRetry asks for a patch directive and applies it. When old_content does not occur
+// exactly once, the Surgeon's error and the file's current content go back to the patch model,
+// up to patchMatchAttempts requests. A failed match never writes or records a mutation. With
+// allowTarget the directive may name another target file (repairs); it returns the patched file.
+// shownHash, when set, is the hash of the content the first prompt showed: the first patch is
+// refused if the file changed since (later attempts show and pin the current content).
+func (e *Executor) patchWithRetry(ctx context.Context, base string, surg *surgeon.Surgeon, target, shownHash string, allowTarget bool, prompt string) (string, error) {
+	feedback := ""
+	for attempt := 1; ; attempt++ {
+		dir, err := e.askDirective(ctx, prompt+feedback)
+		if err != nil {
+			return "", err
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		file := target
+		if allowTarget && dir.TargetFile != "" {
+			file = dir.TargetFile
+		}
+		if file == "" {
+			return "", errors.New("repair target missing")
+		}
+		current, hash, err := surg.ReadWorkspaceFile(base, file)
+		if err != nil {
+			return "", err
+		}
+		if attempt == 1 && shownHash != "" && file == target {
+			hash = shownHash
+		}
+		_, err = surg.PatchWorkspaceFile(base, file, surgeon.PatchOperation{BaseHash: hash, OldContent: dir.OldContent, NewContent: dir.NewContent}, func(before, after surgeon.FileState) error {
+			if e.mutation != nil {
+				return e.mutation(file, before, after)
+			}
+			return nil
+		})
+		if err == nil {
+			return file, nil
+		}
+		if !retryablePatch(err) || attempt >= patchMatchAttempts {
+			return "", err
+		}
+		e.emit(ProgressEvent{Stage: "patch_retry", Message: fmt.Sprintf("%s: %v; asking for the patch again (%d/%d)", file, err, attempt+1, patchMatchAttempts)})
+		feedback = patchFeedback(err, file, dir.OldContent, current)
+	}
+}
+
+// patchFeedback explains a failed match to the patch model and shows the file as it is now.
+func patchFeedback(err error, file, oldContent, current string) string {
+	reason := "old_content was empty; it must be the exact existing text to replace."
+	switch {
+	case errors.Is(err, surgeon.ErrTargetNotFound):
+		reason = "old_content does not occur in the file. Copy it exactly from the current content below, including indentation, blank lines and line breaks."
+	case errors.Is(err, surgeon.ErrMultipleMatches):
+		reason = "old_content occurs more than once. Extend it with surrounding lines so it matches exactly one place."
+	}
+	return fmt.Sprintf("\n\nYOUR PREVIOUS PATCH FOR %s WAS REJECTED: %s\nRejected old_content:\n[old]\n%s\n[/old]\nCurrent content of %s:\n[source]\n%s\n[/source]\nRespond again with the same JSON format.", file, reason, headUTF8(oldContent, 4096), file, headUTF8(current, 48*1024))
 }
 
 func decodeDirective(raw []byte, dir *patchDirective) error {

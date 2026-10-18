@@ -165,7 +165,7 @@ Rules:
    Supported check kinds:
    - file_exists/file_absent: use file.
    - contains/not_contains: use file and value. The code is written later by another model, so its exact text cannot be predicted: value must be a short, distinctive token that every correct implementation must contain, such as a required identifier, a required string literal, an error message the task specifies, or a route like "/healthz". Never use an expression, a statement, a call with arguments, operators, formatting or a list of test inputs as value, and never use contains on test files to describe what the tests check.
-   - go_symbol (Go files only): value is a top-level Go identifier (function, method, type, variable or constant) that must exist.
+   - go_symbol (Go files only): value is a top-level Go identifier (function, method, type, variable or constant) that must exist in a non-test file. Never use go_symbol for test function names: the tests are written later and may be named differently; prove them with a verification check.
    - unchanged: use file; APW compares its state with the original snapshot.
    - only_changes: use files (an array of allowed relative paths); APW compares all snapshot changes.
    - verification: use value "all" or a stage name from the Verification pipeline in the Project profile; APW runs only that detected or configured pipeline, never commands you propose.
@@ -278,6 +278,7 @@ func ParsePlan(taskID, raw string) (*ExecutionPlan, error) {
 		return nil, fmt.Errorf("invalid execution plan: %w", err)
 	}
 
+	normalizeChecks(plan)
 	plan.Ranking = nil
 	plan.PlanID = fmt.Sprintf("plan-%d", time.Now().UnixNano())
 	plan.TaskID = taskID
@@ -310,6 +311,26 @@ func (a *Architect) Plan(ctx context.Context, task core.Task, codebaseOverview s
 	}
 
 	return ParsePlan(task.ID, res.Content)
+}
+
+// normalizeChecks replaces go_symbol checks on Go test files with a verification check of the
+// whole pipeline. Test names are chosen when the tests are written, so asserting a planned name
+// rejects correct work; running the tests is what proves the criterion.
+func normalizeChecks(plan *ExecutionPlan) {
+	seen := map[string]bool{}
+	var checks []AcceptanceCheck
+	for _, c := range plan.Checks {
+		if c.Kind == "go_symbol" && strings.HasSuffix(filepath.ToSlash(c.File), "_test.go") {
+			c = AcceptanceCheck{Criterion: c.Criterion, Kind: "verification", Value: "all"}
+		}
+		key := c.Criterion + "\x00" + c.Kind + "\x00" + c.File + "\x00" + c.Value + "\x00" + strings.Join(c.Files, "\x00")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		checks = append(checks, c)
+	}
+	plan.Checks = checks
 }
 
 // validStageValue accepts "all" or a verification stage name (same rule as

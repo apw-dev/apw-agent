@@ -243,3 +243,19 @@ func TestPlanningPromptWarnsAgainstLiteralCodeChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestTestFileGoSymbolBecomesVerification(t *testing.T) {
+	raw := `{"objective":"x","subtasks":[{"id":"1","action":"patch","target_file":"age/age.go","instruction":"x"}],
+"acceptance_criteria":["sentinel","tests"],
+"checks":[{"criterion":"sentinel","kind":"go_symbol","file":"age/age.go","value":"ErrInvalidAge"},
+{"criterion":"tests","kind":"go_symbol","file":"age/age_test.go","value":"TestParseInvalidAge"},
+{"criterion":"tests","kind":"go_symbol","file":"age/age_test.go","value":"TestParseValid"},
+{"criterion":"tests","kind":"verification","value":"all"}]}`
+	plan, err := ParsePlan("task-1", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Checks) != 2 || plan.Checks[0].Kind != "go_symbol" || plan.Checks[1].Kind != "verification" || plan.Checks[1].Criterion != "tests" {
+		t.Fatalf("checks = %+v", plan.Checks)
+	}
+}
