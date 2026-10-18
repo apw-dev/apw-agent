@@ -289,6 +289,11 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 			report.Summary += "\nChanges are retained in the worktree. Explicit apply is required."
 		}
 	}
+	if report.Warnings = mirrorWarnings(instruction, wt.Path, modified); len(report.Warnings) > 0 {
+		for _, w := range report.Warnings {
+			report.Summary += "\nWarning: " + w
+		}
+	}
 	changed, scanErr := wt.ChangedFiles(ctx)
 	if scanErr != nil {
 		report.Passed = false

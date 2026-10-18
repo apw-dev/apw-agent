@@ -104,6 +104,7 @@ type Result struct {
 	Applied      bool          `json:"applied"`
 	HiddenPassed bool          `json:"hidden_passed"`
 	Unverified   bool          `json:"unverified,omitempty"`
+	Warnings     []string      `json:"warnings,omitempty"`
 	Steps        int           `json:"steps,omitempty"`
 	Repairs      int           `json:"repairs"`
 	Files        []string      `json:"files,omitempty"`
@@ -323,6 +324,7 @@ func readReport(job *store.Job, r *Result) {
 	}
 	r.Files = rep.ModifiedFiles
 	r.Unverified = rep.Unverified
+	r.Warnings = rep.Warnings
 }
 
 func runCheck(ctx context.Context, dir string, command []string) (string, error) {
@@ -404,13 +406,13 @@ func (r *Report) Markdown(baseline *Report) string {
 			prev[res.Task] = res.Outcome
 		}
 	}
-	b.WriteString("| Task | Outcome | Steps | Repairs | Time | Change |\n|---|---|---|---|---|---|\n")
+	b.WriteString("| Task | Outcome | Steps | Repairs | Warnings | Time | Change |\n|---|---|---|---|---|---|---|\n")
 	for _, res := range r.Results {
 		change := ""
 		if before, ok := prev[res.Task]; ok && before != res.Outcome {
 			change = before + " → " + res.Outcome
 		}
-		fmt.Fprintf(&b, "| %s | %s | %d | %d | %v | %s |\n", res.Task, res.Outcome, res.Steps, res.Repairs, res.Duration.Round(time.Second), change)
+		fmt.Fprintf(&b, "| %s | %s | %d | %d | %d | %v | %s |\n", res.Task, res.Outcome, res.Steps, res.Repairs, len(res.Warnings), res.Duration.Round(time.Second), change)
 	}
 	if total > 0 {
 		fmt.Fprintf(&b, "\nSolved %d/%d (%.0f%%) · false positives %d · unsolved %d · errors %d\n",

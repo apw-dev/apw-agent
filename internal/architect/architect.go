@@ -172,6 +172,8 @@ Rules:
    - browser (only when the Project profile lists a Browser check): file is the page path ("/" by default), value is text the rendered page must visibly show; APW renders the built page headlessly.
    Example scope check: {"criterion":"Only src/App.tsx changes","kind":"only_changes","files":["src/App.tsx"]}.
    Example test check: {"criterion":"Tests pass","kind":"verification","value":"test"}.
+   For EVERY exact value the instruction requires the implementation to use (a default, constant, port, address, error message, route, name or format), add a contains check on the implementation file (not a test file) whose value is that exact text, for example {"criterion":"Host defaults to 127.0.0.1","kind":"contains","file":"conf/conf.go","value":"127.0.0.1"}. Example inputs and outputs given only to illustrate behavior are not required literals; cover them in the tests.
+   Plan tests that assert the values stated in the instruction, not values copied from the implementation.
    Prove behavior with tests: plan test changes and use a verification check (for example value "test") for criteria about behavior, and use go_symbol or contains only for names and strings the task requires. Do not substitute a generic build-pass criterion for requested behavior.
 4. Output valid JSON adhering to the ExecutionPlan schema:
 {

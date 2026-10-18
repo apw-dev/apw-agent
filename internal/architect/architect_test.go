@@ -237,7 +237,7 @@ func TestBrowserCheckValidation(t *testing.T) {
 
 func TestPlanningPromptWarnsAgainstLiteralCodeChecks(t *testing.T) {
 	prompt := BuildPlanningPrompt(core.Task{Instruction: "x"}, "")
-	for _, want := range []string{"cannot be predicted", "variable or constant", "never use contains on test files", "Prove behavior with tests"} {
+	for _, want := range []string{"cannot be predicted", "variable or constant", "never use contains on test files", "Prove behavior with tests", "For EVERY exact value the instruction requires", "not values copied from the implementation"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("planning prompt lacks %q", want)
 		}

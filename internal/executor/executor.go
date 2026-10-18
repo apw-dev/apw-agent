@@ -50,6 +50,9 @@ type ExecutionReport struct {
 	Research       []research.Source          `json:"research,omitempty"`
 	// Unverified is set for unverified-mode tasks: no repository command checked the change.
 	Unverified bool `json:"unverified,omitempty"`
+	// Warnings are non-blocking findings for the reviewer, such as tests that may only mirror the
+	// implementation.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // ProgressEvent describes a real-time progress update during Triad execution.
