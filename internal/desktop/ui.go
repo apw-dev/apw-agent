@@ -225,6 +225,9 @@ const desktopHTML = `<!DOCTYPE html>
 
         <!-- Pending Approvals Container (Human-in-the-loop Cards) -->
         <div id="approval-feed" class="space-y-3"></div>
+
+        <!-- Live Task & Tool Execution Stream for the current session -->
+        <div id="live-feed" class="space-y-4"></div>
       </div>
 
       <!-- Bottom Composer (Superellipse / Squircle) -->
@@ -739,8 +742,14 @@ async function loadApprovals() {
 /* ============================================================================
  * 5. COLLAPSIBLE TOOL CARDS & STREAMING MESSAGE RENDERER
  * ============================================================================ */
+function clearLiveFeed() {
+  const live = byId("live-feed");
+  if (live) live.replaceChildren();
+}
+
 function appendCollapsibleToolCard(toolName, summaryText, detailBody, status, CardID) {
-  const feed = byId("feed");
+  const scroller = byId("feed");
+  const container = byId("live-feed") || scroller;
   let detailsEl = CardID ? byId(CardID) : null;
   const isNew = !detailsEl;
 
@@ -777,14 +786,15 @@ function appendCollapsibleToolCard(toolName, summaryText, detailBody, status, Ca
   detailsEl.replaceChildren(summary, detail);
 
   if (isNew) {
-    feed.appendChild(detailsEl);
-    feed.scrollTop = feed.scrollHeight;
+    container.appendChild(detailsEl);
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }
   return detailsEl;
 }
 
 function appendStreamingBubble(role, title, text, badgeText) {
-  const feed = byId("feed");
+  const scroller = byId("feed");
+  const container = byId("live-feed") || scroller;
   const card = document.createElement("div");
   const isUser = role === "user";
   card.className = "squircle p-4 border " + (isUser
@@ -809,12 +819,12 @@ function appendStreamingBubble(role, title, text, badgeText) {
   bodyEl.className = "text-xs text-slate-200 whitespace-pre-wrap leading-relaxed font-sans";
   card.appendChild(header);
   card.appendChild(bodyEl);
-  feed.appendChild(card);
+  container.appendChild(card);
 
   const full = typeof text === "string" ? text : JSON.stringify(text, null, 2);
   if (isUser || full.length > 900) {
     bodyEl.textContent = full;
-    feed.scrollTop = feed.scrollHeight;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
     return;
   }
   // Streaming typewriter effect for Agent replies
@@ -828,12 +838,13 @@ function appendStreamingBubble(role, title, text, badgeText) {
     } else {
       bodyEl.textContent = full.slice(0, i) + "▋";
     }
-    feed.scrollTop = feed.scrollHeight;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }, 16);
 }
 
 function appendCard(title, body, badgeText, badgeColor) {
-  const feed = byId("feed");
+  const scroller = byId("feed");
+  const container = byId("live-feed") || scroller;
   const card = document.createElement("div");
   card.className = "squircle bg-[#161A23] border border-white/[0.08] p-4 space-y-2 shadow-lg";
   const h = document.createElement("div");
@@ -857,8 +868,8 @@ function appendCard(title, body, badgeText, badgeColor) {
   pre.textContent = typeof body === "string" ? body : JSON.stringify(body, null, 2);
   card.appendChild(h);
   card.appendChild(pre);
-  feed.appendChild(card);
-  feed.scrollTop = feed.scrollHeight;
+  container.appendChild(card);
+  if (scroller) scroller.scrollTop = scroller.scrollHeight;
 }
 
 /* ============================================================================
@@ -1170,6 +1181,7 @@ async function selectSession(id) {
   currentSessionId = id;
   lsSet("apw_desktop_session", id);
   byId("active-session-badge").textContent = id;
+  clearLiveFeed();
   await loadSessions();
 
   const out = await getAPI("/api/sessions/" + encodeURIComponent(id));
@@ -1186,6 +1198,7 @@ async function createNewSession() {
   currentSessionId = out.data.id;
   lsSet("apw_desktop_session", currentSessionId);
   byId("active-session-badge").textContent = currentSessionId;
+  clearLiveFeed();
   renderSessionTurns([]);
   appendCollapsibleToolCard("SessionManager", "เริ่ม Session ใหม่: " + currentSessionId, "แยกหน่วยความจำการสนทนาใหม่เรียบร้อยแล้ว", "DONE");
   await loadSessions();
