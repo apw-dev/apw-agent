@@ -276,13 +276,13 @@ func (v *Verifier) verify(ctx context.Context) *VerificationResult {
 	}
 
 	// Stage 2: go build
-	out, err = v.RunCommand(ctx, "go", append([]string{"build", "-mod=readonly", "-o", os.DevNull}, v.Packages...)...)
+	out, err = v.RunCommand(ctx, "go", append([]string{"build", "-mod=readonly", "-buildvcs=false", "-o", os.DevNull}, v.Packages...)...)
 	if err != nil {
 		return failed("build", out, err, start)
 	}
 
 	// Stage 3: go test
-	out, err = v.RunCommand(ctx, "go", append([]string{"test", "-mod=readonly"}, v.Packages...)...)
+	out, err = v.RunCommand(ctx, "go", append([]string{"test", "-mod=readonly", "-buildvcs=false"}, v.Packages...)...)
 	if err != nil {
 		return failed("test", out, err, start)
 	}
