@@ -18,7 +18,7 @@
 | **2. System 2 — Spec-First Architecture** | วางแผนสถาปัตยกรรมเป็นขั้นตอน (`ExecutionPlan` / `plan.json`) และตรวจสอบขอบเขตความปลอดภัยก่อนอนุญาตให้แตะไฟล์โค้ด | `internal/architect` |
 | **3. Precision Code Surgery** | ผ่าตัดแก้ไขไฟล์เฉพาะจุด (Read-Before-Write + SHA-256 Base Hash + Surgical Diff) พร้อมรัน Compiler/Test วนลูปอัตโนมัติ | `internal/surgeon` |
 | **4. 24/7 Autonomous Daemon & Skills** | รันเบื้องหลังตลอดเวลา (`apwd`), จัดการคิวงาน, ความจำระยะยาว (SQLite) และระบบขยายทักษะ (Skill Hub) | `internal/daemon`, `internal/store`, `skills/` |
-| **5. Headless Core & Multi-Client Protocol** | แยกส่วนสมองออกจากหน้าจอ เชื่อมต่อได้ทั้ง Interactive CLI (`apw`), Desktop UI (`apw desktop`), Editor (RPC) และ Chat (`Telegram`) | `pkg/protocol`, `internal/desktop`, `internal/channels` |
+| **5. Headless Core & Multi-Client Protocol** | แยกส่วนสมองออกจากหน้าจอ เชื่อมต่อได้ทั้ง Interactive CLI (`apw`), Desktop UI (`apw desktop`), Editor (ACP / JSON-RPC) และ Chat (`Telegram`) | `internal/acp`, `internal/desktop`, `internal/channels`, `internal/transport` |
 
 ---
 
@@ -80,6 +80,13 @@ apw-agent/
 │   ├── executor/                   # Triad Orchestrator (เชื่อม Architect -> Surgeon -> Reflex ครบวงจร)
 │   ├── daemon/                     # Auto-start & Lifecycle Manager สำหรับ apwd + Skill Discovery
 │   ├── desktop/                    # Native Desktop Web UI Server (apw desktop / apw ui)
+│   ├── acp/                        # Agent Client Protocol (ACP) stdio server
+│   ├── eval/                       # Benchmarking & Hidden Test Fixture Runner (apw eval)
+│   ├── retention/                  # นโยบายล้างงานเก่าและ Prune tasks (apw cleanup)
+│   ├── workspace/                  # Exclusive & shared workspace file leases (lock)
+│   ├── sandbox/                    # Process isolation (Windows Job Object restricted & Docker)
+│   ├── browser/                    # Headless browser runner สำหรับตรวจสอบหน้าเว็บ
+│   ├── research/                   # Safe documentation fetcher & Web Search ก่อนวางแผน
 │   ├── channels/
 │   │   └── telegram/               # Messaging Gateway (Long-polling, Allowlist, Task Commands)
 │   ├── provider/
@@ -98,7 +105,7 @@ apw-agent/
 ### ติดตั้งไบนารี (`apw` และ `apwd`)
 ต้องใช้ Go 1.27 ขึ้นไป (`go.mod` ระบุ `go 1.27.0`) จากนั้น clone repository และเข้าโฟลเดอร์ก่อนติดตั้ง:
 ```bash
-git clone https://github.com/apw-dev/apw-agent.git
+git clone https://github.com/apiwat/apw-agent.git
 cd apw-agent
 go install ./cmd/...
 ```
@@ -112,7 +119,7 @@ go install ./cmd/...
  ───────────────────────────────────────────────────────
   Brain 1 (Reflex) : Reflex Engine [Available]
   Brain 2 (Deep)   : Architect     [Standby]
-  Daemon (apwd)    : Stopped (PID: 0) | 17 Skills Loaded
+  Daemon (apwd)    : Running (PID: 14820) | 17 Skills Loaded
  ───────────────────────────────────────────────────────
   Workspace        : D:/APW_Project/apw-agent (Go)
 
@@ -126,17 +133,29 @@ apw desktop
 
 ### 3) คำสั่งบรรทัดคำสั่งโดยตรง (Direct CLI Commands)
 ```bash
-apw review "ตรวจโค้ดและรายงานปัญหา"       # อ่าน source เพื่อ review
-apw preview "เตรียมการเปลี่ยนแปลง"         # สร้าง diff ใน worktree
-apw trust                               # อนุญาต build/test สำหรับ repo นี้ (จำเป็นก่อน run และ verify)
 apw run "อธิบายหรือสั่งงานที่ต้องการ"       # ต้อง trust: เตรียมและ verify จากนั้นรอ apply
+apw apply <task-id>                     # นำ patch ที่ผ่านการ verify แล้วไป apply ลง workspace จริง
+apw review "ตรวจโค้ดและรายงานปัญหา"       # อ่าน source เพื่อ review วิเคราะห์หาจุดผิดพลาด
+apw preview "เตรียมการเปลี่ยนแปลง"         # สร้าง diff ใน worktree โดยไม่รันโค้ด repository
 apw plan "วางแผนงานก่อนแก้ไขจริง"        # สร้างแผน ExecutionPlan (.apw/plans/<id>.json)
+apw tasks | apw task <task-id>          # ดูรายการงานทั้งหมด หรือตรวจสอบรายงาน JSON ของงานนั้น
+apw diff <task-id>                      # แสดง source diff ของ task ที่เตรียมไว้
+apw watch <task-id>                     # Reattach เกาะติดความคืบหน้าของ task ที่กำลังรัน
+apw resume [task-id]                    # สานต่องานเดิมจาก checkpoint
+apw cancel <task-id>                    # ยกเลิกงานและหยุด subprocess tree ทันที
+apw trust                               # อนุญาต build/test สำหรับ repo นี้ (จำเป็นก่อน run และ verify)
 apw verify .                           # ต้อง trust: รัน Reflex ตาม pipeline ของโปรเจกต์ (ดูหัวข้อภาษาที่รองรับ)
-apw cleanup --dry-run                  # ดูว่า retention policy จะลบ task เก่าอะไรบ้าง (ไม่เปลี่ยนอะไร)
+apw cleanup [--dry-run]                 # ล้างงานเก่าตาม retention (ถ้าไม่ใส่ --dry-run ต้องสั่ง apw daemon stop ก่อน)
+apw recover <legacy-task-id>            # Export กู้คืนงานเก่าที่ค้างใน worktree แบบปลอดภัยสำหรับตรวจสอบ
+apw model [status|refresh|set ...]      # ตรวจสอบหรือสลับโมเดล AI ของ Architect / Reflex
+apw auth                                # จัดการการเชื่อมต่อโมเดล (AGY, Claude CLI, Codex, Local)
+apw skills                              # ดูรายการทักษะ (Skills) ที่โหลดอยู่ในระบบ
 apw symbols internal/surgeon/surgeon.go # สกัดโครงสร้าง AST Symbols ในไฟล์
-apw daemon status                      # ตรวจสอบสถานะบริการเบื้องหลัง apwd
+apw daemon [status|start|stop]          # ตรวจสอบหรือจัดการบริการเบื้องหลัง apwd
+apw version                             # แสดงข้อมูลเวอร์ชันและ architecture
 ```
 `review`, `preview` และ `plan` ใช้ได้โดยไม่ต้อง trust เพราะไม่รันโค้ดของ repository ส่วน `run` และ `verify` จะรัน build/test จึงถูกปฏิเสธจนกว่าจะ `apw trust` (Git worktree แยกไฟล์ออกจาก workspace แต่ไม่ได้ sandbox โค้ดที่ถูกรัน เว้นแต่เปิด `sandbox`)
+*หมายเหตุสำหรับการทำความสะอาด (`apw cleanup`):* การรันแบบตัดทิ้งจริง (ไม่ใส่ `--dry-run`) ต้องหยุด daemon ก่อนด้วย `apw daemon stop` เพื่อปล่อยสิทธิ์ service lease มิฉะนั้นคำสั่งจะปฏิเสธการลบงานเก่าเพื่อป้องกัน race condition กับ daemon ที่กำลังทำงานอยู่
 
 ```bash
 apw run --auto "..."        # verify ผ่านแล้ว apply ให้ทันที ไม่ต้องสั่ง apply เอง
