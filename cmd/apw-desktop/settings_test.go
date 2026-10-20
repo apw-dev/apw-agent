@@ -18,7 +18,8 @@ func TestLoadSettingsMissingReturnsDefaults(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
-	if want.Version != 1 || want.Theme != "system" || want.Window.Width != 1280 || want.Window.Height != 820 {
+	// No saved geometry yet: the window keeps the position Wails gives it (centred).
+	if want.Version != 1 || want.Theme != "system" || want.Window.Placed {
 		t.Fatalf("unexpected defaults %+v", want)
 	}
 }
@@ -28,7 +29,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	s := DefaultSettings()
 	s.Theme = "dark"
 	s.RememberWorkspace(filepath.Join(t.TempDir(), "repo"))
-	s.Window = WindowState{X: 40, Y: 50, Width: 1400, Height: 900, Maximised: true}
+	s.Window = WindowState{X: -40, Y: 50, Width: 1400, Height: 900, Maximised: true, Placed: true}
 	if err := SaveSettings(path, s); err != nil {
 		t.Fatal(err)
 	}

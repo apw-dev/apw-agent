@@ -144,11 +144,7 @@ func (a *App) domReady(ctx context.Context) {
 	saved := a.settings.Window
 	a.mu.Unlock()
 	if first {
-		if screen, ok := currentScreen(ctx); ok {
-			ws := ClampWindow(saved, screen)
-			runtime.WindowSetSize(ctx, ws.Width, ws.Height)
-			runtime.WindowSetPosition(ctx, ws.X, ws.Y)
-		}
+		restoreGeometry(saved)
 		if saved.Maximised {
 			runtime.WindowMaximise(ctx)
 		}
@@ -159,34 +155,34 @@ func (a *App) domReady(ctx context.Context) {
 	}
 }
 
-func currentScreen(ctx context.Context) (Size, bool) {
-	screens, err := runtime.ScreenGetAll(ctx)
-	if err != nil || len(screens) == 0 {
-		return Size{}, false
+// restoreGeometry moves the window to its saved rectangle, fitted into the work area of the
+// nearest monitor. Geometry is handled in Win32 physical pixels throughout: the Wails v2
+// position getter and setter use different origins and its sizes are DPI-scaled, so they
+// cannot round-trip a window on a scaled display or with a top/left taskbar.
+func restoreGeometry(saved WindowState) {
+	if !saved.Placed {
+		return // first run: keep the centred position Wails gives the window
 	}
-	pick := screens[0]
-	for _, s := range screens {
-		if s.IsCurrent {
-			pick = s
-			break
-		}
-		if s.IsPrimary {
-			pick = s
-		}
+	h, ok := mainWindow()
+	if !ok {
+		return
 	}
-	return Size{Width: pick.Size.Width, Height: pick.Size.Height}, true
+	if work, ok := workAreaNear(saved.Rect()); ok {
+		moveWindow(h, ClampRect(saved.Rect(), work))
+	}
 }
 
-// beforeClose saves the window geometry. A maximised window keeps its last normal geometry.
+// beforeClose saves the window geometry. A maximised window keeps its last normal rectangle;
+// a minimised one (closed from the taskbar) keeps everything as last saved.
 func (a *App) beforeClose(ctx context.Context) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if runtime.WindowIsMaximised(ctx) {
-		a.settings.Window.Maximised = true
-	} else {
-		x, y := runtime.WindowGetPosition(ctx)
-		w, h := runtime.WindowGetSize(ctx)
-		a.settings.Window = WindowState{X: x, Y: y, Width: w, Height: h}
+	if h, ok := mainWindow(); ok && !isMinimised(h) {
+		if isMaximised(h) {
+			a.settings.Window.Maximised = true
+		} else if r, ok := windowRect(h); ok {
+			a.settings.Window = WindowState{X: r.X, Y: r.Y, Width: r.Width, Height: r.Height, Placed: true}
+		}
 	}
 	_ = SaveSettings(a.settingsPath, a.settings)
 	return false

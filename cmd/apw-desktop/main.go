@@ -40,8 +40,8 @@ func main() {
 
 	err = wails.Run(&options.App{
 		Title:            "APW",
-		Width:            settings.Window.Width,
-		Height:           settings.Window.Height,
+		Width:            1280, // first-run size; a saved geometry is restored in domReady
+		Height:           820,
 		MinWidth:         minWindowWidth,
 		MinHeight:        minWindowHeight,
 		StartHidden:      true,
@@ -55,6 +55,7 @@ func main() {
 			OnSecondInstanceLaunch: app.secondInstance,
 		},
 		Windows: &windows.Options{
+			WindowClassName:      windowClassName,
 			BackdropType:         windows.Mica,
 			Theme:                windows.SystemDefault,
 			WebviewIsTransparent: false,

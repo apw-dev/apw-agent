@@ -11,11 +11,13 @@ import (
 
 const maxRecentWorkspaces = 10
 
-// WindowState is the last window geometry. X and Y are relative to the monitor the window
-// was on, which is how the Wails v2 runtime reports and applies positions.
+// WindowState is the last normal (not maximised) window rectangle in absolute
+// virtual-screen physical pixels, as Win32 reports it. Placed is false until a geometry has
+// been saved; until then the window keeps the centred position Wails gives it.
 type WindowState struct {
 	X, Y, Width, Height int
 	Maximised           bool
+	Placed              bool
 }
 
 // Settings is %APPDATA%\APW\desktop.json: shell state that must survive restarts and reinstalls.
@@ -28,7 +30,7 @@ type Settings struct {
 }
 
 func DefaultSettings() Settings {
-	return Settings{Version: 1, Theme: "system", Window: WindowState{Width: 1280, Height: 820}}
+	return Settings{Version: 1, Theme: "system"}
 }
 
 func SettingsPath() (string, error) {
