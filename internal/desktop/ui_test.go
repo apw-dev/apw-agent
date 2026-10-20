@@ -106,11 +106,12 @@ func TestDesktopMentionSearchQueriesServer(t *testing.T) {
 
 // Inside the native shell (Wails globals present) browser shortcuts are blocked, external
 // links go to the default browser and Ctrl+O opens the workspace chooser; in a plain
-// browser (`apw desktop`) the guards stay off.
+// browser (`apw desktop`) the guards stay off. Shortcuts also match e.code so they work
+// while the Thai keyboard layout is active.
 func TestDesktopScriptShellGuards(t *testing.T) {
 	script := uiScript(t)
 	for _, want := range []string{
-		"function inDesktopShell()", `"F5"`, `"F12"`,
+		"function inDesktopShell()", `"F5"`, `"F12"`, `"KeyO"`, `"KeyR"`,
 		"window.runtime.BrowserOpenURL(", "window.go.main.App.ChooseWorkspace(",
 		`"dragover"`, `"drop"`,
 	} {

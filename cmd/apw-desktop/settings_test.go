@@ -109,3 +109,21 @@ func TestLoadSettingsInvalidThemeFallsBack(t *testing.T) {
 		t.Fatalf("theme = %q, want system", got.Theme)
 	}
 }
+
+func TestLoadSettingsUTF8BOM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "desktop.json")
+	raw := append([]byte("\xef\xbb\xbf"), []byte(`{"version":1,"theme":"dark","last_workspace":"D:\\repo"}`)...)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != "dark" || got.LastWorkspace != `D:\repo` {
+		t.Fatalf("got %+v, want dark and D:\\repo", got)
+	}
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Fatalf("UTF-8 BOM file must not be treated as corrupt (.bak err = %v)", err)
+	}
+}

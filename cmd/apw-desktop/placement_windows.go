@@ -23,6 +23,8 @@ var (
 	procMonitorFromRect          = user32.NewProc("MonitorFromRect")
 	procGetMonitorInfoW          = user32.NewProc("GetMonitorInfoW")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
+	procShowWindow               = user32.NewProc("ShowWindow")
+	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 )
 
 type winRect struct{ Left, Top, Right, Bottom int32 }
@@ -38,6 +40,7 @@ const (
 	monitorDefaultToNearest = 2
 	swpNoZOrder             = 0x0004
 	swpNoActivate           = 0x0010
+	swRestore               = 9
 )
 
 func (r winRect) rect() Rect {
@@ -79,4 +82,17 @@ func workAreaNear(r Rect) (Rect, bool) {
 
 func moveWindow(h uintptr, r Rect) {
 	procSetWindowPos.Call(h, 0, uintptr(int32(r.X)), uintptr(int32(r.Y)), uintptr(int32(r.Width)), uintptr(int32(r.Height)), swpNoZOrder|swpNoActivate)
+}
+
+// focusWindow unminimises the window (leaving a maximised window maximised) and brings it to
+// the foreground.
+func focusWindow() {
+	h, ok := mainWindow()
+	if !ok {
+		return
+	}
+	if isMinimised(h) {
+		procShowWindow.Call(h, swRestore)
+	}
+	procSetForegroundWindow.Call(h)
 }

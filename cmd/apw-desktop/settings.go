@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -51,6 +52,7 @@ func LoadSettings(path string) (Settings, error) {
 	if err != nil {
 		return DefaultSettings(), err
 	}
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	s := DefaultSettings()
 	if err := json.Unmarshal(data, &s); err != nil {
 		if renameErr := os.Rename(path, path+".bak"); renameErr != nil {

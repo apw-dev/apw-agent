@@ -33,6 +33,14 @@ type WorkspaceHost struct {
 // workspace could not be reopened at startup.
 func (h *WorkspaceHost) SetNotice(msg string) { h.notice.Store(&msg) }
 
+// TakeNotice returns and clears the pending notice.
+func (h *WorkspaceHost) TakeNotice() string {
+	if n := h.notice.Swap(nil); n != nil {
+		return *n
+	}
+	return ""
+}
+
 func NewWorkspaceHost() *WorkspaceHost { return &WorkspaceHost{} }
 
 func (h *WorkspaceHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +64,8 @@ func (h *WorkspaceHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Open switches to the workspace in dir. dir must contain a regular apw.json; on failure the
-// currently open workspace (if any) keeps serving.
+// currently open workspace (if any) keeps serving. Reopening the directory that is already
+// open is a no-op so its desktop.Server (token and approval state) is preserved.
 func (h *WorkspaceHost) Open(dir string) error {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -66,6 +75,10 @@ func (h *WorkspaceHost) Open(dir string) error {
 	fi, err := os.Stat(cfg)
 	if err != nil || !fi.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s", ErrNoConfig, cfg)
+	}
+	h.notice.Store(nil)
+	if cur := h.Current(); cur != "" && samePath(cur, abs) {
+		return nil
 	}
 	srv := desktop.NewServer(cfg, buildinfo.Version)
 	srv.InProcessHost = desktop.WailsHost
@@ -110,7 +123,7 @@ const chooserHTML = `<!DOCTYPE html>
   }
   document.getElementById("choose").addEventListener("click", choose);
   document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") { e.preventDefault(); choose(); }
+    if ((e.ctrlKey || e.metaKey) && (e.code === "KeyO" || e.key.toLowerCase() === "o")) { e.preventDefault(); choose(); }
   });
 </script>
 </body>

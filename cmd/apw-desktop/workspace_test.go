@@ -106,3 +106,20 @@ func TestWorkspaceHostChooserEscapesError(t *testing.T) {
 		t.Fatalf("error not escaped: %s", body)
 	}
 }
+
+func TestWorkspaceHostReopenSameDirKeepsServer(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir)
+	h := NewWorkspaceHost()
+	if err := h.Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	first := inProcessGet(t, h, "/").Body.String()
+	if err := h.Open(dir + string(filepath.Separator)); err != nil {
+		t.Fatal(err)
+	}
+	second := inProcessGet(t, h, "/").Body.String()
+	if first != second {
+		t.Fatal("reopening the same workspace replaced the desktop.Server (token changed)")
+	}
+}

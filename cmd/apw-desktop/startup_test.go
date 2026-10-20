@@ -38,6 +38,11 @@ func TestOpenInitialWorkspace(t *testing.T) {
 					t.Fatalf("chooser does not show the notice: %s", body)
 				}
 			}
+			if tc.wantDir != "" && tc.wantNotice != "" {
+				if got := h.TakeNotice(); !strings.Contains(got, tc.wantNotice) {
+					t.Fatalf("TakeNotice = %q, want it to mention %q so domReady can report the fallback", got, tc.wantNotice)
+				}
+			}
 		})
 	}
 }

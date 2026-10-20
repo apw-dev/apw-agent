@@ -70,16 +70,20 @@ func (a *App) ChooseWorkspace() error {
 }
 
 // OpenWorkspace switches to dir, remembers it, and reloads the page onto its Desktop.
+// Reopening the workspace that is already open is a no-op so approvals and page state stay intact.
 func (a *App) OpenWorkspace(dir string) error {
+	prev := a.host.Current()
 	if err := a.host.Open(dir); err != nil {
 		return err
 	}
+	cur := a.host.Current()
+	changed := prev == "" || !samePath(prev, cur)
 	a.mu.Lock()
-	a.settings.RememberWorkspace(a.host.Current())
+	a.settings.RememberWorkspace(cur)
 	err := SaveSettings(a.settingsPath, a.settings)
 	ctx, shown := a.ctx, a.shown
 	a.mu.Unlock()
-	if ctx != nil && shown {
+	if changed && ctx != nil && shown {
 		runtime.WindowReloadApp(ctx)
 	}
 	return err
@@ -150,6 +154,18 @@ func (a *App) domReady(ctx context.Context) {
 		}
 	}
 	runtime.WindowShow(ctx)
+	if first {
+		focusWindow()
+		if a.host.Current() != "" {
+			if notice := a.host.TakeNotice(); notice != "" {
+				go runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+					Type:    runtime.ErrorDialog,
+					Title:   "เปิด workspace ไม่ได้",
+					Message: notice,
+				})
+			}
+		}
+	}
 	if dir := a.takePending(); dir != "" {
 		go a.openOrReport(ctx, dir)
 	}
@@ -205,6 +221,7 @@ func (a *App) secondInstance(data options.SecondInstanceData) {
 	}
 	a.mu.Unlock()
 	runtime.WindowShow(ctx)
+	focusWindow()
 	if dir != "" {
 		_ = a.openOrReport(ctx, dir)
 	}

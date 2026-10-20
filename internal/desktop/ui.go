@@ -1097,13 +1097,13 @@ function switchArtifactTab(tab) {
 }
 
 document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+  if ((e.ctrlKey || e.metaKey) && (e.code === "KeyB" || e.key.toLowerCase() === "b")) {
     e.preventDefault();
     toggleLeftSidebar();
-  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "j") {
+  } else if ((e.ctrlKey || e.metaKey) && (e.code === "KeyJ" || e.key.toLowerCase() === "j")) {
     e.preventDefault();
     toggleRightPane();
-  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+  } else if ((e.ctrlKey || e.metaKey) && (e.code === "KeyK" || e.key.toLowerCase() === "k")) {
     e.preventDefault();
     const input = byId("task-input");
     if (input) input.focus();
@@ -1124,17 +1124,27 @@ function inDesktopShell() {
 }
 
 const BLOCKED_CTRL_KEYS = new Set(["r", "f", "p", "u", "=", "+", "-", "0"]);
+const BLOCKED_CTRL_CODES = new Set([
+  "KeyR", "KeyF", "KeyP", "KeyU",
+  "Equal", "Minus", "Digit0",
+  "NumpadAdd", "NumpadSubtract", "Numpad0"
+]);
 
 document.addEventListener("keydown", (e) => {
   if (!inDesktopShell()) return;
   const key = (e.key || "").toLowerCase();
+  const code = e.code || "";
   const ctrl = e.ctrlKey || e.metaKey;
-  if (e.key === "F5" || e.key === "F12" || (ctrl && e.shiftKey && key === "i") || (ctrl && BLOCKED_CTRL_KEYS.has(key))) {
+  if (
+    e.key === "F5" || e.key === "F12" || code === "F5" || code === "F12" ||
+    (ctrl && e.shiftKey && (key === "i" || code === "KeyI")) ||
+    (ctrl && (BLOCKED_CTRL_KEYS.has(key) || BLOCKED_CTRL_CODES.has(code)))
+  ) {
     e.preventDefault();
     e.stopPropagation();
     return;
   }
-  if (ctrl && !e.shiftKey && key === "o") {
+  if (ctrl && !e.shiftKey && (key === "o" || code === "KeyO")) {
     e.preventDefault();
     e.stopPropagation();
     if (window.go.main && window.go.main.App) window.go.main.App.ChooseWorkspace();

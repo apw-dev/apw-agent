@@ -345,13 +345,17 @@ func TestInProcessHostTrustedOnlyWhenConfigured(t *testing.T) {
 		r.Host = "wails.localhost"
 		return r
 	}
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req("/"))
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("unset InProcessHost: got %d, want 403", rec.Code)
+	for _, path := range []string{"/", "/api/status", "/v1/health"} {
+		r := req(path)
+		r.Header.Set("Authorization", "Bearer "+srv.Token)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, r)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("unset InProcessHost %s: got %d, want 403", path, rec.Code)
+		}
 	}
 	srv.InProcessHost = WailsHost
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req("/"))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "script-src 'self' 'unsafe-inline'") {
 		t.Fatalf("in-process index: %d csp=%q", rec.Code, rec.Header().Get("Content-Security-Policy"))
