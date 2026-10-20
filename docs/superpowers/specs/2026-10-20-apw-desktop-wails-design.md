@@ -219,3 +219,26 @@ internal/desktop/
 - **Committed `web/dist`:** can drift from source. The CI freshness check guards it.
 - **Bundle size:** fonts and Shiki grammars add size. Mitigated by subsetting and lazy language loading; acceptable for a desktop app.
 - **Unsigned installer:** SmartScreen warnings until signing is added.
+
+### Phase 1 results (2026-10-20)
+
+Wails pinned at **v2.17.0** (`cmd/apw-desktop/go.mod`). Branch `feat/apw-desktop-shell`.
+
+| Capability the design relies on | Result | Evidence |
+|---|---|---|
+| Separate module keeps root Wails-free | ✔ | root `go mod tidy -diff`, `go vet ./...`, `go build ./...` clean |
+| Asset server `Handler` serves the existing `desktop.Server` in-process, no port | ✔ | request trace: host `wails.localhost`, `/`, `/api/*`, `/v1/*` → 200 |
+| Token guard and CSP work in-process | ✔ | `TestInProcessHostTrustedOnlyWhenConfigured` (401 without token, 403 foreign Origin, `/v1` trusted); Wails injects `/wails/*.js`, allowed by `script-src 'self'` only on the in-process host |
+| In-process host name | ✔ `wails.localhost` | Wails source `startURL`; trace |
+| Own window, title and taskbar icon | ✔ | Win32 query (`APW`, visible); taskbar icon observed |
+| Browser accelerators, zoom, default context menu off | ✔ by construction, manual check pending | Wails sets `AreBrowserAcceleratorKeysEnabled(false)`, `AreDefaultContextMenusEnabled(false)` in production; options `IsZoomControlEnabled:false`, `DisablePinchZoom:true` |
+| Mica, caption theme, hidden-until-ready, single instance, geometry restore | built, manual check pending | `docs/acceptance.md` rows 3–11 |
+| DevTools on demand | ✘ as specified, adjusted | Wails compiles DevTools out of production builds; `--devtools` needs a `-tags devtools` build (documented in `cmd/apw-desktop/README.md`) |
+| Restoring onto a specific secondary monitor | ✘ partial | Wails v2 positions are monitor-relative and expose no monitor origin; the window is clamped onto the monitor it opens on |
+
+Deviations from this spec:
+- **Errors from choosing a workspace:** shown in a native message dialog, not inline text. At startup, the chooser shows why the last workspace could not be reopened.
+- **Build tag:** the Wails code carries the `desktop` build tag.
+- **Native shell guards in `ui.go`:** they only take effect when the Wails globals exist. Phase 2 replaces `ui.go`.
+
+Phase 2 can proceed as designed. Two things need a person at the machine before then: the manual checklist rows, and the completion gate on the current UI.

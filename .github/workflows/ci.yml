@@ -49,3 +49,30 @@ jobs:
           else
             go test -count=1 ./...
           fi
+
+  # APW.exe: the native Desktop shell lives in its own module (cmd/apw-desktop) so the
+  # root module above never pulls in Wails.
+  desktop-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: cmd/apw-desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/apw-desktop/go.mod
+          cache-dependency-path: cmd/apw-desktop/go.sum
+
+      - name: go mod tidy
+        run: go mod tidy -diff
+
+      - name: go vet
+        run: go vet -tags desktop,production ./...
+
+      - name: go test
+        run: go test -count=1 ./...
+
+      - name: go build
+        run: go build -tags desktop,production -ldflags "-H windowsgui" -o APW.exe .
