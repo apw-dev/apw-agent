@@ -29,3 +29,6 @@ Thumbs.db
 # Python bytecode (release/acceptance scripts)
 __pycache__/
 *.pyc
+
+# Brainstorming mockups (superpowers visual companion)
+.superpowers/
