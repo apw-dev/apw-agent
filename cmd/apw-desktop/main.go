@@ -5,7 +5,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -23,6 +22,15 @@ func main() {
 		settings, _ = LoadSettings(settingsPath)
 	}
 	host := NewWorkspaceHost()
+	// Open the startup workspace before the window exists, so its first page is never the
+	// chooser for a workspace that is still being opened.
+	OpenInitialWorkspace(host, args, settings.LastWorkspace)
+	if dir := host.Current(); dir != "" {
+		settings.RememberWorkspace(dir)
+		if settingsPath != "" {
+			_ = SaveSettings(settingsPath, settings)
+		}
+	}
 	app := NewApp(host, settings, settingsPath)
 
 	bg := options.NewRGB(0xf7, 0xf7, 0xf5)
@@ -39,7 +47,7 @@ func main() {
 		StartHidden:      true,
 		BackgroundColour: bg,
 		AssetServer:      &assetserver.Options{Handler: host},
-		OnStartup:        func(ctx context.Context) { app.startup(ctx, args) },
+		OnStartup:        app.startup,
 		OnDomReady:       app.domReady,
 		OnBeforeClose:    app.beforeClose,
 		SingleInstanceLock: &options.SingleInstanceLock{
