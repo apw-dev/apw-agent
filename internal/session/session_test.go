@@ -228,4 +228,3 @@ func TestRecordTurnUpdatesExistingTaskIDInPlace(t *testing.T) {
 		t.Fatalf("expected touched files to record ui.go after apply, got %v", s.Memory.TouchedFiles)
 	}
 }
-

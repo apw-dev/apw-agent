@@ -182,4 +182,3 @@ func TestCodeLookupModesContextSymbolAndMultiTurn(t *testing.T) {
 		t.Fatalf("expected relevance-ranked src/math.go (%d) before unrelated src/App.tsx (%d)", idxMath, idxApp)
 	}
 }
-

@@ -1034,5 +1034,3 @@ func TestGraphAndAutonomyEndpoints(t *testing.T) {
 		t.Fatalf("expected 1 procedural skill in /api/autonomy, got %v", skills)
 	}
 }
-
-

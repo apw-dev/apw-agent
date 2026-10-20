@@ -139,4 +139,3 @@ pub fn init_engine() -> bool {
 		t.Fatalf("InspectWorkspaceSymbols(src/math.ts) = %+v, err=%v", tsSyms, err)
 	}
 }
-
