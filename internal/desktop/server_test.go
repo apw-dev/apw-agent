@@ -337,6 +337,24 @@ func TestHandleCreateSkillThaiTitleAndNoOverwrite(t *testing.T) {
 	}
 }
 
+// Browsers request /favicon.ico on their own, without the API token; answering 401 logs a
+// console error on every load. It carries no data, so it is answered without the token.
+func TestFaviconNeedsNoToken(t *testing.T) {
+	srv := NewServer(filepath.Join(t.TempDir(), "apw.json"), "test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/favicon.ico", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("favicon = %d, want 204", rec.Code)
+	}
+	r := httptest.NewRequest(http.MethodGet, "http://evil.example/favicon.ico", nil)
+	r.Host = "evil.example"
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("favicon from a foreign host = %d, want 403", rec.Code)
+	}
+}
+
 func TestInProcessHostTrustedOnlyWhenConfigured(t *testing.T) {
 	srv := NewServer(filepath.Join(t.TempDir(), "apw.json"), "test")
 	srv.Backend = &stubBackend{}

@@ -118,6 +118,15 @@ func (s *Server) Handler() http.Handler {
 			s.handleIndex(w, r)
 			return
 		}
+		if r.URL.Path == "/favicon.ico" {
+			// Requested by the browser itself, without the token; there is no favicon to serve.
+			if !s.allowRequest(r) {
+				http.Error(w, "local origin required", 403)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			if r.Method != "GET" && r.Method != "HEAD" {
 				http.Error(w, "method not allowed", 405)
