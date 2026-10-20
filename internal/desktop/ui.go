@@ -1117,6 +1117,44 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Native shell (APW.exe): the Wails runtime and bound Go methods are present. There the
+// window must not behave like a browser; in a plain browser these guards stay off.
+function inDesktopShell() {
+  return !!(window.runtime && window.go);
+}
+
+const BLOCKED_CTRL_KEYS = new Set(["r", "f", "p", "u", "=", "+", "-", "0"]);
+
+document.addEventListener("keydown", (e) => {
+  if (!inDesktopShell()) return;
+  const key = (e.key || "").toLowerCase();
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (e.key === "F5" || e.key === "F12" || (ctrl && e.shiftKey && key === "i") || (ctrl && BLOCKED_CTRL_KEYS.has(key))) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (ctrl && !e.shiftKey && key === "o") {
+    e.preventDefault();
+    e.stopPropagation();
+    if (window.go.main && window.go.main.App) window.go.main.App.ChooseWorkspace();
+  }
+}, true);
+
+document.addEventListener("click", (e) => {
+  if (!inDesktopShell()) return;
+  const link = e.target && e.target.closest ? e.target.closest('a[href^="http:"], a[href^="https:"]') : null;
+  if (!link) return;
+  e.preventDefault();
+  window.runtime.BrowserOpenURL(link.href);
+}, true);
+
+for (const type of ["dragover", "drop"]) {
+  document.addEventListener(type, (e) => {
+    if (inDesktopShell()) e.preventDefault();
+  });
+}
+
 /* ============================================================================
  * 2. TRUST & SETTINGS / MODEL SWITCHER DIALOGS
  * ============================================================================ */

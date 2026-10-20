@@ -104,6 +104,22 @@ func TestDesktopMentionSearchQueriesServer(t *testing.T) {
 	}
 }
 
+// Inside the native shell (Wails globals present) browser shortcuts are blocked, external
+// links go to the default browser and Ctrl+O opens the workspace chooser; in a plain
+// browser (`apw desktop`) the guards stay off.
+func TestDesktopScriptShellGuards(t *testing.T) {
+	script := uiScript(t)
+	for _, want := range []string{
+		"function inDesktopShell()", `"F5"`, `"F12"`,
+		"window.runtime.BrowserOpenURL(", "window.go.main.App.ChooseWorkspace(",
+		`"dragover"`, `"drop"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("desktop script lacks %q", want)
+		}
+	}
+}
+
 func TestDesktopScriptOnlyCallsLocalPaths(t *testing.T) {
 	// Every apiFetch/getAPI/postAPI target must be a local absolute path.
 	re := regexp.MustCompile(`(?:apiFetch|getAPI|postAPI)\(\s*"([^"]*)"`)
