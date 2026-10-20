@@ -218,6 +218,9 @@ func TestIndexServesStrictCSP(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "__APW_TOKEN__") || !strings.Contains(rec.Body.String(), s.Token) {
 		t.Fatal("token not substituted")
 	}
+	if strings.Contains(csp, "script-src 'self'") {
+		t.Fatalf("loopback CSP must not allow same-origin scripts: %q", csp)
+	}
 }
 
 func TestHandleSearchAndPolyglotSymbols(t *testing.T) {
@@ -331,5 +334,48 @@ func TestHandleCreateSkillThaiTitleAndNoOverwrite(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(filepath.Join(ws, ".apw", "skills", "thai-skill", "SKILL.md")); string(after) != string(raw) {
 		t.Fatal("existing skill was overwritten")
+	}
+}
+
+func TestInProcessHostTrustedOnlyWhenConfigured(t *testing.T) {
+	srv := NewServer(filepath.Join(t.TempDir(), "apw.json"), "test")
+	srv.Backend = &stubBackend{}
+	req := func(path string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://wails.localhost"+path, nil)
+		r.Host = "wails.localhost"
+		return r
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req("/"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unset InProcessHost: got %d, want 403", rec.Code)
+	}
+	srv.InProcessHost = WailsHost
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req("/"))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("in-process index: %d csp=%q", rec.Code, rec.Header().Get("Content-Security-Policy"))
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req("/api/status"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("in-process API without token: got %d, want 401", rec.Code)
+	}
+	// /v1/ goes through the transport handler's own guard; it must trust the in-process host too.
+	v1 := req("/v1/health")
+	v1.Header.Set("Authorization", "Bearer "+srv.Token)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, v1)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("in-process /v1/health with token: got %d %s", rec.Code, rec.Body.String())
+	}
+	// A foreign Origin on the in-process host is still rejected.
+	evil := req("/api/status")
+	evil.Header.Set("Origin", "http://attacker.example")
+	evil.Header.Set("Authorization", "Bearer "+srv.Token)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, evil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign origin: got %d, want 403", rec.Code)
 	}
 }

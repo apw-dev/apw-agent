@@ -43,10 +43,16 @@ func LocalRequest(r *http.Request) bool {
 }
 
 func Guard(token string, next http.Handler) http.Handler {
+	return GuardWith(token, LocalRequest, next)
+}
+
+// GuardWith is Guard with a caller-supplied locality check, for hosts that serve the
+// handler without a loopback listener (the Desktop shell's in-process asset server).
+func GuardWith(token string, allow func(*http.Request) bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if !LocalRequest(r) {
+		if !allow(r) {
 			http.Error(w, "local origin required", http.StatusForbidden)
 			return
 		}
@@ -83,6 +89,11 @@ func WriteJSON(w http.ResponseWriter, value any) {
 }
 
 func Handler(backend app.API, token string, health any, stop func()) http.Handler {
+	return HandlerWith(backend, token, health, stop, LocalRequest)
+}
+
+// HandlerWith is Handler guarded by GuardWith(token, allow, ...).
+func HandlerWith(backend app.API, token string, health any, stop func(), allow func(*http.Request) bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/plan", func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
@@ -176,7 +187,7 @@ func Handler(backend app.API, token string, health any, stop func()) http.Handle
 			WriteJSON(w, job)
 		})
 	}
-	return Guard(token, mux)
+	return GuardWith(token, allow, mux)
 }
 
 type Client struct {

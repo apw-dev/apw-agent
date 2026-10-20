@@ -27,10 +27,16 @@ import (
 	"github.com/apiwat/apw-agent/internal/transport"
 )
 
+// WailsHost is the host WebView2 uses for pages served by the Wails asset server.
+const WailsHost = "wails.localhost"
+
 type Server struct {
 	ConfigPath, Version, Token string
 	Backend                    app.API
 	Gatekeeper                 *ApprovalGatekeeper
+	// InProcessHost, when set, is a host whose requests are trusted as local because the
+	// handler is served in-process (the Desktop shell) rather than on a loopback listener.
+	InProcessHost string
 
 	cache   backendCache
 	connect func(context.Context) (app.API, error) // defaults to daemon.Connect(ConfigPath)
@@ -96,14 +102,14 @@ func (s *Server) Handler() http.Handler {
 		}
 		st.handler.ServeHTTP(w, r)
 	}))
-	guarded := transport.Guard(s.Token, mux)
+	guarded := transport.GuardWith(s.Token, s.allowRequest, mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			if r.Method != "GET" {
 				http.Error(w, "method not allowed", 405)
 				return
 			}
-			if !transport.LocalRequest(r) {
+			if !s.allowRequest(r) {
 				http.Error(w, "local origin required", 403)
 				return
 			}
@@ -112,6 +118,27 @@ func (s *Server) Handler() http.Handler {
 		}
 		guarded.ServeHTTP(w, r)
 	})
+}
+
+// allowRequest accepts loopback requests, and requests to InProcessHost (when set) whose
+// Origin, if any, is that same host.
+func (s *Server) allowRequest(r *http.Request) bool {
+	return transport.LocalRequest(r) || s.inProcess(r)
+}
+
+func (s *Server) inProcess(r *http.Request) bool {
+	if s.InProcessHost == "" {
+		return false
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if !strings.EqualFold(host, s.InProcessHost) {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	return origin == "" || strings.EqualFold(origin, "http://"+s.InProcessHost)
 }
 
 func (s *Server) StartAndOpen(ctx context.Context, addr string, open bool) (string, error) {
@@ -469,6 +496,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	// The page holds the API token: it may load nothing from elsewhere and talk only to this
 	// server. Inline script/style are the page itself (and the sandboxed HTML preview).
-	w.Header().Set("Content-Security-Policy", desktopCSP)
+	csp := desktopCSP
+	if s.inProcess(r) {
+		// The Wails asset server injects its runtime as same-origin /wails/*.js scripts.
+		csp = strings.Replace(csp, "script-src 'unsafe-inline'", "script-src 'self' 'unsafe-inline'", 1)
+	}
+	w.Header().Set("Content-Security-Policy", csp)
 	_, _ = w.Write([]byte(strings.ReplaceAll(desktopHTML, "__APW_TOKEN__", s.Token)))
 }

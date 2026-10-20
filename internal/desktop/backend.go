@@ -61,7 +61,7 @@ func (s *Server) current(ctx context.Context) (*backendState, error) {
 		}
 		st.api = &invalidatingAPI{API: api, server: s, state: st}
 	}
-	st.handler = transport.Handler(st.api, s.Token, map[string]string{"protocol": transport.Version}, nil)
+	st.handler = transport.HandlerWith(st.api, s.Token, map[string]string{"protocol": transport.Version}, nil, s.allowRequest)
 	s.cache.state = st
 	return st, nil
 }
