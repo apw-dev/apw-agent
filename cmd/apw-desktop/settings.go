@@ -21,13 +21,30 @@ type WindowState struct {
 	Placed              bool
 }
 
+// WorkspaceSelection remembers the active conversation and task for a workspace path.
+type WorkspaceSelection struct {
+	SessionID string `json:"session_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+}
+
+// UIPreferences persists panel widths, collapsed cards and per-workspace selection in desktop.json.
+type UIPreferences struct {
+	LeftWidth      int                           `json:"left_width,omitempty"`
+	RightWidth     int                           `json:"right_width,omitempty"`
+	LeftCollapsed  bool                          `json:"left_collapsed,omitempty"`
+	RightCollapsed bool                          `json:"right_collapsed,omitempty"`
+	CollapsedCards map[string]bool               `json:"collapsed_cards,omitempty"`
+	Selections     map[string]WorkspaceSelection `json:"selections,omitempty"`
+}
+
 // Settings is %APPDATA%\APW\desktop.json: shell state that must survive restarts and reinstalls.
 type Settings struct {
-	Version       int         `json:"version"`
-	Recent        []string    `json:"recent"`
-	LastWorkspace string      `json:"last_workspace"`
-	Theme         string      `json:"theme"` // "system" | "light" | "dark"
-	Window        WindowState `json:"window"`
+	Version       int           `json:"version"`
+	Recent        []string      `json:"recent"`
+	LastWorkspace string        `json:"last_workspace"`
+	Theme         string        `json:"theme"` // "system" | "light" | "dark"
+	Window        WindowState   `json:"window"`
+	UI            UIPreferences `json:"ui,omitempty"`
 }
 
 func DefaultSettings() Settings {

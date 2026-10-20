@@ -103,8 +103,10 @@ func (s *Server) Handler() http.Handler {
 		st.handler.ServeHTTP(w, r)
 	}))
 	guarded := transport.GuardWith(s.Token, s.allowRequest, mux)
+	distFS, _ := webDistFS()
+	staticServer := http.FileServer(http.FS(distFS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			if r.Method != "GET" {
 				http.Error(w, "method not allowed", 405)
 				return
@@ -114,6 +116,18 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			s.handleIndex(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			if r.Method != "GET" && r.Method != "HEAD" {
+				http.Error(w, "method not allowed", 405)
+				return
+			}
+			if !s.allowRequest(r) {
+				http.Error(w, "local origin required", 403)
+				return
+			}
+			staticServer.ServeHTTP(w, r)
 			return
 		}
 		guarded.ServeHTTP(w, r)
@@ -488,19 +502,24 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": message})
 }
 
-const desktopCSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+const desktopCSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	distFS, err := webDistFS()
+	if err != nil {
+		http.Error(w, "desktop assets unavailable", http.StatusInternalServerError)
+		return
+	}
+	raw, err := fs.ReadFile(distFS, "index.html")
+	if err != nil {
+		http.Error(w, "desktop index unavailable", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
-	// The page holds the API token: it may load nothing from elsewhere and talk only to this
-	// server. Inline script/style are the page itself (and the sandboxed HTML preview).
-	csp := desktopCSP
-	if s.inProcess(r) {
-		// The Wails asset server injects its runtime as same-origin /wails/*.js scripts.
-		csp = strings.Replace(csp, "script-src 'unsafe-inline'", "script-src 'self' 'unsafe-inline'", 1)
-	}
-	w.Header().Set("Content-Security-Policy", csp)
-	_, _ = w.Write([]byte(strings.ReplaceAll(desktopHTML, "__APW_TOKEN__", s.Token)))
+	// The page holds the API token in <meta name="apw-token">: it loads only same-origin
+	// scripts/fonts/styles and talks only to this server, with inline scripts forbidden.
+	w.Header().Set("Content-Security-Policy", desktopCSP)
+	_, _ = w.Write([]byte(strings.ReplaceAll(string(raw), "__APW_TOKEN__", s.Token)))
 }

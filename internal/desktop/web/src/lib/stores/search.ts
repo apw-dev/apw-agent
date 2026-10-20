@@ -1,0 +1,139 @@
+import { writable } from "svelte/store";
+import { getAPI, type SearchPayload } from "../api";
+
+export interface MentionCandidate {
+  insert: string;
+  display: string;
+  meta: string;
+  kind: "slash" | "file" | "symbol" | "skill";
+  action?: () => void;
+}
+
+export interface ActiveToken {
+  kind: "slash" | "mention";
+  query: string;
+  atStart: number;
+  atEnd: number;
+}
+
+export const SLASH_COMMANDS: Array<{ cmd: string; label: string; meta: string; immediate?: string }> = [
+  { cmd: "/plan ", label: "/plan <คำสั่ง>", meta: "วางแผน ExecutionPlan ก่อนแก้ไขจริง" },
+  { cmd: "/review ", label: "/review <คำสั่ง>", meta: "อ่านและวิเคราะห์โค้ดโดยไม่รันคำสั่ง" },
+  { cmd: "/preview ", label: "/preview <คำสั่ง>", meta: "สร้าง Diff ใน Isolated Worktree" },
+  { cmd: "/verify", label: "/verify", meta: "รันตรวจสอบโค้ดด้วย Reflex Pipeline", immediate: "verify" },
+  { cmd: "/symbols", label: "/symbols", meta: "เปิดดู AST Symbols ทั้งโปรเจกต์", immediate: "symbols" },
+  { cmd: "/graph", label: "/graph", meta: "เปิดดู Cross-File Call Impact Graph", immediate: "graph" },
+  { cmd: "/autonomy", label: "/autonomy", meta: "เปิดมุมมอง Autonomy 24/7 & Skills", immediate: "autonomy" },
+  { cmd: "/settings", label: "/settings", meta: "ตั้งค่าธีม โมเดล และ Sandbox", immediate: "settings" },
+  { cmd: "/new", label: "/new", meta: "เริ่มบทสนทนาใหม่ (Ctrl+N)", immediate: "new" }
+];
+
+export const mentionCandidates = writable<MentionCandidate[]>([]);
+export const mentionSelectedIndex = writable<number>(0);
+
+let searchSeq = 0;
+
+export function detectActiveToken(value: string, cursor: number): ActiveToken | null {
+  const before = (value || "").slice(0, cursor);
+  if (/^\/[A-Za-z0-9_-]*$/.test(before)) {
+    return { kind: "slash", query: before.slice(1), atStart: 0, atEnd: cursor };
+  }
+  const m = /(?:^|\s)@(#?[A-Za-z0-9_:./\\-]*)$/.exec(before);
+  if (!m) return null;
+  const query = m[1] || "";
+  const atStart = cursor - query.length - 1;
+  return { kind: "mention", query, atStart, atEnd: cursor };
+}
+
+export function clearMentionCandidates() {
+  searchSeq++;
+  mentionCandidates.set([]);
+  mentionSelectedIndex.set(0);
+}
+
+/**
+ * Queries /api/search?q=<query> and discards stale responses if a newer query was issued.
+ */
+export async function queryMentionCandidates(
+  token: ActiveToken | null,
+  onImmediateCommand?: (actionName: string) => void,
+  fetcher: (q: string) => Promise<SearchPayload | null> = defaultSearchFetcher
+): Promise<MentionCandidate[]> {
+  if (!token) {
+    clearMentionCandidates();
+    return [];
+  }
+  if (token.kind === "slash") {
+    searchSeq++;
+    const q = token.query.toLowerCase();
+    const list: MentionCandidate[] = SLASH_COMMANDS.filter(
+      (c) => c.cmd.toLowerCase().includes(q) || c.meta.toLowerCase().includes(q)
+    ).map((c) => ({
+      insert: c.cmd,
+      display: c.label,
+      meta: c.meta,
+      kind: "slash",
+      action: c.immediate && onImmediateCommand ? () => onImmediateCommand(c.immediate!) : undefined
+    }));
+    mentionCandidates.set(list);
+    mentionSelectedIndex.set(0);
+    return list;
+  }
+
+  const seq = ++searchSeq;
+  const rawQ = token.query;
+  const data = await fetcher(rawQ);
+  if (seq !== searchSeq || !data) {
+    return [];
+  }
+
+  const symOnly = rawQ.startsWith("#");
+  const skillOnly = rawQ.toLowerCase().startsWith("skill:");
+  const q = (symOnly ? rawQ.slice(1) : skillOnly ? rawQ.slice(6) : rawQ).toLowerCase();
+
+  const items: MentionCandidate[] = [];
+  if (!symOnly) {
+    for (const sk of data.skills || []) {
+      const slug = sk.slug || "";
+      const desc = sk.description || "";
+      if (!q || slug.toLowerCase().includes(q) || desc.toLowerCase().includes(q)) {
+        items.push({
+          insert: "skill:" + slug,
+          display: "@skill:" + slug,
+          meta: "skill · " + (desc.slice(0, 42) || ".apw/skills"),
+          kind: "skill"
+        });
+      }
+    }
+  }
+  if (!symOnly && !skillOnly) {
+    for (const f of data.files || []) {
+      items.push({
+        insert: f,
+        display: "@" + f,
+        meta: "file",
+        kind: "file"
+      });
+    }
+  }
+  if (!skillOnly) {
+    for (const s of data.symbols || []) {
+      items.push({
+        insert: "#" + s.name,
+        display: "@#" + s.name,
+        meta: `${s.kind || "sym"} · ${s.file}:L${s.start_line || 1}`,
+        kind: "symbol"
+      });
+    }
+  }
+
+  const capped = items.slice(0, 8);
+  mentionCandidates.set(capped);
+  mentionSelectedIndex.set(0);
+  return capped;
+}
+
+async function defaultSearchFetcher(q: string): Promise<SearchPayload | null> {
+  const res = await getAPI<SearchPayload>("/api/search?q=" + encodeURIComponent(q || ""));
+  return res.ok && res.data ? res.data : null;
+}

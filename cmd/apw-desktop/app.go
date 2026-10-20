@@ -6,11 +6,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// ShellState is the native shell snapshot exposed to the frontend.
+type ShellState struct {
+	CurrentWorkspace string        `json:"current_workspace"`
+	Recent           []string      `json:"recent"`
+	Theme            string        `json:"theme"`
+	UI               UIPreferences `json:"ui"`
+}
 
 // App owns the window lifecycle and is bound to the page as window.go.main.App.
 // Only its exported methods are callable from JavaScript.
@@ -115,6 +128,57 @@ func (a *App) SetTheme(mode string) error {
 	defer a.mu.Unlock()
 	a.settings.Theme = mode
 	return SaveSettings(a.settingsPath, a.settings)
+}
+
+// GetShellState returns the active workspace, recent list, theme and persisted UI preferences.
+func (a *App) GetShellState() ShellState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return ShellState{
+		CurrentWorkspace: a.host.Current(),
+		Recent:           append([]string(nil), a.settings.Recent...),
+		Theme:            a.settings.Theme,
+		UI:               a.settings.UI,
+	}
+}
+
+// SaveUIPreferences persists panel widths, collapsed cards and per-workspace selection in desktop.json.
+func (a *App) SaveUIPreferences(ui UIPreferences) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.settings.UI = ui
+	if a.settingsPath == "" {
+		return nil
+	}
+	return SaveSettings(a.settingsPath, a.settings)
+}
+
+// RevealInExplorer opens Windows Explorer at target (relative to the current workspace or absolute).
+func (a *App) RevealInExplorer(target string) error {
+	ws := a.host.Current()
+	if ws == "" {
+		return errors.New("no workspace open")
+	}
+	clean := strings.TrimSpace(target)
+	var full string
+	if clean == "" || clean == "." {
+		full = ws
+	} else if filepath.IsAbs(clean) {
+		full = filepath.Clean(clean)
+	} else {
+		full = filepath.Join(ws, filepath.FromSlash(clean))
+	}
+	if goruntime.GOOS != "windows" {
+		return nil
+	}
+	fi, err := os.Stat(full)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		return exec.Command("explorer.exe", full).Start()
+	}
+	return exec.Command("explorer.exe", "/select,"+full).Start()
 }
 
 func applyTheme(ctx context.Context, mode string) {

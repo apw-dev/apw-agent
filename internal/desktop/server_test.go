@@ -210,16 +210,16 @@ func TestIndexServesStrictCSP(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.handleIndex(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	csp := rec.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'none'"} {
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "font-src 'self'", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'none'"} {
 		if !strings.Contains(csp, want) {
 			t.Fatalf("CSP %q lacks %q", csp, want)
 		}
 	}
-	if strings.Contains(rec.Body.String(), "__APW_TOKEN__") || !strings.Contains(rec.Body.String(), s.Token) {
-		t.Fatal("token not substituted")
+	if strings.Contains(csp, "script-src 'unsafe-inline'") || strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("CSP must not allow inline scripts: %q", csp)
 	}
-	if strings.Contains(csp, "script-src 'self'") {
-		t.Fatalf("loopback CSP must not allow same-origin scripts: %q", csp)
+	if strings.Contains(rec.Body.String(), "__APW_TOKEN__") || !strings.Contains(rec.Body.String(), `<meta name="apw-token" content="`+s.Token+`"`) {
+		t.Fatalf("token not injected into <meta name=\"apw-token\">: %s", rec.Body.String())
 	}
 }
 
@@ -357,7 +357,7 @@ func TestInProcessHostTrustedOnlyWhenConfigured(t *testing.T) {
 	srv.InProcessHost = WailsHost
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req("/"))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "script-src 'self' 'unsafe-inline'") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "script-src 'self'") {
 		t.Fatalf("in-process index: %d csp=%q", rec.Code, rec.Header().Get("Content-Security-Policy"))
 	}
 	rec = httptest.NewRecorder()

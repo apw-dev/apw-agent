@@ -1,0 +1,180 @@
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url("@fontsource-variable/noto-sans/files/noto-sans-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Noto Sans Thai";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url("@fontsource-variable/noto-sans-thai/files/noto-sans-thai-thai-wght-normal.woff2") format("woff2-variations");
+}
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f7f5;
+  --side: rgba(239, 238, 234, 0.88);
+  --side-solid: #efeeea;
+  --panel: #ffffff;
+  --panel-subtle: #f1f0ec;
+  --hover: #e7e5df;
+  --active: #e2e0da;
+  --line: #e3e1db;
+  --line-strong: #c9c7c0;
+  --text: #1f1e1c;
+  --muted: #5c5953;
+  --faint: #76736c;
+  --accent: #c96442;
+  --accent-hover: #b55636;
+  --accent-soft: rgba(201, 100, 66, 0.12);
+  --ok: #256b42;
+  --ok-soft: rgba(37, 107, 66, 0.12);
+  --warn: #9a5200;
+  --warn-soft: rgba(154, 82, 0, 0.12);
+  --err: #b92516;
+  --err-soft: rgba(185, 37, 22, 0.11);
+  --add: #e6f4ea;
+  --addg: #ccebd6;
+  --addt: #185c2f;
+  --del: #fbe9e7;
+  --delg: #f5cfc9;
+  --delt: #9e2a18;
+  --user-bubble: #ebe9e3;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 8px 28px rgba(0, 0, 0, 0.14);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1f1e1c;
+  --side: rgba(24, 23, 21, 0.88);
+  --side-solid: #181715;
+  --panel: #272623;
+  --panel-subtle: #2e2d29;
+  --hover: #32302c;
+  --active: #3a3833;
+  --line: #383632;
+  --line-strong: #4c4944;
+  --text: #f2f0eb;
+  --muted: #b8b5ad;
+  --faint: #949087;
+  --accent: #d97757;
+  --accent-hover: #e38768;
+  --accent-soft: rgba(217, 119, 87, 0.18);
+  --ok: #5ce08e;
+  --ok-soft: rgba(92, 224, 142, 0.15);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.15);
+  --err: #f87171;
+  --err-soft: rgba(248, 113, 113, 0.15);
+  --add: rgba(47, 125, 79, 0.24);
+  --addg: rgba(47, 125, 79, 0.38);
+  --addt: #86efac;
+  --del: rgba(196, 43, 28, 0.24);
+  --delg: rgba(196, 43, 28, 0.38);
+  --delt: #fca5a5;
+  --user-bubble: #302e2a;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 10px 32px rgba(0, 0, 0, 0.45);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans", "Noto Sans Thai", "Segoe UI Variable", "Segoe UI", "Leelawadee UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+  letter-spacing: 0;
+  user-select: none;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+}
+
+.selectable,
+pre,
+code,
+textarea,
+input {
+  user-select: text;
+}
+
+textarea,
+input {
+  cursor: text;
+}
+
+button,
+select,
+[role="button"] {
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+.mono,
+code,
+pre {
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Thin overlay scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+}
+
+.transition-fast {
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease, transform 140ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

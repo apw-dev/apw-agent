@@ -65,7 +65,7 @@ func TestWorkspaceHostOpenServesDesktop(t *testing.T) {
 		t.Fatalf("Current = %q, want %q", h.Current(), dir)
 	}
 	rec := inProcessGet(t, h, "/")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "apiToken") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "apw-token") {
 		t.Fatalf("desktop index = %d", rec.Code)
 	}
 	if rec := inProcessGet(t, h, "/api/status"); rec.Code != http.StatusUnauthorized {
