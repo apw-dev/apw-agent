@@ -30,21 +30,30 @@ Remaining acceptance: API transports and real local-model servers have no config
 
 ## APW.exe native shell & Svelte 5 frontend (phases 1–3)
 
-Build under test: `cmd/apw-desktop` (Wails v2.17.0) + `internal/desktop/web` (Svelte 5 + TypeScript + Vite), with `apw.exe` and `apwd.exe` built next to it.
+Build under test: `cmd/apw-desktop` (Wails v2.17.0) + `internal/desktop/web` (Svelte 5 + TypeScript + Vite), with `apw.exe` and `apwd.exe` built next to it. Each result names its evidence. **Automated** means a named test that runs in CI. **Live** means it was observed on this machine (Windows 11, two monitors, 100% scaling). **NOT VERIFIED** means nobody has checked it in the running window yet.
 
 | # | Check | Expected | Result |
 |---|---|---|---|
-| 1 | Launch from Explorer | APW icon and title in window and taskbar, not grouped with Edge | PASS (partial): own terracotta "A" taskbar icon observed, separate from Edge; Win32 reports window title `APW`. |
-| 2 | Start | No white flash; chooser or last workspace appears | PASS (partial): user confirmed the Desktop UI appears for the workspace argument. |
-| 3 | Theme | Caption and Mica follow Windows light/dark; `"theme":"dark"` in desktop.json forces dark | NOT VERIFIED (manual check pending) |
-| 4 | Right-click on a message | Custom context menu (Copy, Copy code block, Reveal in Explorer) — no browser menu | PASS in Playwright/Vitest (`ContextMenu.svelte`); Wails sets `AreDefaultContextMenusEnabled(false)` in production builds. |
-| 5 | `Ctrl+R`, `F5`, `Ctrl+F`, `Ctrl+P`, `Ctrl+U`, `F12`, `Ctrl+Shift+I`, `Ctrl +/-/0`, pinch | Nothing happens; shortcuts work on Thai keyboard layout (`e.code`) | PASS in unit tests (`e.code` keybindings verified for `KeyO`, `KeyB`, `KeyJ`, `KeyK`, `KeyI`); Wails disables WebView2 browser accelerator keys. |
-| 6 | Drop a file on the window | No navigation | PASS by handler (`dragover`/`drop` `preventDefault` in `App.svelte` and chooser). |
-| 7 | External link in a message | Opens in default browser | Wired to `BrowserOpenURL` via `shell.openExternal`. |
-| 8 | Hover maximize button | Snap Layouts flyout | Standard Win32 frame (`Frameless: false`). |
-| 9 | Second launch `APW.exe D:\other-repo` | First window focuses (`SetForegroundWindow`) and switches workspace; same-dir reopen is a no-op | PASS in `TestWorkspaceHostReopenSameDirKeepsServer` and `TestSecondInstanceArg` + Win32 `focusWindow`. |
-| 10 | Close and reopen | Same size/position/maximized and same workspace | PASS (Win32-driven): centred first run (320,106); moved to 250,180 1300×850, closed with WM_CLOSE, reopened with no argument → same rect and last workspace. Off-screen 5000×3000 clamped to secondary monitor work area. |
-| 11 | Workspace folder renamed / bad startup arg | Chooser with error text, or native notice dialog when falling back to last workspace | PASS (`WorkspaceHost.TakeNotice` + chooser error banner). |
-| 12 | Desktop completion gate (spec §1 criterion 2) on Svelte 5 UI | Passes end to end: create session → preview → inspect diff → execute/verify → cancel/resume → apply → reload & reopen | PASS in automated Playwright E2E (`internal/desktop/web/e2e/desktop.spec.ts`) and Go backend E2E (`TestDesktopCompletionGateE2E`). |
+| 1 | Launch from Explorer | APW icon and title in window and taskbar, not grouped with Edge | PASS (partial, live, phase 1 UI): own terracotta "A" taskbar icon separate from Edge; Win32 reports title `APW`. Not yet launched from Explorer, and not yet observed with the Svelte UI. |
+| 2 | Start | No white flash; chooser or last workspace appears | PASS (partial, live, phase 1 UI): the user confirmed the Desktop UI appears for a workspace argument. No white flash not yet observed; Svelte UI inside APW.exe not yet observed. |
+| 3 | Theme | Caption and Mica follow Windows light/dark; `"theme":"dark"` in desktop.json forces dark | NOT VERIFIED |
+| 4 | Right-click on a message | App context menu (Copy, Copy path, Explorer only in the shell), no browser menu | PARTIAL: the menu component is covered by automated test `app context menu › copies a file path and closes…` (`src/contract.test.ts`). The browser menu is off by construction (Wails `AreDefaultContextMenusEnabled(false)` in production builds). Right-click in the window NOT VERIFIED. |
+| 5 | `Ctrl+R`, `F5`, `Ctrl+F`, `Ctrl+P`, `Ctrl+U`, `F12`, `Ctrl+Shift+I`, `Ctrl +/-/0`, pinch | Nothing happens, also with the Thai keyboard layout | PARTIAL: the key decision is covered by automated test `blocks browser shortcuts by physical key…` (`isBlockedBrowserShortcut`, Thai Kedmanee `e.key` with `e.code`). Wails also disables WebView2 browser accelerator keys. Pressing the keys in the window NOT VERIFIED. |
+| 6 | Drop a file on the window | No navigation | NOT VERIFIED (handler present: `dragover`/`drop` `preventDefault` in `App.svelte`; Wails `DisableWebViewDrop`) |
+| 7 | External link in a message | Opens in default browser | NOT VERIFIED (wired to `runtime.BrowserOpenURL` via `shell.openExternalURL`; no test) |
+| 8 | Hover maximize button | Snap Layouts flyout | NOT VERIFIED (standard Win32 frame) |
+| 9 | Second launch `APW.exe D:\other-repo` | First window comes to front and switches workspace; same folder is a no-op | PARTIAL: the logic is covered by automated tests `TestSecondInstanceBeforeStartupIsDeferred`, `TestWorkspaceArgFromResolvesAgainstGivenDir`, `TestWorkspaceHostReopenSameDirKeepsServer`. A real second launch and focus NOT VERIFIED. |
+| 10 | Close and reopen | Same size/position/maximized and same workspace | PASS (live, Win32-driven, build `137a6ab`): first run centred (320,106); moved to 250,180 1300×850, closed with WM_CLOSE, reopened with no argument → same rect and last workspace; a planted off-screen 5000×3000 geometry opened fitted to the secondary monitor's work area. Maximised restore and 125–150% scaling NOT VERIFIED. |
+| 11 | Workspace folder renamed / bad startup arg | Chooser with error text, or a notice when falling back to the last workspace | PARTIAL: covered by automated tests `TestOpenInitialWorkspace` and `TestWorkspaceHostChooserShowsNotice`. Renaming a folder and reopening the window NOT VERIFIED. |
+| 12 | Desktop completion gate (spec §1 criterion 2) | create conversation → review → preview → inspect diff → execute → cancel/resume → verify → apply → reload keeps the task | PASS (automated, real server): `e2e/desktop.spec.ts` drives the Svelte UI in a browser against the real `desktop.Server` (embedded dist, CSP, token guard, apply approval). It runs through `internal/desktop/e2ehelper` with a deterministic backend whose jobs and reports are built from the Go types. The test also asserts the CSP header, the verification evidence, the approval step, and that no console errors or failed requests occur. Inside APW.exe, and against a real `apwd` with a real provider, NOT VERIFIED. |
 
-Evidence for the in-process path and strict CSP: `/` serves the embedded Svelte 5 `dist/index.html` with `<meta name="apw-token">` and `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. All Vitest component tests (`5 passed`), `svelte-check` (`0 errors, 0 warnings`), Playwright E2E (`1 passed`), and Go unit/integration tests pass.
+The real Desktop index serves the embedded `dist/index.html` with the token in `<meta name="apw-token">` and `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. Inside APW.exe the same handler is served in-process through the Wails asset server.
+
+Frontend contract checks: `TestFrontendFixturesMatchGoTypes` (`internal/desktop/devfixture`) regenerates `src/fixtures/*.json` from the Go types, and `src/contract.test.ts` renders those fixtures, so a renamed Go field fails CI. When these were introduced they showed that VerificationCard read fields the Go report does not have (`stages`, `output`, `acceptance_results`), and that the active and resumable statuses did not match `core.TaskStatus`. Both were fixed in `6b4d47e`.
+
+Latest run (2026-10-20, branch `fix/desktop-acceptance-e2e`):
+- `svelte-check`: 0 errors, 0 warnings
+- Vitest: 14 passed in 2 files
+- Playwright against the real server: 1 passed, with no console errors or failed requests
+- Go: the `internal/desktop/...` packages and the `cmd/apw-desktop` module pass
+- The headless-Edge tests in `internal/browser` and `internal/reflex` still time out now and then under full parallel load and pass when rerun alone

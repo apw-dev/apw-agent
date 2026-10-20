@@ -83,6 +83,12 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
+      # The e2e test runs against the real desktop.Server (go run ./internal/desktop/e2ehelper),
+      # which embeds the dist built above.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Playwright E2E
         run: npm run test:e2e
 
