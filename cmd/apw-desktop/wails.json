@@ -1,0 +1,16 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "APW",
+  "outputfilename": "APW",
+  "frontend:install": "",
+  "frontend:build": "",
+  "author": {
+    "name": "apw-agents"
+  },
+  "info": {
+    "companyName": "APW",
+    "productName": "APW",
+    "productVersion": "0.1.0",
+    "comments": "APW Desktop"
+  }
+}

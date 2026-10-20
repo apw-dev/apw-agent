@@ -22,6 +22,19 @@ func TestWorkspaceArg(t *testing.T) {
 	}
 }
 
+// A second launch reports its own working directory; a relative folder argument is resolved
+// against it, not against the first instance's directory.
+func TestWorkspaceArgFromResolvesAgainstGivenDir(t *testing.T) {
+	wd := t.TempDir()
+	if got, want := WorkspaceArgFrom([]string{"repo"}, wd), filepath.Join(wd, "repo"); got != want {
+		t.Fatalf("WorkspaceArgFrom = %q, want %q", got, want)
+	}
+	abs := filepath.Join(t.TempDir(), "other")
+	if got := WorkspaceArgFrom([]string{abs}, wd); got != abs {
+		t.Fatalf("absolute arg changed: %q", got)
+	}
+}
+
 func TestDevtoolsRequested(t *testing.T) {
 	if !DevtoolsRequested([]string{"x", "--devtools"}) {
 		t.Fatal("want true")

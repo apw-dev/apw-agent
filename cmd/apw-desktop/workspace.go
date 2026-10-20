@@ -26,7 +26,12 @@ type openWorkspace struct {
 // concurrent use: Open swaps the whole workspace atomically.
 type WorkspaceHost struct {
 	current atomic.Pointer[openWorkspace]
+	notice  atomic.Pointer[string]
 }
+
+// SetNotice sets the message the chooser shows when no ?error= is given, e.g. why the last
+// workspace could not be reopened at startup.
+func (h *WorkspaceHost) SetNotice(msg string) { h.notice.Store(&msg) }
 
 func NewWorkspaceHost() *WorkspaceHost { return &WorkspaceHost{} }
 
@@ -42,7 +47,11 @@ func (h *WorkspaceHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'")
-	page := strings.Replace(chooserHTML, "__ERROR__", html.EscapeString(r.URL.Query().Get("error")), 1)
+	msg := r.URL.Query().Get("error")
+	if n := h.notice.Load(); msg == "" && n != nil {
+		msg = *n
+	}
+	page := strings.Replace(chooserHTML, "__ERROR__", html.EscapeString(msg), 1)
 	_, _ = w.Write([]byte(page))
 }
 

@@ -89,6 +89,16 @@ func TestWorkspaceHostFailedOpenKeepsCurrent(t *testing.T) {
 	}
 }
 
+// When the last workspace can no longer be opened at startup, the chooser says why.
+func TestWorkspaceHostChooserShowsNotice(t *testing.T) {
+	h := NewWorkspaceHost()
+	h.SetNotice(`เปิด workspace เดิมไม่ได้: <D:\gone>`)
+	body := inProcessGet(t, h, "/").Body.String()
+	if !strings.Contains(body, "เปิด workspace เดิมไม่ได้") || !strings.Contains(body, `&lt;D:\gone&gt;`) {
+		t.Fatalf("notice missing or unescaped: %s", body)
+	}
+}
+
 func TestWorkspaceHostChooserEscapesError(t *testing.T) {
 	rec := inProcessGet(t, NewWorkspaceHost(), "/?error=%3Cscript%3Ealert(1)%3C%2Fscript%3E")
 	body := rec.Body.String()
