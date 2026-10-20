@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/apiwat/apw-agent/internal/app"
 	"github.com/apiwat/apw-agent/internal/config"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 func TestServer_Endpoints(t *testing.T) {
@@ -214,5 +217,119 @@ func TestIndexServesStrictCSP(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "__APW_TOKEN__") || !strings.Contains(rec.Body.String(), s.Token) {
 		t.Fatal("token not substituted")
+	}
+}
+
+func TestHandleSearchAndPolyglotSymbols(t *testing.T) {
+	ws := t.TempDir()
+	cfgPath := filepath.Join(ws, "apw.json")
+	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "providers": {"m": {"type": "mock", "model": "APW Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "src", "widget.ts"), []byte("export function renderWidget() {\n  return 1;\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".env"), []byte("SECRET=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(cfgPath, "test")
+
+	rec := httptest.NewRecorder()
+	srv.handleSearch(rec, httptest.NewRequest(http.MethodGet, "/api/search?q=widget", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handleSearch status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "src/widget.ts") || !strings.Contains(body, "renderWidget") || strings.Contains(body, ".env") {
+		t.Fatalf("unexpected search payload:\n%s", body)
+	}
+
+	recSym := httptest.NewRecorder()
+	srv.handleSymbols(recSym, httptest.NewRequest(http.MethodGet, "/api/symbols", nil))
+	if recSym.Code != http.StatusOK || !strings.Contains(recSym.Body.String(), "renderWidget") {
+		t.Fatalf("handleSymbols = %d: %s", recSym.Code, recSym.Body.String())
+	}
+}
+
+// An old file in a workspace with more than 100 files must still be found by its name:
+// the search is filtered server-side, not capped before the query is applied.
+func TestHandleSearchFindsOldFileBeyondFirstHundred(t *testing.T) {
+	ws := t.TempDir()
+	cfgPath := filepath.Join(ws, "apw.json")
+	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "providers": {"m": {"type": "mock", "model": "APW Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(ws, "legacy_target.txt")
+	if err := os.WriteFile(old, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 150; i++ {
+		if err := os.WriteFile(filepath.Join(ws, fmt.Sprintf("recent_%03d.txt", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := NewServer(cfgPath, "test")
+
+	rec := httptest.NewRecorder()
+	srv.handleSearch(rec, httptest.NewRequest(http.MethodGet, "/api/search?q=legacy_tar", nil))
+	var got searchPayload
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("handleSearch = %d %v: %s", rec.Code, err, rec.Body.String())
+	}
+	if len(got.Files) == 0 || got.Files[0] != "legacy_target.txt" {
+		t.Fatalf("old file not found first: %v", got.Files)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.handleSearch(rec, httptest.NewRequest(http.MethodGet, "/api/search?q=skill:any", nil))
+	got = searchPayload{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 0 || len(got.Symbols) != 0 {
+		t.Fatalf("skill: query must not list files or symbols: %+v", got)
+	}
+}
+
+// A skill title derived from a long Thai instruction stays valid UTF-8, and a second
+// skill with the same slug is refused instead of overwriting the first.
+func TestHandleCreateSkillThaiTitleAndNoOverwrite(t *testing.T) {
+	ws := t.TempDir()
+	cfgPath := filepath.Join(ws, "apw.json")
+	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "providers": {"m": {"type": "mock", "model": "APW Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(cfgPath, "test")
+	instr := "x" + strings.Repeat("ปรับปรุงหน้าตั้งค่า", 10)
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/autonomy/skills", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.handleCreateSkill(rec, req)
+		return rec
+	}
+	body := `{"slug":"thai-skill","instruction":` + mustQuote(instr) + `}`
+	if rec := post(body); rec.Code != http.StatusOK {
+		t.Fatalf("create skill = %d: %s", rec.Code, rec.Body.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(ws, ".apw", "skills", "thai-skill", "SKILL.md"))
+	if err != nil || !utf8.Valid(raw) {
+		t.Fatalf("SKILL.md invalid UTF-8 or missing: %v", err)
+	}
+	if rec := post(`{"slug":"thai-skill","instruction":"replace it"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("overwrite = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if after, _ := os.ReadFile(filepath.Join(ws, ".apw", "skills", "thai-skill", "SKILL.md")); string(after) != string(raw) {
+		t.Fatal("existing skill was overwritten")
 	}
 }

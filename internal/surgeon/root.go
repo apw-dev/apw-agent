@@ -20,6 +20,12 @@ func InspectWorkspaceSymbols(base, rel string) ([]SymbolSpan, error) {
 	if err != nil {
 		return nil, err
 	}
+	ext := strings.ToLower(filepath.Ext(rel))
+	if ext != "" && ext != ".go" {
+		if syms, ok := inspectPolyglotSymbols(ext, data); ok {
+			return syms, nil
+		}
+	}
 	fset := token.NewFileSet()
 	tree, err := parser.ParseFile(fset, rel, data, parser.ParseComments)
 	if err != nil {
@@ -141,6 +147,130 @@ func ReadInRoot(base, rel string) ([]byte, os.FileMode, error) {
 		}
 	}
 	return b, mode, err
+}
+
+// allowedCustomizationPath permits reading only safe customization files (.apw/skills/*/SKILL.md,
+// .apw/rules/*.md, .apw/hooks.json) while keeping .apw/auth.json, .apw/tasks.db, etc. inaccessible.
+func allowedCustomizationPath(rel string) error {
+	if !filepath.IsLocal(rel) {
+		return fmt.Errorf("%w: %q", ErrPathEscape, rel)
+	}
+	slash := filepath.ToSlash(filepath.Clean(rel))
+	parts := strings.Split(slash, "/")
+	switch {
+	case len(parts) == 2 && parts[0] == ".apw" && parts[1] == "hooks.json":
+		return nil
+	case len(parts) == 3 && parts[0] == ".apw" && parts[1] == "rules" && strings.HasSuffix(strings.ToLower(parts[2]), ".md"):
+		return nil
+	case len(parts) == 4 && parts[0] == ".apw" && parts[1] == "skills" && parts[2] != "" && strings.EqualFold(parts[3], "SKILL.md"):
+		return nil
+	default:
+		return fmt.Errorf("disallowed customization path %q", rel)
+	}
+}
+
+// ReadAPWCustomization safely reads a customization file (.apw/skills/<slug>/SKILL.md,
+// .apw/rules/<name>.md, or .apw/hooks.json) inside base using os.Root without following symlinks.
+func ReadAPWCustomization(base, rel string) ([]byte, error) {
+	if err := allowedCustomizationPath(rel); err != nil {
+		return nil, err
+	}
+	r, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	cur := ""
+	for _, part := range strings.Split(filepath.Clean(rel), string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		fi, err := r.Lstat(cur)
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%w: symbolic link %q", ErrPathEscape, cur)
+		}
+	}
+	f, err := r.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || fi.Size() > 256*1024 {
+		return nil, fmt.Errorf("invalid customization file %s", rel)
+	}
+	return io.ReadAll(io.LimitReader(f, 256*1024))
+}
+
+// CreateAPWCustomization writes a new customization file (.apw/skills/<slug>/SKILL.md,
+// .apw/rules/<name>.md, or .apw/hooks.json) inside base through os.Root. Missing parent
+// directories are created; a link or non-directory at any component is rejected, and an
+// existing file is never overwritten (the error wraps os.ErrExist).
+func CreateAPWCustomization(base, rel string, data []byte) error {
+	if err := allowedCustomizationPath(rel); err != nil {
+		return err
+	}
+	r, err := os.OpenRoot(base)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	cur := ""
+	for i, part := range parts {
+		cur = filepath.Join(cur, part)
+		last := i == len(parts)-1
+		fi, err := r.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			if last {
+				break
+			}
+			if err = r.Mkdir(cur, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			return fmt.Errorf("%w: link %q", ErrPathEscape, cur)
+		}
+		if last {
+			return fmt.Errorf("customization %s: %w", rel, os.ErrExist)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("customization parent %q is not a directory", cur)
+		}
+	}
+	var nonce [12]byte
+	if _, err = rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	tmp := filepath.Join(filepath.Dir(rel), ".apw-"+hex.EncodeToString(nonce[:])+".tmp")
+	f, err := r.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer r.Remove(tmp)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if err = errors.Join(err, f.Close()); err != nil {
+		return err
+	}
+	if err = r.Link(tmp, rel); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("customization %s: %w", rel, os.ErrExist)
+		}
+		return err
+	}
+	return nil
 }
 
 func WriteInRoot(base, rel string, data []byte, perm os.FileMode, exclusive bool) error {

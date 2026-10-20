@@ -30,6 +30,7 @@ const (
 // Turn represents a single conversational and execution cycle in a session.
 type Turn struct {
 	Index          int       `json:"index"`
+	TaskID         string    `json:"task_id,omitempty"`
 	Timestamp      time.Time `json:"timestamp"`
 	Instruction    string    `json:"instruction"`
 	PlanID         string    `json:"plan_id,omitempty"`
@@ -90,26 +91,55 @@ func New(workspace string) *Session {
 	}
 }
 
-// RecordTurn appends an execution cycle to session history and updates working memory.
+// RecordTurn appends an execution cycle to session history (or updates an existing turn with the
+// same non-empty TaskID on resume/apply) and updates working memory.
 func (s *Session) RecordTurn(t Turn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	t.Index = s.nextIndex()
 	if t.Timestamp.IsZero() {
 		t.Timestamp = time.Now()
 	}
-	s.History = append(s.History, t)
-	if len(s.History) > maxHistoryTurns {
-		evicted := s.History[:len(s.History)-maxHistoryTurns]
-		for _, old := range evicted {
-			s.Memory.Earlier = append(s.Memory.Earlier, digest(old))
+	updatedInPlace := false
+	if t.TaskID != "" {
+		for i := len(s.History) - 1; i >= 0; i-- {
+			if s.History[i].TaskID == t.TaskID {
+				t.Index = s.History[i].Index
+				if t.Instruction == "" {
+					t.Instruction = s.History[i].Instruction
+				}
+				if t.PlanID == "" {
+					t.PlanID = s.History[i].PlanID
+				}
+				if t.TotalSteps == 0 {
+					t.TotalSteps = s.History[i].TotalSteps
+				}
+				if t.CompletedSteps == 0 {
+					t.CompletedSteps = s.History[i].CompletedSteps
+				}
+				if len(t.ModifiedFiles) == 0 {
+					t.ModifiedFiles = s.History[i].ModifiedFiles
+				}
+				s.History[i] = t
+				updatedInPlace = true
+				break
+			}
 		}
-		if n := len(s.Memory.Earlier); n > maxEarlier {
-			s.Memory.Earlier = append([]string(nil), s.Memory.Earlier[n-maxEarlier:]...)
+	}
+	if !updatedInPlace {
+		t.Index = s.nextIndex()
+		s.History = append(s.History, t)
+		if len(s.History) > maxHistoryTurns {
+			evicted := s.History[:len(s.History)-maxHistoryTurns]
+			for _, old := range evicted {
+				s.Memory.Earlier = append(s.Memory.Earlier, digest(old))
+			}
+			if n := len(s.Memory.Earlier); n > maxEarlier {
+				s.Memory.Earlier = append([]string(nil), s.Memory.Earlier[n-maxEarlier:]...)
+			}
+			// Copy the tail so the old, larger backing array can be collected.
+			s.History = append([]Turn(nil), s.History[len(s.History)-maxHistoryTurns:]...)
 		}
-		// Copy the tail so the old, larger backing array can be collected.
-		s.History = append([]Turn(nil), s.History[len(s.History)-maxHistoryTurns:]...)
 	}
 	s.UpdatedAt = time.Now()
 

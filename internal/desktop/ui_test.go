@@ -59,6 +59,8 @@ func TestDesktopHTMLUsesContract(t *testing.T) {
 	for _, want := range []string{
 		"/api/tasks/", "/api/instructions", "/api/instructions/init", "\"trusted\"",
 		"/api/trust", "/api/approvals", "/api/file?path=", "&task=", "APW.md",
+		"/api/models", "task-list", "settings-dialog", "left-resizer", "right-resizer",
+		"artifact-conflict-box", "acceptance-structured", "apw_desktop_task",
 	} {
 		if !strings.Contains(desktopHTML, want) {
 			t.Errorf("desktopHTML must reference %q", want)
@@ -87,6 +89,18 @@ func TestDesktopScriptBuildsDOMWithoutHTMLStrings(t *testing.T) {
 		if strings.Contains(script, bad) {
 			t.Errorf("script must not use %q", bad)
 		}
+	}
+}
+
+// Mention completion must send the typed query to the server instead of filtering a
+// one-time capped index on the client (which hid files beyond the first 100).
+func TestDesktopMentionSearchQueriesServer(t *testing.T) {
+	script := uiScript(t)
+	if !strings.Contains(script, `"/api/search?q=" + encodeURIComponent(`) {
+		t.Fatal("mention search does not pass the query to /api/search")
+	}
+	if strings.Contains(script, "cachedWorkspaceSearch") {
+		t.Fatal("mention search still uses a one-time cached index")
 	}
 }
 

@@ -298,8 +298,17 @@ func (c *Client) Search(ctx context.Context, query string) Source {
 		return src
 	}
 	var b strings.Builder
+	fetchedPreview := false
 	for _, r := range result.Web.Results {
 		fmt.Fprintf(&b, "- %s <%s>: %s\n", browser.VisibleText(r.Title), r.URL, browser.VisibleText(r.Description))
+		if !fetchedPreview {
+			if _, err := c.checkURL(r.URL); err == nil {
+				if page := c.Fetch(ctx, r.URL); page.Error == "" && strings.TrimSpace(page.Text) != "" {
+					fetchedPreview = true
+					fmt.Fprintf(&b, "  Excerpt (%s): %s\n", page.URL, clipText(page.Text, 3*1024))
+				}
+			}
+		}
 	}
 	src.Text = clipText(b.String(), maxSourceText)
 	src.Bytes = len(src.Text)

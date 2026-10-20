@@ -71,6 +71,9 @@ func configurePlanning(e *executor.Executor, cfg *config.Config) {
 	e.Proposals = cfg.Planning.Proposals
 	e.JudgeProposals = cfg.Planning.Judge
 	e.Lookup = cfg.Planning.Lookup
+	if e.SubagentConcurrency == 0 {
+		e.SubagentConcurrency = executor.DefaultSubagentConcurrency
+	}
 }
 
 // SessionFileID maps a job owner and conversation id to the id of the session file that holds
@@ -122,8 +125,9 @@ func Open(ctx context.Context, cfg *config.Config, makeExecutor Factory) (*Servi
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	s := &Service{Config: &copyCfg, Store: db, ctx: runCtx, cancel: cancel, lease: lease, factory: makeExecutor, wake: make(chan struct{}, 1)}
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.worker()
+	go s.autonomyLoop()
 	return s, nil
 }
 func DefaultFactory(cfg *config.Config) (*executor.Executor, func(), error) {
@@ -352,30 +356,31 @@ func (s *Service) run(j *store.Job) {
 		}
 		e, closeProvider, err = s.factory(providerCfg)
 	}
+	sessionID := SessionFileID(j.Owner, j.SessionID)
+	sess, loadErr := session.Load(cfg.Workspace, sessionID)
+	if loadErr != nil {
+		if !errors.Is(loadErr, os.ErrNotExist) {
+			s.persistJob(j.ID, core.StatusFailed, nil, "conversation cannot be loaded; saved file preserved: "+loadErr.Error())
+			return
+		}
+		sess = session.New(cfg.Workspace)
+		sess.ID = sessionID
+	}
+	if sess.Owner == "" {
+		sess.Owner = j.Owner
+	}
+	if sess.Conversation == "" {
+		sess.Conversation = j.SessionID
+	}
 	var report *executor.ExecutionReport
 	if err == nil {
 		defer closeProvider()
-		sessionID := SessionFileID(j.Owner, j.SessionID)
-		sess, loadErr := session.Load(cfg.Workspace, sessionID)
-		if loadErr != nil {
-			if !errors.Is(loadErr, os.ErrNotExist) {
-				s.persistJob(j.ID, core.StatusFailed, nil, "conversation cannot be loaded; saved file preserved: "+loadErr.Error())
-				return
-			}
-			sess = session.New(cfg.Workspace)
-			sess.ID = sessionID
-		}
-		if sess.Owner == "" {
-			sess.Owner = j.Owner
-		}
-		if sess.Conversation == "" {
-			sess.Conversation = j.SessionID
-		}
 		e.Session = sess
 		e.VerifyOverride = project.FromConfig(cfg.Verify)
 		e.WorktreeRoot = cfg.WorktreeRoot
 		e.Sandbox = sandbox.FromConfig(cfg.Sandbox)
 		e.BrowserCheck = cfg.Verify.Browser
+		e.EpisodicContext = s.Store.RecallEpisodicContext(ctx, j.Owner, j.Instruction, 5)
 		configurePlanning(e, cfg)
 
 		e.TaskID = j.ID
@@ -384,7 +389,7 @@ func (s *Service) run(j *store.Job) {
 		e.OnProgress = func(ev executor.ProgressEvent) {
 			status := core.TaskStatus("")
 			switch ev.Stage {
-			case "planning":
+			case "planning", "replanning":
 				status = core.StatusPlanning
 			case "reviewing":
 				status = core.StatusAnalyzing
@@ -452,18 +457,27 @@ func (s *Service) run(j *store.Job) {
 			status = core.StatusInterrupted
 		}
 	}
-	if e != nil && e.Session != nil && report != nil {
-		turn := session.Turn{Instruction: j.Instruction, ModifiedFiles: report.ModifiedFiles, Summary: report.Summary, Success: report.Passed, Applied: report.Applied}
-		if report.Plan != nil {
-			turn.PlanID = report.Plan.PlanID
-			turn.TotalSteps = len(report.Plan.Subtasks)
+	if sess != nil && (report != nil || err != nil) {
+		turn := session.Turn{TaskID: j.ID, Instruction: j.Instruction}
+		if report != nil {
+			turn.ModifiedFiles = report.ModifiedFiles
+			turn.Summary = report.Summary
+			turn.Success = report.Passed
+			turn.Applied = report.Applied
+			if report.Plan != nil {
+				turn.PlanID = report.Plan.PlanID
+				turn.TotalSteps = len(report.Plan.Subtasks)
+			}
+			turn.CompletedSteps = len(report.Steps)
 		}
-		turn.CompletedSteps = len(report.Steps)
 		if err != nil {
 			turn.Error = err.Error()
+			if turn.Summary == "" {
+				turn.Summary = err.Error()
+			}
 		}
-		e.Session.RecordTurn(turn)
-		if saveErr := e.Session.Save(); saveErr != nil {
+		sess.RecordTurn(turn)
+		if saveErr := sess.Save(); saveErr != nil {
 			err = errors.Join(err, saveErr)
 			status = core.StatusFailed
 		}
@@ -488,6 +502,7 @@ func (s *Service) run(j *store.Job) {
 		cause = err.Error()
 	}
 	s.persistJob(j.ID, status, data, cause)
+	s.recordAutonomyAndMemory(j, status, report, cause)
 }
 
 var _ API = (*Service)(nil)

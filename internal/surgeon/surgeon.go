@@ -228,8 +228,16 @@ func (s *Surgeon) ApplyPatch(op PatchOperation) (string, error) {
 	return newHash, nil
 }
 
-// InspectGoSymbols parses a Go file's AST to extract symbol boundaries
+// InspectGoSymbols parses a file's AST or lexical structure to extract symbol boundaries
 func (s *Surgeon) InspectGoSymbols(path string) ([]SymbolSpan, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != "" && ext != ".go" {
+		if data, err := os.ReadFile(path); err == nil {
+			if syms, ok := inspectPolyglotSymbols(ext, data); ok {
+				return syms, nil
+			}
+		}
+	}
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {

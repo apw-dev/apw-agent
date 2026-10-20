@@ -76,10 +76,17 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 
 	case "symbols":
 		if len(args) < 2 {
-			fmt.Fprintln(stderr, "Usage: apw symbols <path/to/file.go>")
+			fmt.Fprintln(stderr, "Usage: apw symbols <path/to/file>")
 			return 1
 		}
 		return executeSymbols(args[1], stdout, stderr)
+
+	case "search":
+		if len(args) < 2 {
+			fmt.Fprintln(stderr, "Usage: apw search <query>")
+			return 1
+		}
+		return executeSearch(".", strings.Join(args[1:], " "), stdout, stderr)
 
 	case "plan":
 		return runPlan(args[1:], stdout, stderr)
@@ -185,6 +192,29 @@ func executeSymbols(filePath string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "Found %d symbols in %s:\n", len(syms), filePath)
 	for _, sym := range syms {
 		fmt.Fprintf(stdout, "  - [%s] %s (lines %d-%d)\n", sym.Kind, sym.Name, sym.StartLine, sym.EndLine)
+	}
+	return 0
+}
+
+func executeSearch(workspace, query string, stdout, stderr io.Writer) int {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		fmt.Fprintln(stderr, "Usage: apw search <query>")
+		return 1
+	}
+	graph, err := surgeon.InspectWorkspaceGraph(workspace)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error inspecting workspace graph: %v\n", err)
+		return 1
+	}
+	defs := graph.FindSymbols(query)
+	fmt.Fprintf(stdout, "Symbol matches for %q (%d found):\n", query, len(defs))
+	for i, d := range defs {
+		if i >= 20 {
+			fmt.Fprintf(stdout, "  ... and %d more\n", len(defs)-i)
+			break
+		}
+		fmt.Fprintf(stdout, "  - [%s] %s (%s:%d-%d)\n", d.Kind, d.Name, d.File, d.StartLine, d.EndLine)
 	}
 	return 0
 }

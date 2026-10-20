@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/architect"
@@ -114,6 +115,13 @@ type Executor struct {
 	// Lookup is apw.json planning.lookup: "auto" (default) offers read-only code lookup when the
 	// code context was truncated, "always" always, "off" never.
 	Lookup string
+	// MaxReplans bounds how many times the Architect may synthesize a recovery sub-plan after Reflex repair exhaustion.
+	MaxReplans int
+	// EpisodicContext holds relevant past episodic lessons recalled from the workspace store.
+	EpisodicContext string
+	// SubagentConcurrency bounds how many parallel Surgeon subagents may synthesize disjoint-file mutations in one wave.
+	SubagentConcurrency int
+	directiveMu         sync.Mutex
 }
 
 // Profile detects the project at root, applying any configured verification override.
@@ -262,6 +270,13 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 	if e.Mode == core.ModeReview && st.Action != architect.ActionRead {
 		return sr, "", errors.New("review mode forbids mutations")
 	}
+	if st.Action == architect.ActionCreate || st.Action == architect.ActionPatch || st.Action == architect.ActionDelete {
+		if hookCtx, hookErr := e.runLifecycleHooks(ctx, HookPrePatch, st.TargetFile, string(st.Action)); hookErr != nil {
+			return sr, "", hookErr
+		} else if hookCtx != "" {
+			st.Instruction += "\n" + hookCtx
+		}
+	}
 	switch st.Action {
 	case architect.ActionRead:
 		content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
@@ -338,11 +353,16 @@ func (e *Executor) repairWithReflex(ctx context.Context, base string, surg *surg
 	if len(*files) > 0 {
 		target = (*files)[len(*files)-1]
 	}
+	diagFiles := extractDiagnosticFiles(base, diagnostics)
+	if target == "" && len(diagFiles) > 0 {
+		target = diagFiles[0]
+	}
 	var content string
 	if target != "" {
 		content, _, _ = surg.ReadWorkspaceFile(base, target)
 	}
-	prompt := fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, content)
+	extraContext := buildDiagnosticContext(base, surg, target, diagFiles, *files)
+	prompt := fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, content, extraContext)
 	patched, err := e.patchWithRetry(ctx, base, surg, target, "", true, prompt)
 	if err == nil {
 		appendModifiedFile(files, patched)

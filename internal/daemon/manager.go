@@ -199,29 +199,29 @@ func CountSkills(workspace string) int {
 // DiscoverSkills returns available skills grouped by category.
 func DiscoverSkills(workspace string) map[string][]string {
 	groups := map[string][]string{
-		"triad-core": {"architect-planner", "surgical-patcher", "reflex-verifier", "ast-symbol-inspector"},
-		"runtime":    {"sqlite-memory", "apwd-daemon", "telegram-gateway", "desktop-ui"},
+		"triad-core": {"architect-planner", "surgical-patcher", "reflex-verifier", "ast-symbol-inspector", "call-impact-graph"},
+		"runtime":    {"sqlite-memory", "apwd-daemon", "telegram-gateway", "desktop-ui", "autonomy-24x7"},
 	}
 
-	home, err := os.UserHomeDir()
-	if err == nil {
-		scanRoot := func(category, root string) {
-			_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return nil
-				}
-				if !d.IsDir() && strings.EqualFold(d.Name(), "SKILL.md") {
-					name := filepath.Base(filepath.Dir(path))
-					if name != "" && name != "." && name != "skills" {
-						groups[category] = append(groups[category], name)
-					}
-				}
+	scanRoot := func(category, root string) {
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
 				return nil
-			})
-		}
+			}
+			if !d.IsDir() && strings.EqualFold(d.Name(), "SKILL.md") {
+				name := filepath.Base(filepath.Dir(path))
+				if name != "" && name != "." && name != "skills" {
+					groups[category] = append(groups[category], name)
+				}
+			}
+			return nil
+		})
+	}
+	if workspace != "" {
 		scanRoot("workspace", filepath.Join(workspace, ".apw", "skills"))
-		scanRoot("extensions", filepath.Join(home, ".gemini", "config", "skills"))
-		scanRoot("system", filepath.Join(home, ".gemini", "antigravity", "builtin", "skills"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		scanRoot("user", filepath.Join(home, ".apw", "skills"))
 	}
 	return groups
 }

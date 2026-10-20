@@ -39,9 +39,17 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	if !surgeon.IsGitRepo(e.Workspace) {
 		return nil, errors.New("preview/execute requires a Git repository with an initial commit")
 	}
-	contextText := overview + "\n" + ProjectOverview(e.Workspace, e.Profile(e.Workspace))
+	contextText := overview + "\n" + ProjectOverviewForTask(e.Workspace, instruction, e.Profile(e.Workspace))
+	if e.EpisodicContext != "" {
+		contextText = e.EpisodicContext + "\n" + contextText
+	}
 	if e.Session != nil {
 		contextText = e.Session.BuildContextSummary() + "\n" + contextText
+	}
+	if hookCtx, hookErr := e.runLifecycleHooks(ctx, HookPrePlan, "", string(e.Mode)); hookErr != nil {
+		return nil, hookErr
+	} else if hookCtx != "" {
+		contextText = hookCtx + "\n" + contextText
 	}
 	e.emit(ProgressEvent{Stage: "planning", Message: "Building plan from source context"})
 	var plan *architect.ExecutionPlan
@@ -92,7 +100,7 @@ func (e *Executor) review(ctx context.Context, instruction, overview string) (*E
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})
-	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + ProjectOverview(e.Workspace, e.Profile(e.Workspace))
+	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + ProjectOverviewForTask(e.Workspace, instruction, e.Profile(e.Workspace))
 	var summary string
 	err := e.withArchitectFailover(ctx, "review", func(ctx context.Context, c FailoverCandidate) error {
 		response, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: e.TaskID, Model: c.Model, Prompt: prompt})
@@ -196,6 +204,24 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		if err := ctx.Err(); err != nil {
 			return report, errors.Join(err, save())
 		}
+		if wave := collectDisjointMutationWave(plan.Subtasks, i, e.SubagentConcurrency); len(wave) >= 2 && e.Mode != core.ModeReview {
+			waveErr := e.runSubagentWave(ctx, wt.Path, surg, plan.Subtasks, wave, func(stepIdx int, sr StepReport, path string) error {
+				report.Steps = append(report.Steps, sr)
+				e.emit(ProgressEvent{Stage: "step_done", StepIndex: stepIdx + 1, TotalSteps: len(plan.Subtasks), Step: &sr, Message: sr.Message})
+				if !sr.Success {
+					return save()
+				}
+				completed = stepIdx + 1
+				e.Pending = nil
+				appendModifiedFile(&modified, path)
+				return save()
+			})
+			if waveErr != nil {
+				return report, errors.Join(waveErr, save())
+			}
+			i = wave[len(wave)-1]
+			continue
+		}
 		st := plan.Subtasks[i]
 		e.emit(ProgressEvent{Stage: "step_start", StepIndex: i + 1, TotalSteps: len(plan.Subtasks), Message: fmt.Sprintf("[%s] %s — %s", st.Action, st.ID, st.TargetFile)})
 		sr, path, err := e.executeSubtask(ctx, wt.Path, surg, st)
@@ -257,6 +283,49 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		if len(attempts) > 0 {
 			report.Diagnostics = compareDiagnostics(report.Baseline, attempts[len(attempts)-1].Result)
 		}
+		for replanRound := 1; replanRound <= e.MaxReplans && e.Mode == core.ModeExecute && (err != nil || len(attempts) == 0 || !attempts[len(attempts)-1].Result.Passed); replanRound++ {
+			diagText := ""
+			if len(attempts) > 0 && attempts[len(attempts)-1].Result != nil {
+				diagText = reflex.FormatDiagnostics(attempts[len(attempts)-1].Result)
+			} else if err != nil {
+				diagText = err.Error()
+			}
+			revPlan, replanErr := e.replanWithArchitect(ctx, wt.Path, instruction, plan, diagText, modified)
+			if replanErr != nil {
+				break
+			}
+			for j, st := range revPlan.Subtasks {
+				if st.Action == architect.ActionVerify {
+					continue
+				}
+				e.emit(ProgressEvent{Stage: "step_start", StepIndex: j + 1, TotalSteps: len(revPlan.Subtasks), Message: fmt.Sprintf("[REPLAN %d · %s] %s — %s", replanRound, st.Action, st.ID, st.TargetFile)})
+				sr, path, stepErr := e.executeSubtask(ctx, wt.Path, surg, st)
+				if stepErr != nil {
+					sr.Message = stepErr.Error()
+				}
+				report.Steps = append(report.Steps, sr)
+				e.emit(ProgressEvent{Stage: "step_done", StepIndex: j + 1, TotalSteps: len(revPlan.Subtasks), Step: &sr, Message: sr.Message})
+				if stepErr != nil {
+					err = stepErr
+					break
+				}
+				e.Pending = nil
+				appendModifiedFile(&modified, path)
+			}
+			moreAttempts, verifyErr := engine.Run(ctx, func(ctx context.Context, diagnostics string) error {
+				rErr := e.repairWithReflex(ctx, wt.Path, surg, diagnostics, &modified)
+				if rErr == nil {
+					e.Pending = nil
+				}
+				return errors.Join(rErr, save())
+			})
+			attempts = append(attempts, moreAttempts...)
+			report.ReflexAttempts = attempts
+			if len(attempts) > 0 {
+				report.Diagnostics = compareDiagnostics(report.Baseline, attempts[len(attempts)-1].Result)
+			}
+			err = verifyErr
+		}
 		if err != nil {
 			return report, errors.Join(err, save())
 		}
@@ -264,6 +333,12 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		var accepted bool
 		report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, verified, wt, e.pageVisitor(ctx, wt.Path), false)
 		report.Passed = verified && accepted
+		if hookCtx, hookErr := e.runLifecycleHooks(ctx, HookPostVerify, "", instruction); hookErr != nil {
+			report.Passed = false
+			report.Summary += "\nPostVerify Hook Denied: " + hookErr.Error()
+		} else if hookCtx != "" {
+			report.Summary += "\nPostVerify Hook: " + hookCtx
+		}
 		if report.Passed {
 			e.Phase = "ready"
 		} else {

@@ -3,9 +3,11 @@ package desktop
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -121,4 +123,121 @@ func taskWorktree(workspace, override, task string) (dir string, status int, cod
 		return "", http.StatusNotFound, "worktree_gone", "the task worktree no longer exists"
 	}
 	return dir, 0, "", ""
+}
+
+type searchPayload struct {
+	Files   []string                  `json:"files"`
+	Symbols []surgeon.SymbolDef       `json:"symbols"`
+	Skills  []executor.WorkspaceSkill `json:"skills"`
+}
+
+// fuzzyMatch checks if all characters of pattern appear in order in target (case-insensitive).
+func fuzzyMatch(target, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	t := strings.ToLower(target)
+	p := strings.ToLower(pattern)
+	if strings.Contains(t, p) {
+		return true
+	}
+	pRunes := []rune(p)
+	idx := 0
+	for _, r := range t {
+		if r == pRunes[idx] {
+			idx++
+			if idx == len(pRunes) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// handleSearch serves /api/search?q=<query> for @file and @#symbol fuzzy autocomplete in the Desktop UI.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
+		return
+	}
+	q := strings.TrimSpace(strings.TrimPrefix(r.URL.Query().Get("q"), "@"))
+	symbolOnly := strings.HasPrefix(q, "#")
+	skillOnly := strings.HasPrefix(strings.ToLower(q), "skill:")
+	cleanQ := strings.TrimPrefix(q, "#")
+
+	type fileEntry struct {
+		path  string
+		mtime int64
+		exact bool
+	}
+	var entries []fileEntry
+	if !symbolOnly && !skillOnly {
+		_ = filepath.WalkDir(cfg.Workspace, func(fpath string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if d.IsDir() {
+				switch d.Name() {
+				case ".git", ".apw", ".worktrees", "vendor", "node_modules", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Type()&fs.ModeSymlink != 0 || !d.Type().IsRegular() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(cfg.Workspace, fpath)
+			if relErr != nil || surgeon.AllowedPath(rel) != nil {
+				return nil
+			}
+			slash := filepath.ToSlash(rel)
+			if !fuzzyMatch(slash, cleanQ) {
+				return nil
+			}
+			var mtime int64
+			if fi, fiErr := d.Info(); fiErr == nil {
+				mtime = fi.ModTime().UnixNano()
+			}
+			exact := cleanQ != "" && strings.Contains(strings.ToLower(slash), strings.ToLower(cleanQ))
+			entries = append(entries, fileEntry{path: slash, mtime: mtime, exact: exact})
+			return nil
+		})
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].exact != entries[j].exact {
+				return entries[i].exact
+			}
+			if entries[i].mtime != entries[j].mtime {
+				return entries[i].mtime > entries[j].mtime
+			}
+			return entries[i].path < entries[j].path
+		})
+	}
+
+	files := make([]string, 0, min(len(entries), 100))
+	for i := 0; i < len(entries) && i < 100; i++ {
+		files = append(files, entries[i].path)
+	}
+
+	var symbols []surgeon.SymbolDef
+	if skillOnly {
+		// skill:<slug> completes from the skills list only.
+	} else if g, gErr := surgeon.InspectWorkspaceGraph(cfg.Workspace); gErr == nil && g != nil {
+		if cleanQ != "" {
+			symbols = g.FindSymbols(cleanQ)
+		} else {
+			symbols = g.Definitions
+		}
+		if len(symbols) > 100 {
+			symbols = symbols[:100]
+		}
+	}
+	if symbols == nil {
+		symbols = []surgeon.SymbolDef{}
+	}
+	skills := executor.DiscoverWorkspaceSkills(cfg.Workspace)
+	if skills == nil {
+		skills = []executor.WorkspaceSkill{}
+	}
+	writeJSON(w, searchPayload{Files: files, Symbols: symbols, Skills: skills})
 }

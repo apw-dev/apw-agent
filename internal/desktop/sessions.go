@@ -31,6 +31,7 @@ type sessionSummary struct {
 
 type turnView struct {
 	Index       int       `json:"index"`
+	TaskID      string    `json:"task_id,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
 	Instruction string    `json:"instruction"`
 	Success     bool      `json:"success"`
@@ -102,7 +103,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		for _, t := range sess.History {
-			turns = append(turns, turnView{Index: t.Index, Timestamp: t.Timestamp, Instruction: t.Instruction, Success: t.Success, Applied: t.Applied, Summary: t.Summary})
+			turns = append(turns, turnView{Index: t.Index, TaskID: t.TaskID, Timestamp: t.Timestamp, Instruction: t.Instruction, Success: t.Success, Applied: t.Applied, Summary: t.Summary})
 		}
 	case errors.Is(err, os.ErrNotExist):
 	default:

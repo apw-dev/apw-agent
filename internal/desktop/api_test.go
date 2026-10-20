@@ -504,7 +504,8 @@ func TestSessions_ServiceConversationIsListed(t *testing.T) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 	status, body = e.do("GET", "/api/sessions/conv-e2e", "")
-	if turns, _ := asMap(t, body)["turns"].([]any); status != 200 || len(turns) != 1 || turns[0].(map[string]any)["instruction"] != "explain main.go" {
+	turns, _ := asMap(t, body)["turns"].([]any)
+	if status != 200 || len(turns) != 1 || turns[0].(map[string]any)["instruction"] != "explain main.go" || turns[0].(map[string]any)["task_id"] != taskID {
 		t.Fatalf("get: %d %s", status, body)
 	}
 }
@@ -922,3 +923,116 @@ func TestGatekeeper_CancelledRequestLeavesNothingPending(t *testing.T) {
 		t.Fatalf("pending = %d", n)
 	}
 }
+
+func TestModels_GetAndUpdate(t *testing.T) {
+	ws := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "apw.json")
+	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "policy": {"trusted": true}, "providers": {` +
+		`"fast": {"type": "mock", "model": "APW Fast"}, ` +
+		`"deep": {"type": "mock", "model": "APW Deep"}` +
+		`}, "roles": {"architect": "deep", "reflex": "fast"}}`
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backend := &stubBackend{jobs: map[string]*store.Job{}}
+	e := serve(t, ws, cfgPath, backend)
+
+	status, body := e.do("GET", "/api/models", "")
+	if status != 200 {
+		t.Fatalf("GET /api/models: %d %s", status, body)
+	}
+	m := asMap(t, body)
+	if m["architect"] != "deep" || m["reflex"] != "fast" || m["approval"] != "ask" || m["sandbox_mode"] != "off" {
+		t.Fatalf("unexpected models payload: %v", m)
+	}
+	providers, _ := m["providers"].([]any)
+	if len(providers) != 2 {
+		t.Fatalf("expected 2 providers, got %v", providers)
+	}
+
+	// Switch roles, approval, and sandbox_mode
+	status, body = e.do("POST", "/api/models", `{"architect":"fast","reflex":"deep","approval":"auto","sandbox_mode":"restricted"}`)
+	if status != 200 {
+		t.Fatalf("POST /api/models: %d %s", status, body)
+	}
+	m = asMap(t, body)
+	if m["architect"] != "fast" || m["reflex"] != "deep" || m["approval"] != "auto" || m["sandbox_mode"] != "restricted" {
+		t.Fatalf("updated models payload: %v", m)
+	}
+
+	// Reject unknown provider
+	status, body = e.do("POST", "/api/models", `{"architect":"nonexistent"}`)
+	wantError(t, status, body, http.StatusBadRequest, "invalid_config")
+}
+
+func TestGraphAndAutonomyEndpoints(t *testing.T) {
+	e := newEnv(t, true, "")
+	srcFile := filepath.Join(e.ws, "main.go")
+	if err := os.WriteFile(srcFile, []byte("package main\nfunc helper() {}\nfunc main() { helper() }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. GET /api/graph
+	status, body := e.do("GET", "/api/graph", "")
+	if status != 200 {
+		t.Fatalf("GET /api/graph: %d %s", status, body)
+	}
+	gm := asMap(t, body)
+	calls, _ := gm["calls"].([]any)
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call edge in graph, got %v", gm)
+	}
+
+	// 2. POST /api/autonomy/goals & GET /api/autonomy
+	status, body = e.do("POST", "/api/autonomy/goals", `{"title":"Add tests","instruction":"write unit tests for main","priority":5}`)
+	if status != 200 {
+		t.Fatalf("POST /api/autonomy/goals: %d %s", status, body)
+	}
+	goalMap := asMap(t, body)
+	goalID, _ := goalMap["id"].(string)
+	if goalID == "" {
+		t.Fatalf("expected goal id, got %v", goalMap)
+	}
+
+	// 3. POST /api/autonomy/schedules (create + toggle)
+	status, body = e.do("POST", "/api/autonomy/schedules", `{"name":"Hourly Audit","instruction":"verify workspace","interval_sec":3600}`)
+	if status != 200 {
+		t.Fatalf("POST /api/autonomy/schedules: %d %s", status, body)
+	}
+	schedMap := asMap(t, body)
+	schedID, _ := schedMap["id"].(string)
+
+	status, body = e.do("POST", "/api/autonomy/schedules", `{"action":"toggle","id":`+mustQuote(schedID)+`,"enabled":false}`)
+	if status != 200 {
+		t.Fatalf("toggle schedule: %d %s", status, body)
+	}
+
+	// 4. POST /api/autonomy/governor
+	status, body = e.do("POST", "/api/autonomy/governor", `{"paused":true,"pause_reason":"manual maintenance"}`)
+	if status != 200 {
+		t.Fatalf("POST /api/autonomy/governor: %d %s", status, body)
+	}
+
+	// 5. POST /api/autonomy/skills
+	status, body = e.do("POST", "/api/autonomy/skills", `{"slug":"verify-main","title":"Verify Main","instruction":"run verification on main.go","summary":"Verified main package."}`)
+	if status != 200 {
+		t.Fatalf("POST /api/autonomy/skills: %d %s", status, body)
+	}
+
+	// 6. GET /api/autonomy
+	status, body = e.do("GET", "/api/autonomy", "")
+	if status != 200 {
+		t.Fatalf("GET /api/autonomy: %d %s", status, body)
+	}
+	auton := asMap(t, body)
+	goals, _ := auton["goals"].([]any)
+	if len(goals) != 1 {
+		t.Fatalf("expected 1 goal in /api/autonomy, got %v", goals)
+	}
+	skills, _ := auton["skills"].([]any)
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 procedural skill in /api/autonomy, got %v", skills)
+	}
+}
+
+

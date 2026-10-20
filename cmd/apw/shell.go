@@ -191,7 +191,7 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 		instructionCommand := head == "run" || head == "review" || head == "preview" || head == "plan"
 		parseArgs := false
 		switch head {
-		case "verify", "symbols", "resume", "apply", "task", "tasks", "cancel", "trust", "watch", "diff", "recover", "cleanup", "daemon", "model", "models", "config", "auth", "login", "mode":
+		case "verify", "symbols", "search", "resume", "apply", "task", "tasks", "cancel", "trust", "watch", "diff", "recover", "cleanup", "daemon", "model", "models", "config", "auth", "login", "mode":
 			parseArgs = true
 		}
 		var args []string
@@ -230,7 +230,7 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 			_ = runSkillsCmd(cfg.Workspace, stdout)
 		case "symbols":
 			if len(args) != 1 {
-				fmt.Fprintln(stderr, "Usage: symbols <file.go>")
+				fmt.Fprintln(stderr, "Usage: symbols <file>")
 				break
 			}
 			path := args[0]
@@ -238,6 +238,12 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 				path = filepath.Join(cfg.Workspace, path)
 			}
 			_ = executeSymbols(path, stdout, stderr)
+		case "search":
+			if len(args) == 0 {
+				fmt.Fprintln(stderr, "Usage: search <query>")
+				break
+			}
+			_ = executeSearch(cfg.Workspace, strings.Join(args, " "), stdout, stderr)
 		case "plan":
 			_ = runPlan(withConfig(args), stdout, stderr)
 		case "mode":

@@ -176,6 +176,16 @@ func TestTerminalJobsSince(t *testing.T) {
 	if err != nil || len(jobs) != 1 || jobs[0].ID != a.ID || jobs[0].Status != core.StatusFailed {
 		t.Fatalf("after change: %+v %v", jobs, err)
 	}
+	for _, status := range []core.TaskStatus{core.StatusReady, core.StatusPreview, core.StatusProviderUnavailable} {
+		mark = jobs[len(jobs)-1].UpdatedAt.UnixNano()
+		if err := st.SetJob(ctx, b.ID, status, nil, ""); err != nil {
+			t.Fatal(err)
+		}
+		jobs, err = st.TerminalJobsSince(ctx, "o", mark)
+		if err != nil || len(jobs) != 1 || jobs[0].ID != b.ID || jobs[0].Status != status {
+			t.Fatalf("deliverable status %s not returned: %+v %v", status, jobs, err)
+		}
+	}
 }
 
 func TestQueueDeliveriesDedupe(t *testing.T) {

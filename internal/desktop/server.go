@@ -65,7 +65,16 @@ func (s *Server) gatekeeper() *ApprovalGatekeeper {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/models", s.handleGetModels)
+	mux.HandleFunc("POST /api/models", s.handleUpdateModels)
 	mux.HandleFunc("GET /api/symbols", s.handleSymbols)
+	mux.HandleFunc("GET /api/graph", s.handleGraph)
+	mux.HandleFunc("GET /api/search", s.handleSearch)
+	mux.HandleFunc("GET /api/autonomy", s.handleGetAutonomy)
+	mux.HandleFunc("POST /api/autonomy/governor", s.handleUpdateGovernor)
+	mux.HandleFunc("POST /api/autonomy/goals", s.handleManageGoals)
+	mux.HandleFunc("POST /api/autonomy/schedules", s.handleManageSchedules)
+	mux.HandleFunc("POST /api/autonomy/skills", s.handleCreateSkill)
 	mux.HandleFunc("GET /api/file", s.handleFile)
 	mux.HandleFunc("GET /api/instructions", s.handleInstructions)
 	mux.HandleFunc("POST /api/instructions/init", s.handleInstructionsInit)
@@ -267,17 +276,17 @@ func (s *Server) handleSymbols(w http.ResponseWriter, r *http.Request) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".apw", ".worktrees", "vendor", "node_modules":
+			case ".git", ".apw", ".worktrees", "vendor", "node_modules", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv":
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") {
+		rel, relErr := filepath.Rel(cfg.Workspace, path)
+		if relErr != nil || surgeon.AllowedPath(rel) != nil {
 			return nil
 		}
-		rel, _ := filepath.Rel(cfg.Workspace, path)
 		symbols, err := surgeon.InspectWorkspaceSymbols(cfg.Workspace, rel)
-		if err == nil {
+		if err == nil && len(symbols) > 0 {
 			list = append(list, fileSymbols{File: filepath.ToSlash(rel), Symbols: symbols})
 		}
 		return nil

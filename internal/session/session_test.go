@@ -187,3 +187,45 @@ func TestUnappliedTurnsDoNotClaimWorkspaceFiles(t *testing.T) {
 		t.Fatalf("applied work must be recorded: %v", s.Memory.TouchedFiles)
 	}
 }
+
+func TestRecordTurnUpdatesExistingTaskIDInPlace(t *testing.T) {
+	s := New(t.TempDir())
+	s.RecordTurn(Turn{
+		TaskID:        "task-101",
+		Instruction:   "Update button color",
+		PlanID:        "plan-101",
+		TotalSteps:    1,
+		ModifiedFiles: []string{"ui.go"},
+		Summary:       "Ready to apply",
+		Success:       true,
+		Applied:       false,
+	})
+	if len(s.History) != 1 || s.History[0].Applied {
+		t.Fatalf("expected 1 unapplied turn, got %+v", s.History)
+	}
+	if len(s.Memory.TouchedFiles) != 0 {
+		t.Fatalf("expected 0 touched files before apply, got %v", s.Memory.TouchedFiles)
+	}
+
+	// Now apply completes for the same TaskID:
+	s.RecordTurn(Turn{
+		TaskID:        "task-101",
+		Instruction:   "Update button color",
+		PlanID:        "plan-101",
+		TotalSteps:    1,
+		ModifiedFiles: []string{"ui.go"},
+		Summary:       "Applied changes",
+		Success:       true,
+		Applied:       true,
+	})
+	if len(s.History) != 1 {
+		t.Fatalf("expected turn to update in-place (len=1), got len=%d", len(s.History))
+	}
+	if s.History[0].Index != 1 || !s.History[0].Applied || s.History[0].Summary != "Applied changes" {
+		t.Fatalf("expected turn #1 to be updated to applied, got %+v", s.History[0])
+	}
+	if len(s.Memory.TouchedFiles) != 1 || s.Memory.TouchedFiles[0] != "ui.go" {
+		t.Fatalf("expected touched files to record ui.go after apply, got %v", s.Memory.TouchedFiles)
+	}
+}
+

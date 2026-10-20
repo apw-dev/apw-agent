@@ -103,3 +103,83 @@ func TestLookupOffersOnlyWhenContextIsTruncated(t *testing.T) {
 		t.Fatalf("sources = %+v", ex.ResearchSources)
 	}
 }
+
+func TestCodeLookupModesContextSymbolAndMultiTurn(t *testing.T) {
+	ex := lookupWorkspace(t)
+	if err := os.WriteFile(filepath.Join(ex.Workspace, ".gitignore"), []byte("ignored_dir/\n*.gen.ts\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"ignored_dir/secret.ts": "export const clamp = 1\n",
+		"src/skip.gen.ts":       "export const clamp = 2\n",
+		"src/math.go":           "package src\n// ComputeScore calculates score\nfunc ComputeScore(x int) int {\n\treturn x * 2\n}\n",
+		"src/caller.go":         "package src\nfunc RunAll() int {\n\treturn ComputeScore(5)\n}\n",
+	} {
+		p := filepath.Join(ex.Workspace, filepath.FromSlash(name))
+		_ = os.MkdirAll(filepath.Dir(p), 0755)
+		if err := os.WriteFile(p, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 1. Test grep modes (files_with_matches, count, context lines) + symbol lookup + .gitignore filtering
+	text, labels := ex.codeLookup(context.Background(),
+		[]grepQuery{
+			{Pattern: "clamp", Mode: "files_with_matches"},
+			{Pattern: "clamp", Mode: "count"},
+			{Pattern: "return <h1>Count</h1>", Context: 1},
+		},
+		nil,
+		nil,
+		"ComputeScore",
+	)
+	if len(labels) != 4 {
+		t.Fatalf("expected 4 labels, got %v", labels)
+	}
+	if strings.Contains(text, "ignored_dir") || strings.Contains(text, "skip.gen.ts") {
+		t.Fatalf("expected .gitignore files to be excluded:\n%s", text)
+	}
+	for _, want := range []string{
+		"src/util/clamp.ts\n",
+		"src/util/clamp.ts: 1\n",
+		"src/App.tsx-1- export function App() {",
+		"src/App.tsx:2:   return <h1>Count</h1>",
+		"src/math.go:3-5 [func ComputeScore]",
+		"Callers:\n  - src/caller.go:3 (RunAll)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected lookup output to contain %q, got:\n%s", want, text)
+		}
+	}
+
+	// 2. Test multi-turn lookup ("continue": true on turn 1 -> turn 2 symbol lookup -> plan)
+	ex.Lookup = "always"
+	arch := &scripted{name: "arch", replies: []func(core.ModelRequest) (*core.ModelResponse, error){
+		reply(`{"grep":[{"pattern":"ComputeScore","mode":"files_with_matches"}],"continue":true}`),
+		reply(`{"symbol":["ComputeScore"],"continue":false}`),
+		reply(validPlanJSON),
+	}}
+	ex.Architect.Provider, ex.Architect.Model = arch, "m"
+	plan, err := ex.PlanTask(context.Background(), core.Task{ID: "task-mt", Instruction: "update ComputeScore"}, "overview")
+	if err != nil || plan == nil {
+		t.Fatalf("PlanTask multi-turn failed: %v", err)
+	}
+	if len(arch.prompts) != 3 {
+		t.Fatalf("expected 3 architect calls (2 lookup hops + 1 plan), got %d", len(arch.prompts))
+	}
+	if !strings.Contains(arch.prompts[2], "src/math.go:3-5 [func ComputeScore]") {
+		t.Fatalf("expected final planning prompt to contain turn-2 symbol lookup results:\n%s", arch.prompts[2])
+	}
+
+	// 3. Test instruction-aware CodeContextForInstruction & @#Symbol mention expansion
+	ctxText := CodeContextForInstruction(ex.Workspace, "Fix @#ComputeScore in caller")
+	if !strings.Contains(ctxText, "Pinned Symbol @#ComputeScore") {
+		t.Fatalf("expected @#ComputeScore to be expanded in CodeContextForInstruction:\n%s", ctxText)
+	}
+	idxMath := strings.Index(ctxText, "File: src/math.go")
+	idxApp := strings.Index(ctxText, "File: src/App.tsx")
+	if idxMath < 0 || idxApp < 0 || idxMath > idxApp {
+		t.Fatalf("expected relevance-ranked src/math.go (%d) before unrelated src/App.tsx (%d)", idxMath, idxApp)
+	}
+}
+

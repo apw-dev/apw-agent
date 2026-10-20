@@ -40,17 +40,22 @@ Unconfigured lanes require external service access and appropriate credentials. 
 
 ## 4. Desktop — final phase, using the supplied screenshot as the layout reference
 
-Start after core CLI gates are closed. Build on the same application service and stored task/events; the Desktop must not implement its own executor.
+Implemented on top of the shared `app.API` service and stored task/events (no separate Desktop executor):
 
-Planned composition:
+- Left sidebar: workspace & trust controls, `APW.md` project instructions card, conversations (`#session-list`), recent tasks (`#task-list`) with one-click reopen, new conversation (`+ Session ใหม่`), and settings/model switcher (`#settings-dialog`).
+- Center: conversation history with clickable `task_id` links, deterministic message rendering (no simulated timing or typewriter gauges), live task progress cards with inline `Cancel` / `Resume` / `Apply` / `Inspect Diff` actions, composer, clickable Brain 1/Brain 2 model pills, and current execution mode.
+- Right panel: combined affected/modified files with per-file filter chips, per-file diff headers with `+added`/`-deleted` line counts and full-file viewer link, structured verification/acceptance/reflex evidence (`#acceptance-structured`), explicit apply/resume/cancel footer, and workspace conflict/hash-drift banner (`#artifact-conflict-box`).
+- Resizable panels (`#left-resizer`, `#right-resizer` with width persistence in `localStorage`), restrained dark theme, Thai text support, keyboard navigation (`Ctrl+B` left sidebar, `Ctrl+J` right pane, `Ctrl+K` composer focus, `Escape` close dialogs), and persisted conversation/task selection (`apw_desktop_session`, `apw_desktop_task`).
 
-- Left sidebar: projects/workspaces, conversations, recent tasks, new conversation and settings.
-- Center: conversation history, task progress, a composer, selected models and current execution mode.
-- Right panel: changed files, readable diff, verification/acceptance evidence, explicit apply and conflict state.
-- Resizable panels, restrained dark theme, Thai text support and keyboard navigation.
-- Persist task/conversation selection so refresh/restart returns to the same work.
-- Make Review, Preview, Execute, Cancel, Resume and Apply reflect the shared service state; avoid simulated timing or token gauges.
+Desktop completion gate: create a conversation, review a repository, preview a change, inspect its diff, execute/verify, cancel/resume, apply and reopen the same task without losing history. Source safety and ownership behavior match CLI tests.
 
-Desktop completion gate: create a conversation, review a repository, preview a change, inspect its diff, execute/verify, cancel/resume, apply and reopen the same task without losing history. Source safety and ownership behavior must match CLI tests.
+## 5. Next-generation autonomous & self-evolving architecture
 
-The supplied screenshot is a layout reference, not a request to reproduce its brand or to start redesign work now.
+Implemented on top of the Triad core and SQLite task store:
+
+- **Cross-File AST Symbol & Call Impact Graph (`internal/surgeon/graph.go`, `GET /api/graph`)**: indexes top-level symbol definitions (`func`, `method`, `struct`, `interface`, `type`) and cross-file call edges across the workspace so repair and re-planning steps know which upstream callers are impacted by a file modification.
+- **Diagnostic Context Extraction & Iterative Re-Planning (`internal/executor/replan.go`)**: parses compiler/test diagnostic file references (`file.ext:line`) to attach referenced source files and cross-file call impact to `repairWithReflex`, and invokes `replanWithArchitect` (`MaxReplans`) to synthesize recovery subtasks when initial subtasks fail verification.
+- **3-Tier Self-Evolving Memory & Procedural Skill Crystallization (`internal/store/autonomy.go`, `POST /api/autonomy/skills`)**: distills completed task outcomes into persistent `episodic_memory`, automatically recalls relevant lessons (`RecallEpisodicContext`) into the planning prompt, and crystallizes verified task patterns into `.apw/skills/<slug>/SKILL.md`.
+- **24/7 Autonomous Runtime & Safety Governor (`internal/app/autonomy.go`, `internal/desktop/autonomy.go`)**: background autonomous loop (`StepAutonomy`) that dispatches due recurring schedules (`autonomy_schedules`) and priority-ordered backlog goals (`autonomy_goals`) inside isolated Git worktrees when the worker is idle, guarded by a rate limit (`max_tasks_per_hour`) and consecutive-failure circuit breaker (`autonomy_governor`).
+
+

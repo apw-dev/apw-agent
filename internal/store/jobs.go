@@ -49,7 +49,10 @@ CREATE INDEX IF NOT EXISTS tasks_updated ON tasks(updated_at);
 CREATE TABLE IF NOT EXISTS inbox (account TEXT NOT NULL,update_id INTEGER NOT NULL,PRIMARY KEY(account,update_id));
 CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT,account TEXT NOT NULL,dedupe_key TEXT NOT NULL,chat_id INTEGER NOT NULL,text TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,sent INTEGER NOT NULL DEFAULT 0,UNIQUE(account,dedupe_key));
 CREATE INDEX IF NOT EXISTS outbox_due ON outbox(account,sent,next_at);`)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.AutonomySchema()
 }
 
 const jobSelect = `SELECT t.id,t.workspace,t.instruction,t.mode,t.status,t.created_at,t.updated_at,r.owner,r.request_id,r.action,r.report,r.error,r.cancel_requested,COALESCE(c.session_id,'') FROM tasks t JOIN task_runs r ON r.task_id=t.id LEFT JOIN task_context c ON c.task_id=t.id `
@@ -140,7 +143,7 @@ func (s *Store) SetJob(ctx context.Context, id string, status core.TaskStatus, r
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE tasks SET status=?,updated_at=? WHERE id=?`, status, time.Now().UnixNano(), id)
+	_, err = tx.ExecContext(ctx, `UPDATE tasks SET status=?,updated_at=MAX(COALESCE((SELECT MAX(updated_at) FROM tasks),0)+1,?) WHERE id=?`, status, time.Now().UnixNano(), id)
 	if err != nil {
 		return err
 	}
@@ -380,7 +383,7 @@ func (s *Store) QueueDeliveries(ctx context.Context, account string, items []Del
 
 // TerminalJobsSince returns up to 100 deliverable-state jobs for owner updated after since (UnixNano), oldest first.
 func (s *Store) TerminalJobsSince(ctx context.Context, owner string, since int64) ([]Job, error) {
-	rows, err := s.ro.QueryContext(ctx, jobSelect+`WHERE r.owner=? AND t.updated_at>? AND t.status IN ('ready','preview','succeeded','failed','cancelled','interrupted') ORDER BY t.updated_at LIMIT 100`, owner, since)
+	rows, err := s.ro.QueryContext(ctx, jobSelect+`WHERE r.owner=? AND t.updated_at>? AND t.status IN ('ready_to_apply','preview_ready','ready','preview','succeeded','failed','cancelled','interrupted','provider_unavailable') ORDER BY t.updated_at LIMIT 100`, owner, since)
 	if err != nil {
 		return nil, err
 	}
