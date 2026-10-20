@@ -8,7 +8,11 @@ import (
 	"unsafe"
 )
 
-type processJob struct{ handle windows.Handle }
+type processJob struct {
+	handle windows.Handle
+	// watched is closed once the exit watcher started by attach has stopped using handle.
+	watched chan struct{}
+}
 
 func prepare(cmd *exec.Cmd, limits Limits) (*processJob, error) {
 	h, err := windows.CreateJobObject(nil, nil)
@@ -44,14 +48,33 @@ func prepare(cmd *exec.Cmd, limits Limits) (*processJob, error) {
 	return &processJob{handle: h}, nil
 }
 func (j *processJob) attach(cmd *exec.Cmd) error {
-	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_INFORMATION, false, uint32(cmd.Process.Pid))
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_INFORMATION|windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid))
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(h)
 	if err := windows.AssignProcessToJobObject(j.handle, h); err != nil {
+		windows.CloseHandle(h)
 		return err
 	}
+	if err := resume(cmd); err != nil {
+		windows.CloseHandle(h)
+		return err
+	}
+	// Kill the rest of the tree as soon as the parent exits. Descendants that inherited the
+	// parent's output pipes (a browser's crash handler, for example) would otherwise keep them
+	// open until cmd.WaitDelay expires and turn a normal exit into exec.ErrWaitDelay.
+	j.watched = make(chan struct{})
+	go func() {
+		defer close(j.watched)
+		defer windows.CloseHandle(h)
+		if ev, err := windows.WaitForSingleObject(h, windows.INFINITE); err == nil && ev == windows.WAIT_OBJECT_0 {
+			_ = windows.TerminateJobObject(j.handle, 1)
+		}
+	}()
+	return nil
+}
+
+func resume(cmd *exec.Cmd) error {
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
 	if err != nil {
 		return err
@@ -72,4 +95,9 @@ func (j *processJob) attach(cmd *exec.Cmd) error {
 	return fmt.Errorf("cannot resume child process thread: %w", err)
 }
 func (j *processJob) kill(_ *exec.Cmd) error { return windows.TerminateJobObject(j.handle, 1) }
-func (j *processJob) close()                 { windows.CloseHandle(j.handle) }
+func (j *processJob) close() {
+	if j.watched != nil {
+		<-j.watched
+	}
+	windows.CloseHandle(j.handle)
+}

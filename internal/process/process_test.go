@@ -28,8 +28,21 @@ func TestProcessFixture(t *testing.T) {
 	}
 	child := exec.Command(bin, "-test.run=^TestProcessFixture$")
 	child.Env = append(os.Environ(), "APW_PROCESS_FIXTURE=child")
+	if role == "orphan" {
+		// The child inherits this process's stdout, as browser helper processes inherit the
+		// browser's log pipe, and this process exits normally while the child still runs.
+		child.Stdout = os.Stdout
+	}
 	if child.Start() != nil {
 		os.Exit(3)
+	}
+	if role == "orphan" {
+		for {
+			if _, err := os.Stat(os.Getenv("APW_HEARTBEAT")); err == nil {
+				os.Exit(0)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	for {
 		if _, err := os.Stat(os.Getenv("APW_PARENT_EXIT")); err == nil {

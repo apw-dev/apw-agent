@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -19,6 +20,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/process"
@@ -154,9 +157,26 @@ func Visit(ctx context.Context, opts Options) (*Page, error) {
 	cmd := exec.CommandContext(runCtx, exe, args...)
 	stdout := process.Buffer{Limit: 8 << 20}
 	stderr := process.Buffer{Limit: 1 << 20}
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := process.Run(runCtx, cmd); err != nil {
+	watch := newRenderWatch(opts.Screenshot != "")
+	cmd.Stdout = io.MultiWriter(&stdout, watchWriter{watch, false})
+	cmd.Stderr = io.MultiWriter(&stderr, watchWriter{watch, true})
+	var rendered atomic.Bool
+	go func() {
+		select {
+		case <-watch.done:
+		case <-runCtx.Done():
+			return
+		}
+		grace := time.NewTimer(shutdownGrace)
+		defer grace.Stop()
+		select {
+		case <-grace.C:
+			rendered.Store(true)
+			cancel()
+		case <-runCtx.Done():
+		}
+	}()
+	if err := process.Run(runCtx, cmd); err != nil && !rendered.Load() {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -175,6 +195,67 @@ func Visit(ctx context.Context, opts Options) (*Page, error) {
 		}
 	}
 	return page, nil
+}
+
+// shutdownGrace is how long Visit lets the browser exit on its own after it has written the page.
+// Headless Edge runs its shutdown work on background-priority threads, which other processes on a
+// busy machine can starve for minutes after the DOM and screenshot are complete; nothing that
+// shutdown does (profile writes to a throwaway directory) matters to Visit.
+const shutdownGrace = time.Second
+
+// screenshotWritten is how Chromium's headless mode reports a finished --screenshot.
+const screenshotWritten = "bytes written to file"
+
+// renderWatch notices when the browser has written everything Visit reads: the whole DOM dump on
+// stdout and, when one was requested, the screenshot report on stderr. If either never shows up (a
+// browser build that logs differently, a non-HTML document), Visit waits for a normal exit.
+type renderWatch struct {
+	mu       sync.Mutex
+	domTail  []byte
+	logTail  []byte
+	domDone  bool
+	shotDone bool
+	done     chan struct{}
+}
+
+func newRenderWatch(screenshot bool) *renderWatch {
+	return &renderWatch{shotDone: !screenshot, done: make(chan struct{})}
+}
+
+type watchWriter struct {
+	w      *renderWatch
+	stderr bool
+}
+
+func (ww watchWriter) Write(p []byte) (int, error) {
+	ww.w.observe(ww.stderr, p)
+	return len(p), nil
+}
+
+func (w *renderWatch) observe(stderr bool, p []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.domDone && w.shotDone {
+		return
+	}
+	if stderr {
+		seen := append(w.logTail, p...)
+		w.shotDone = w.shotDone || strings.Contains(string(seen), screenshotWritten)
+		w.logTail = keepTail(seen, len(screenshotWritten))
+	} else {
+		w.domTail = keepTail(append(w.domTail, p...), 64)
+		w.domDone = strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(w.domTail))), "</html>")
+	}
+	if w.domDone && w.shotDone {
+		close(w.done)
+	}
+}
+
+func keepTail(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return append(b[:0], b[len(b)-n:]...)
 }
 
 // staticHandler serves fsys read-only, hides APW and Git state, and falls back to index.html for
