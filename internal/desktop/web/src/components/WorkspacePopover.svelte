@@ -135,7 +135,7 @@
             }}
             title={dir}
           >
-            <span class="truncate">{basename(dir)} — {dir}</span>
+            <span class="truncate">{basename(dir)} ({dir})</span>
             {#if dir === $workspaceStatus?.workspace}
               <Check size={14} />
             {/if}

@@ -1,7 +1,8 @@
 import { writable, derived, get } from "svelte/store";
 import { getAPI, postAPI, type SessionSummary, type TurnView } from "../api";
 import { workspaceStatus } from "./workspace";
-import { getSelectionForWorkspace, rememberSelectionForWorkspace, centerView } from "./settings";
+import { getSelectionForWorkspace, rememberSelectionForWorkspace, centerView, selectedDiffFile } from "./settings";
+import { selectedTaskId, latestPlans, tasks } from "./tasks";
 
 export const sessions = writable<SessionSummary[]>([]);
 export const currentSessionId = writable<string>("");
@@ -74,8 +75,15 @@ export async function selectSession(id: string): Promise<void> {
   currentSessionId.set(id);
   centerView.set("thread");
   const ws = get(workspaceStatus)?.workspace || "";
-  rememberSelectionForWorkspace(ws, { session_id: id });
+  rememberSelectionForWorkspace(ws, { session_id: id, task_id: "" });
   await loadSessionDetail(id);
+  const turnIds = new Set(get(sessionTurns).map((t) => t.task_id).filter(Boolean));
+  const match = get(tasks).find((t) => t.session_id === id || turnIds.has(t.id));
+  const nextTaskId = match?.id || "";
+  selectedTaskId.set(nextTaskId);
+  latestPlans.set([]);
+  selectedDiffFile.set("");
+  rememberSelectionForWorkspace(ws, { session_id: id, task_id: nextTaskId });
 }
 
 export async function createNewConversation(): Promise<string> {
@@ -86,9 +94,12 @@ export async function createNewConversation(): Promise<string> {
   const id = res.data.id;
   currentSessionId.set(id);
   sessionTurns.set([]);
+  selectedTaskId.set("");
+  latestPlans.set([]);
+  selectedDiffFile.set("");
   centerView.set("thread");
   const ws = get(workspaceStatus)?.workspace || "";
-  rememberSelectionForWorkspace(ws, { session_id: id });
+  rememberSelectionForWorkspace(ws, { session_id: id, task_id: "" });
   await loadSessions();
   return id;
 }

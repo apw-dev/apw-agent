@@ -249,3 +249,26 @@ func TestFormatAcceptsCRLFWithoutChangingSource(t *testing.T) {
 		t.Fatal("CRLF concealed actual formatting errors")
 	}
 }
+
+func TestCheckFormat_ScopedByOnlyFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "clean.go"), []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "unrelated_dirty.go"), []byte("package main;func dirty( ){ }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	v := NewVerifier(root)
+	v.OnlyFiles = []string{"clean.go"}
+	output, err := v.checkFormat(context.Background())
+	if err != nil || strings.TrimSpace(output) != "" {
+		t.Fatalf("expected OnlyFiles to ignore unrelated_dirty.go, got %q (%v)", output, err)
+	}
+
+	v.OnlyFiles = []string{"unrelated_dirty.go"}
+	output, err = v.checkFormat(context.Background())
+	if err != nil || !strings.Contains(output, "unrelated_dirty.go") {
+		t.Fatalf("expected OnlyFiles to flag unrelated_dirty.go when included, got %q (%v)", output, err)
+	}
+}

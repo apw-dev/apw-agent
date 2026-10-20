@@ -67,7 +67,7 @@
       {:else}
         {#each fileDiffs as fd (fd.file)}
           <div class="file-block">
-            <div class="file-row" class:active={fd.file === activeFile}>
+            <div class="file-row" class:active={fd.file === activeFile} data-file-path={fd.file}>
               <button
                 type="button"
                 class="file-btn mono"
@@ -92,11 +92,19 @@
             </div>
 
             {#if fd.file === activeFile && previewDiff && previewDiff.lines.length > 0}
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
+
+
               <div
                 class="mini-diff mono selectable"
                 onclick={() => openFullDiff(fd.file)}
+                role="button"
+                tabindex="0"
+                onkeydown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openFullDiff(fd.file);
+                  }
+                }}
                 data-testid="changes-mini-diff"
               >
                 {#each previewDiff.lines.filter((l) => l.kind !== "hunk").slice(0, 6) as ln, i (i)}

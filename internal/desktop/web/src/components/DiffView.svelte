@@ -95,13 +95,17 @@
 
   {#if exceedsHighlightLimit}
     <div class="plain-banner" data-testid="plain-fallback-banner">
-      Diff มีขนาดเกิน {MAX_HIGHLIGHT_LINES} บรรทัด — แสดงผลแบบข้อความธรรมดาเพื่อความรวดเร็ว
+      Diff มีขนาดเกิน {MAX_HIGHLIGHT_LINES} บรรทัด จึงแสดงผลแบบข้อความธรรมดาเพื่อความรวดเร็ว
     </div>
   {/if}
 
   <div class="diff-scroll mono selectable" data-testid="diff-lines">
     {#if !currentDiff || currentDiff.lines.length === 0}
-      <div class="empty">ไม่มีบรรทัด Diff สำหรับไฟล์นี้</div>
+      <div class="empty">
+        {job.status === "patching" || job.status === "planning" || job.status === "analyzing" || job.status === "queued"
+          ? "กำลังประมวลผลและสร้าง Diff สำหรับงานนี้…"
+          : "ไม่มีบรรทัด Diff สำหรับไฟล์นี้"}
+      </div>
     {:else}
       {#each currentDiff.lines as ln, idx (idx)}
         {#if ln.kind === "hunk"}

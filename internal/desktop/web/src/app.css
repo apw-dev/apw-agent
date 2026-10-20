@@ -28,10 +28,11 @@
   --line-strong: #c9c7c0;
   --text: #1f1e1c;
   --muted: #5c5953;
-  --faint: #76736c;
-  --accent: #c96442;
-  --accent-hover: #b55636;
-  --accent-soft: rgba(201, 100, 66, 0.12);
+  --faint: #66635c;
+  --accent: #a84b2b;
+  --accent-hover: #933f22;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(168, 75, 43, 0.12);
   --ok: #256b42;
   --ok-soft: rgba(37, 107, 66, 0.12);
   --warn: #9a5200;
@@ -63,9 +64,10 @@
   --text: #f2f0eb;
   --muted: #b8b5ad;
   --faint: #949087;
-  --accent: #d97757;
-  --accent-hover: #e38768;
-  --accent-soft: rgba(217, 119, 87, 0.18);
+  --accent: #e08565;
+  --accent-hover: #e89679;
+  --accent-fg: #181715;
+  --accent-soft: rgba(224, 133, 101, 0.18);
   --ok: #5ce08e;
   --ok-soft: rgba(92, 224, 142, 0.15);
   --warn: #fbbf24;
@@ -144,7 +146,7 @@ pre {
   outline-offset: 1px;
 }
 
-/* Thin overlay scrollbars */
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;

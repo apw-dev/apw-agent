@@ -25,7 +25,7 @@ function loadLocalPrefs(): UIPreferences & { theme?: ThemeMode } {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) return JSON.parse(raw);
   } catch {
-    // Ignore
+    /* storage unavailable */
   }
   return {};
 }
@@ -34,7 +34,7 @@ function saveLocalPrefs(prefs: UIPreferences & { theme?: ThemeMode }) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(prefs));
   } catch {
-    // Ignore
+    /* storage unavailable */
   }
 }
 
@@ -149,14 +149,14 @@ export function rememberSelectionForWorkspace(workspace: string, patch: Partial<
     try {
       localStorage.setItem("apw_desktop_session", patch.session_id || "");
     } catch {
-      // Ignore
+      /* storage unavailable */
     }
   }
   if (patch.task_id !== undefined) {
     try {
       localStorage.setItem("apw_desktop_task", patch.task_id || "");
     } catch {
-      // Ignore
+      /* storage unavailable */
     }
   }
 }
@@ -170,7 +170,7 @@ export function getSelectionForWorkspace(workspace: string): WorkspaceSelection 
     fallbackSession = localStorage.getItem("apw_desktop_session") || "";
     fallbackTask = localStorage.getItem("apw_desktop_task") || "";
   } catch {
-    // Ignore
+    /* storage unavailable */
   }
   return {
     session_id: fromMap.session_id || fallbackSession || undefined,

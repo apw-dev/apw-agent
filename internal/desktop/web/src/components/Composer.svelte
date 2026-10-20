@@ -303,7 +303,7 @@
     border-radius: 50%;
     border: none;
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-fg);
     display: grid;
     place-items: center;
   }

@@ -6,6 +6,8 @@
   import VerificationCard from "./cards/VerificationCard.svelte";
   import WorkspaceCard from "./cards/WorkspaceCard.svelte";
   import DiffView from "./DiffView.svelte";
+  import MarkdownView from "./MarkdownView.svelte";
+  import { parseUnifiedDiff } from "../lib/diff";
   import {
     selectedTask,
     selectedTaskId,
@@ -17,6 +19,7 @@
   import {
     rightCollapsed,
     rightPanelView,
+    selectedDiffFile,
     toggleRightPanel
   } from "../lib/stores/settings";
   import {
@@ -26,6 +29,98 @@
   } from "../lib/stores/workspace";
 
   let busy = $state(false);
+  let fullFileContainer = $state<HTMLDivElement | null>(null);
+  let changeCursor = $state(0);
+  let mdPreview = $state(false);
+  const isMarkdownFile = $derived(Boolean($activeFileView?.path && /\.mdx?$/i.test($activeFileView.path)));
+
+  interface FullFileAnnotatedLine {
+    kind: "ctx" | "add" | "del";
+    lineNo: number | string;
+    text: string;
+  }
+
+  const activeFileDiff = $derived.by(() => {
+    const fv = $activeFileView;
+    const job = $selectedTask;
+    if (!fv || !job?.report?.diff) return null;
+    const diffs = parseUnifiedDiff(job.report.diff, job.report.modified_files || []);
+    return diffs.find((d) => d.file === fv.path) || null;
+  });
+
+  const annotatedFileLines = $derived.by((): FullFileAnnotatedLine[] => {
+    const fv = $activeFileView;
+    if (!fv || fv.binary) return [];
+    const rawLines = (fv.content || "").replace(/\r\n/g, "\n").split("\n");
+    const fd = activeFileDiff;
+    if (!fd || fd.lines.length === 0) {
+      return rawLines.map((text, i) => ({ kind: "ctx", lineNo: i + 1, text }));
+    }
+
+    const addedSet = new Set<number>();
+    const delsBeforeNew = new Map<number, Array<{ oldLine?: number; text: string }>>();
+    const trailingDels: Array<{ oldLine?: number; text: string }> = [];
+    let pendingDels: Array<{ oldLine?: number; text: string }> = [];
+    let lastSeenNewLine = 1;
+
+    for (const ln of fd.lines) {
+      if (ln.kind === "hunk") continue;
+      if (ln.kind === "del") {
+        pendingDels.push({ oldLine: ln.oldLine, text: ln.text });
+      } else {
+        const nLine = ln.newLine ?? lastSeenNewLine;
+        lastSeenNewLine = nLine;
+        if (pendingDels.length > 0) {
+          const prev = delsBeforeNew.get(nLine) || [];
+          delsBeforeNew.set(nLine, [...prev, ...pendingDels]);
+          pendingDels = [];
+        }
+        if (ln.kind === "add" && ln.newLine !== undefined) {
+          addedSet.add(ln.newLine);
+        }
+      }
+    }
+    if (pendingDels.length > 0) {
+      trailingDels.push(...pendingDels);
+    }
+
+    const out: FullFileAnnotatedLine[] = [];
+    for (let i = 0; i < rawLines.length; i++) {
+      const nLine = i + 1;
+      const dels = delsBeforeNew.get(nLine);
+      if (dels) {
+        for (const d of dels) {
+          out.push({ kind: "del", lineNo: d.oldLine ?? "", text: d.text });
+        }
+      }
+      out.push({
+        kind: addedSet.has(nLine) ? "add" : "ctx",
+        lineNo: nLine,
+        text: rawLines[i]
+      });
+    }
+    for (const d of trailingDels) {
+      out.push({ kind: "del", lineNo: d.oldLine ?? "", text: d.text });
+    }
+    return out;
+  });
+
+  function scrollToNextChange() {
+    if (!fullFileContainer) return;
+    const changedEls = fullFileContainer.querySelectorAll<HTMLElement>(".ln.add, .ln.del");
+    if (changedEls.length === 0) return;
+    const idx = changeCursor % changedEls.length;
+    changeCursor = idx + 1;
+    changedEls[idx]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  $effect(() => {
+    if ($rightPanelView === "file" && $activeFileView && fullFileContainer && activeFileDiff) {
+      changeCursor = 0;
+      const first = fullFileContainer.querySelector<HTMLElement>(".ln.add, .ln.del");
+      first?.scrollIntoView({ block: "center" });
+    }
+  });
 
   async function onApply() {
     if (!$selectedTask || busy) return;
@@ -78,16 +173,51 @@
     {:else if $rightPanelView === "file" && $activeFileView}
       <div class="full-view">
         <div class="sub-bar">
-          <button type="button" class="back-btn" onclick={() => rightPanelView.set("cards")}>
+          <button
+            type="button"
+            class="back-btn"
+            onclick={() => {
+              if (activeFileDiff) {
+                selectedDiffFile.set($activeFileView.path);
+                rightPanelView.set("diff");
+              } else {
+                rightPanelView.set("cards");
+              }
+            }}
+          >
             <ArrowLeft size={13} />
-            <span>กลับ</span>
+            <span>{activeFileDiff ? "กลับหน้า Diff" : "กลับ"}</span>
           </button>
-          <span class="mono truncate">{$activeFileView.path}</span>
+          <span class="mono truncate file-title">{$activeFileView.path}</span>
+          {#if isMarkdownFile}
+            <button type="button" class="jump-btn" onclick={() => (mdPreview = !mdPreview)}>
+              {mdPreview ? "ดูโค้ด & Diff" : "Preview Markdown"}
+            </button>
+          {/if}
+          {#if activeFileDiff && !mdPreview}
+            <button type="button" class="jump-btn mono" onclick={scrollToNextChange} title="เลื่อนไปยังบรรทัดที่แก้ไข">
+              <span class="add">+{activeFileDiff.added}</span>
+              <span class="del">−{activeFileDiff.deleted}</span>
+              <span>จุดที่แก้ ↓</span>
+            </button>
+          {/if}
         </div>
         {#if $activeFileView.binary}
           <div class="empty">ไฟล์ไบนารีไม่สามารถแสดงเป็นข้อความได้</div>
+        {:else if isMarkdownFile && mdPreview}
+          <div class="md-file-preview selectable">
+            <MarkdownView text={$activeFileView.content} taskId={$selectedTask?.id} />
+          </div>
         {:else}
-          <pre class="code-box mono selectable">{$activeFileView.content}</pre>
+          <div class="full-file-scroll mono selectable" bind:this={fullFileContainer}>
+            {#each annotatedFileLines as ln, idx (idx)}
+              <div class="ln" class:add={ln.kind === "add"} class:del={ln.kind === "del"}>
+                <span class="g">{ln.lineNo}</span>
+                <span class="m">{ln.kind === "add" ? "+" : ln.kind === "del" ? "−" : " "}</span>
+                <span class="code">{ln.text}</span>
+              </div>
+            {/each}
+          </div>
         {/if}
       </div>
     {:else if $rightPanelView === "symbols"}
@@ -149,6 +279,8 @@
             ✓ พร้อม apply
           {:else if $selectedTask.status === "succeeded"}
             ✓ Applied
+          {:else if $selectedTask.status === "preview_ready"}
+            ✓ Preview พร้อมตรวจทาน
           {:else}
             {$selectedTask.status}
           {/if}
@@ -206,7 +338,9 @@
     border: none;
     background: transparent;
     color: var(--faint);
-    padding: 3px;
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
     border-radius: 5px;
     display: grid;
     place-items: center;
@@ -239,7 +373,12 @@
     background: var(--bg);
     font-size: 11.5px;
   }
-  .back-btn {
+  .file-title {
+    flex: 1;
+    min-width: 0;
+  }
+  .back-btn,
+  .jump-btn {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -248,26 +387,93 @@
     border: 1px solid var(--line);
     background: var(--panel);
     color: var(--text);
-    font-size: 11.5px;
+    font-size: 11px;
+    flex: none;
+  }
+  .back-btn:hover,
+  .jump-btn:hover {
+    background: var(--hover);
+  }
+  .jump-btn .add {
+    color: var(--addt);
+    font-weight: 600;
+  }
+  .jump-btn .del {
+    color: var(--delt);
+    font-weight: 600;
+  }
+  .full-file-scroll {
+    flex: 1;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.65;
+    background: var(--panel);
+  }
+  .md-file-preview {
+    flex: 1;
+    overflow: auto;
+    padding: 14px 16px;
+    background: var(--panel);
+  }
+  .ln {
+    display: flex;
+    white-space: pre;
+  }
+  .ln .g {
+    width: 38px;
+    text-align: right;
+    padding-right: 6px;
+    color: var(--faint);
+    flex: none;
+    user-select: none;
+  }
+  .ln .m {
+    width: 14px;
+    flex: none;
+    color: var(--faint);
+    user-select: none;
+  }
+  .ln .code {
+    padding-right: 12px;
+  }
+  .ln.add {
+    background: var(--add);
+  }
+  .ln.add .g {
+    background: var(--addg);
+    color: var(--addt);
+    font-weight: 600;
+  }
+  .ln.add .m {
+    color: var(--addt);
+    font-weight: 600;
+  }
+  .ln.del {
+    background: var(--del);
+  }
+  .ln.del .g {
+    background: var(--delg);
+    color: var(--delt);
+    font-weight: 600;
+  }
+  .ln.del .m {
+    color: var(--delt);
+    font-weight: 600;
   }
   .code-box {
     flex: 1;
     margin: 0;
-    padding: 10px;
+    padding: 10px 12px;
     overflow: auto;
-    font-size: 11px;
+    font-size: 11.5px;
     line-height: 1.6;
+    background: var(--panel);
     white-space: pre;
   }
   .sym-file {
+    margin-top: 8px;
     font-weight: 600;
     color: var(--accent);
-    margin-top: 6px;
-  }
-  .truncate {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   .empty {
     padding: 16px;
@@ -278,34 +484,37 @@
     padding: 8px 10px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     background: var(--panel);
   }
   .ver-state {
-    margin-right: auto;
+    flex: 1;
     font-size: 11.5px;
     color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .ver-state.ok {
     color: var(--ok);
     font-weight: 500;
   }
   .btn {
-    padding: 4px 11px;
+    padding: 5px 11px;
     border-radius: 6px;
     border: 1px solid var(--line);
     background: var(--panel);
     color: var(--text);
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 500;
   }
   .btn:hover:not(:disabled) {
     background: var(--hover);
   }
   .btn.primary {
-    background: var(--text);
-    color: var(--panel);
-    border-color: var(--text);
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
   }
   .btn:disabled {
     opacity: 0.45;

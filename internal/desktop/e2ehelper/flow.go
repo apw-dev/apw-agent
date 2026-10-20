@@ -48,7 +48,7 @@ func (b *flowBackend) Submit(_ context.Context, owner string, r app.Request) (*s
 	switch r.Mode {
 	case core.ModeReview:
 		status = core.StatusSucceeded
-		rep = executor.ExecutionReport{Mode: core.ModeReview, Passed: true, Summary: "Review: governor limits are reset on pause."}
+		rep = executor.ExecutionReport{Mode: core.ModeReview, Passed: true, Summary: "Review: governor limits are reset on pause. See [go docs](https://pkg.go.dev/context)."}
 	case core.ModePreview:
 		status, rep = core.StatusPreview, devfixture.PreviewReport()
 	default:

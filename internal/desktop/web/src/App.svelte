@@ -145,6 +145,17 @@
       persistUIPreferences();
     }
   }
+  function onResizerKeyDown(side: "left" | "right", e: KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const delta = e.key === "ArrowRight" ? 16 : -16;
+    if (side === "left") {
+      leftWidth.update((w) => Math.max(180, Math.min(380, w + delta)));
+    } else {
+      rightWidth.update((w) => Math.max(280, Math.min(580, w - delta)));
+    }
+    persistUIPreferences();
+  }
 </script>
 
 <svelte:window
@@ -180,12 +191,15 @@
       <div class="left-pane" style={`width:${$leftWidth}px`}>
         <Sidebar />
       </div>
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
+
+      <button
+        type="button"
         id="left-resizer"
         class="resizer"
         onpointerdown={() => (resizingSide = "left")}
-      ></div>
+        aria-label="ปรับขนาดแถบด้านซ้าย"
+        onkeydown={(e) => onResizerKeyDown("left", e)}
+      ></button>
     {/if}
 
     <div class="center-pane">
@@ -197,12 +211,15 @@
     </div>
 
     {#if !$rightCollapsed}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
+
+      <button
+        type="button"
         id="right-resizer"
         class="resizer"
         onpointerdown={() => (resizingSide = "right")}
-      ></div>
+        aria-label="ปรับขนาดแถบด้านขวา"
+        onkeydown={(e) => onResizerKeyDown("right", e)}
+      ></button>
       <div class="right-pane" style={`width:${$rightWidth}px`}>
         <ReviewPanel />
       </div>
@@ -241,6 +258,8 @@
   }
   .resizer {
     width: 4px;
+    border: none;
+    padding: 0;
     cursor: col-resize;
     background: transparent;
     flex: none;
@@ -266,7 +285,7 @@
     height: 36px;
     border-radius: 9px;
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-fg);
     font-weight: 700;
     font-size: 18px;
     display: grid;

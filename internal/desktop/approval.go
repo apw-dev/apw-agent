@@ -51,7 +51,6 @@ type ApprovalGatekeeper struct {
 	alwaysAllow map[string]bool
 }
 
-// NewApprovalGatekeeper initializes a new Human-in-the-loop ApprovalGatekeeper.
 func NewApprovalGatekeeper() *ApprovalGatekeeper {
 	return &ApprovalGatekeeper{
 		pending:     make(map[string]*ToolApprovalRequest),
@@ -204,7 +203,6 @@ func (g *ApprovalGatekeeper) remember(req *ToolApprovalRequest) {
 	}
 }
 
-// ListPending returns all currently waiting approval requests.
 func (g *ApprovalGatekeeper) ListPending() []ToolApprovalRequest {
 	g.mu.Lock()
 	defer g.mu.Unlock()

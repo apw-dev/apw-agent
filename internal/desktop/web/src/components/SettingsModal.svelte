@@ -128,7 +128,7 @@
           <label for="sel-architect">Brain 2 (Architect / Deep Planner)</label>
           <select id="sel-architect" bind:value={architect} class="mono">
             {#each $modelsState?.providers || [] as p (p.key)}
-              <option value={p.key}>{p.key} — {p.model} ({p.type})</option>
+              <option value={p.key}>{p.key}: {p.model} ({p.type})</option>
             {/each}
           </select>
         </div>
@@ -137,7 +137,7 @@
           <label for="sel-reflex">Brain 1 (Reflex / Fast Surgeon)</label>
           <select id="sel-reflex" bind:value={reflex} class="mono">
             {#each $modelsState?.providers || [] as p (p.key)}
-              <option value={p.key}>{p.key} — {p.model} ({p.type})</option>
+              <option value={p.key}>{p.key}: {p.model} ({p.type})</option>
             {/each}
           </select>
         </div>
@@ -145,17 +145,17 @@
         <div class="field">
           <label for="sel-approval">นโยบายการ Apply เริ่มต้น (Approval)</label>
           <select id="sel-approval" bind:value={approval}>
-            <option value="ask">ask — ถามก่อน Apply ลง Workspace</option>
-            <option value="auto">auto — Apply อัตโนมัติหลัง Verify ผ่าน</option>
+            <option value="ask">ask: ถามก่อน Apply ลง Workspace</option>
+            <option value="auto">auto: Apply อัตโนมัติหลัง Verify ผ่าน</option>
           </select>
         </div>
       {:else}
         <div class="field">
           <label for="sel-sandbox">โหมดแยกตัวกระบวนการ (Sandbox Mode)</label>
           <select id="sel-sandbox" bind:value={sandboxMode}>
-            <option value="off">off — รันใน Git Worktree มาตรฐาน</option>
-            <option value="restricted">restricted — Windows Job Object Restricted</option>
-            <option value="docker">docker — Container Isolation</option>
+            <option value="off">off: รันใน Git Worktree มาตรฐาน</option>
+            <option value="restricted">restricted: Windows Job Object Restricted</option>
+            <option value="docker">docker: Container Isolation</option>
           </select>
         </div>
 
@@ -167,8 +167,8 @@
             onclick={() => toggleWorkspaceTrust(!$workspaceStatus?.trusted)}
           >
             {$workspaceStatus?.trusted
-              ? "✓ Trusted — คลิกเพื่อยกเลิกสิทธิ์รัน build/test"
-              : "⚠ Untrusted — คลิกเพื่ออนุญาตรัน build/test"}
+              ? "✓ Trusted: คลิกเพื่อยกเลิกสิทธิ์รัน build/test"
+              : "⚠ Untrusted: คลิกเพื่ออนุญาตรัน build/test"}
           </button>
         </div>
       {/if}
@@ -235,7 +235,11 @@
     border: none;
     background: transparent;
     color: var(--muted);
-    padding: 4px;
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
+    display: inline-grid;
+    place-items: center;
     border-radius: 6px;
   }
   .tabs {

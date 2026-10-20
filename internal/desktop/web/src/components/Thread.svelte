@@ -17,11 +17,12 @@
     const sid = $currentSessionId;
     const all = $tasks;
     const sel = $selectedTask;
-    const bySession = sid ? all.filter((j) => j.session_id === sid) : [];
+    const turnTaskIds = new Set($sessionTurns.map((t) => t.task_id).filter(Boolean));
+    const bySession = sid ? all.filter((j) => j.session_id === sid || turnTaskIds.has(j.id)) : [];
     const map = new Map<string, (typeof all)[number]>();
     for (const j of bySession) map.set(j.id, j);
-    if (sel) map.set(sel.id, sel);
-    if (map.size === 0 && all.length > 0) {
+    if (sel && (!sid || sel.session_id === sid || turnTaskIds.has(sel.id))) map.set(sel.id, sel);
+    if (!sid && !sel && map.size === 0 && all.length > 0) {
       for (const j of all.slice(0, 4)) map.set(j.id, j);
     }
     return Array.from(map.values());

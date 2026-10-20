@@ -56,6 +56,9 @@
   </button>
 
   <div class="nav-scroll" id="session-list">
+    {#if $runningTasks.length === 0 && $groupedSessions.length === 0 && $tasks.length === 0}
+      <div class="nav-empty">ยังไม่มีบทสนทนาหรือรายการงาน</div>
+    {/if}
     {#if $runningTasks.length > 0}
       <div class="grp-title">กำลังทำงาน ({$runningTasks.length})</div>
       {#each $runningTasks as job (job.id)}
@@ -91,7 +94,7 @@
     {/each}
 
     {#if $tasks.length > 0}
-      <div class="grp-title" id="task-list">งานล่าสุด</div>
+    <div class="grp-title" id="task-list">งานล่าสุด</div>
       {#each $tasks.slice(0, 12) as job (job.id)}
         <button
           type="button"
@@ -148,8 +151,8 @@
   .sidebar {
     width: 100%;
     height: 100%;
-    background: var(--side);
-    backdrop-filter: blur(18px);
+    background: var(--side-solid);
+
     display: flex;
     flex-direction: column;
     padding: 8px;
@@ -229,6 +232,11 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+  .nav-empty {
+    font-size: 11.5px;
+    color: var(--faint);
+    padding: 12px 8px;
   }
   .grp-title {
     font-size: 10.5px;

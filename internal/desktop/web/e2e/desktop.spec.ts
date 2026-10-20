@@ -27,15 +27,15 @@ test("Desktop completion gate: create conversation -> review -> preview -> inspe
   await page.goto("/");
   await expect(page.getByTestId("app-shell")).toBeVisible();
 
-  // 1. Create a new conversation
+
   await page.getByTestId("new-conversation-btn").click();
 
-  // 2. Review
+
   await page.getByTestId("composer-input").fill("/review ตรวจสอบไฟล์ autonomy.go");
   await page.getByTestId("composer-send-btn").click();
   await expect(page.getByText("ตรวจสอบไฟล์ autonomy.go").first()).toBeVisible();
 
-  // 3. Preview & inspect diff
+
   await page.getByTestId("composer-input").fill("/preview เตรียมแก้ limit ของ governor");
   await page.getByTestId("composer-send-btn").click();
   await expect(page.getByTestId("changes-card")).toContainText("internal/store/autonomy.go");
@@ -44,7 +44,7 @@ test("Desktop completion gate: create conversation -> review -> preview -> inspe
   await expect(page.getByTestId("diff-lines")).toContainText("defaultLimit");
   await page.getByTestId("diff-back-btn").click();
 
-  // 4. Execute -> Cancel -> Resume -> Verify -> Apply (with the real approval gate)
+
   await page.getByTestId("composer-input").fill("แก้ไขและรันทดสอบ governor");
   await page.getByTestId("composer-send-btn").click();
 
@@ -71,11 +71,115 @@ test("Desktop completion gate: create conversation -> review -> preview -> inspe
 
   await expect(page.getByTestId("status-card")).toContainText("Applied");
 
-  // 5. Reload and confirm we land on the same task without losing history
+
   await page.reload();
   await expect(page.getByTestId("app-shell")).toBeVisible();
   await expect(page.getByTestId("status-card")).toContainText("Applied");
   await expect(page.getByText("แก้ไขและรันทดสอบ governor").first()).toBeVisible();
 
   expect(problems, problems.join("\n")).toEqual([]);
+});
+
+test("Desktop native shell behaviors: dark theme, custom context menu, blocked browser shortcuts (including Thai layout), drag-drop prevention, and external link interception", async ({
+  page
+}) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__openedExternalURLs = [] as string[];
+    w.__revealedPaths = [] as string[];
+    w.__savedThemes = [] as string[];
+    w.runtime = {
+      BrowserOpenURL: (url: string) => {
+        (w.__openedExternalURLs as string[]).push(url);
+      }
+    };
+    w.go = {
+      main: {
+        App: {
+          ChooseWorkspace: async () => {},
+          OpenWorkspace: async () => {},
+          SetTheme: async (mode: string) => {
+            (w.__savedThemes as string[]).push(mode);
+          },
+          GetShellState: async () => ({
+            current_workspace: "D:/APW_Project/apw-agent",
+            recent: ["D:/APW_Project/apw-agent"],
+            theme: "dark",
+            ui: {}
+          }),
+          SaveUIPreferences: async () => {},
+          RevealInExplorer: async (target: string) => {
+            (w.__revealedPaths as string[]).push(target);
+          }
+        }
+      }
+    };
+  });
+
+  await page.goto("/");
+  await expect(page.getByTestId("app-shell")).toBeVisible();
+
+  // Check #3: dark theme loaded from GetShellState and toggled via Settings
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.keyboard.press("Control+,");
+  await expect(page.getByTestId("theme-light-btn")).toBeVisible();
+  await page.getByTestId("theme-light-btn").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.keyboard.press("Escape");
+
+  // Submit review & preview so we have a markdown link and a [data-file-path] element
+  await page.getByTestId("composer-input").fill("/review ตรวจสอบลิงก์ภายนอก");
+  await page.getByTestId("composer-send-btn").click();
+  await page.getByTestId("composer-input").fill("/preview เตรียมแก้ไฟล์");
+  await page.getByTestId("composer-send-btn").click();
+  await expect(page.getByTestId("changes-file-btn").first()).toBeVisible();
+
+  // Check #4: Right-click on file item opens app context menu and prevents browser menu
+  const ctxPrevented = await page.getByTestId("changes-file-btn").first().evaluate((el) => {
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 });
+    el.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(ctxPrevented).toBe(true);
+  await expect(page.getByTestId("app-context-menu")).toBeVisible();
+  await page.getByTestId("app-context-menu").getByText("เปิดใน Explorer").click();
+  const revealed = await page.evaluate(() => (window as unknown as { __revealedPaths: string[] }).__revealedPaths);
+  expect(revealed).toContain("internal/store/autonomy.go");
+
+  // Check #5: Browser shortcuts blocked (including Thai Kedmanee layout physical key codes)
+  const shortcutResults = await page.evaluate(() => {
+    const cases = [
+      { key: "r", code: "KeyR", ctrlKey: true, shiftKey: false },
+      { key: "พ", code: "KeyR", ctrlKey: true, shiftKey: false },
+      { key: "F5", code: "F5", ctrlKey: false, shiftKey: false },
+      { key: "p", code: "KeyP", ctrlKey: true, shiftKey: false },
+      { key: "ย", code: "KeyP", ctrlKey: true, shiftKey: false },
+      { key: "F12", code: "F12", ctrlKey: false, shiftKey: false },
+      { key: "I", code: "KeyI", ctrlKey: true, shiftKey: true },
+      { key: "=", code: "Equal", ctrlKey: true, shiftKey: false },
+      { key: "-", code: "Minus", ctrlKey: true, shiftKey: false },
+      { key: "0", code: "Digit0", ctrlKey: true, shiftKey: false }
+    ];
+    return cases.map((c) => {
+      const ev = new KeyboardEvent("keydown", { ...c, bubbles: true, cancelable: true });
+      window.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    });
+  });
+  expect(shortcutResults.every(Boolean)).toBe(true);
+
+  // Check #6: Dragover and drop on window are prevented
+  const dropPrevented = await page.evaluate(() => {
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    window.dispatchEvent(over);
+    window.dispatchEvent(drop);
+    return over.defaultPrevented && drop.defaultPrevented;
+  });
+  expect(dropPrevented).toBe(true);
+
+  // Check #7: Clicking external link in review message calls BrowserOpenURL without navigating
+  await page.getByRole("button", { name: "go docs" }).first().click();
+  const opened = await page.evaluate(() => (window as unknown as { __openedExternalURLs: string[] }).__openedExternalURLs);
+  expect(opened).toContain("https://pkg.go.dev/context");
 });

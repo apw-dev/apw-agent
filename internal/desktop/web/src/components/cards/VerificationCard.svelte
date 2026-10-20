@@ -67,7 +67,7 @@
       {:else if items.length > 0}
         {passedCount}/{items.length}
       {:else}
-        —
+        N/A
       {/if}
     </span>
   </button>

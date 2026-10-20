@@ -79,6 +79,15 @@ func (e *Executor) replanWithArchitect(ctx context.Context, base, instruction st
 	contextBuilder.WriteString("ITERATIVE RECOVERY RE-PLANNING CONTEXT\n")
 	contextBuilder.WriteString("Previous Plan Objective: " + prevPlan.Objective + "\n")
 	contextBuilder.WriteString("Already Modified Files: " + strings.Join(modified, ", ") + "\n")
+	onlyChangesAllowed := map[string]bool{}
+	for _, chk := range prevPlan.Checks {
+		if chk.Kind == "only_changes" && len(chk.Files) > 0 {
+			contextBuilder.WriteString("Allowed Modified Files Constraint (only_changes): " + strings.Join(chk.Files, ", ") + " — DO NOT modify any files outside this list.\n")
+			for _, f := range chk.Files {
+				onlyChangesAllowed[filepath.Clean(filepath.FromSlash(strings.TrimSpace(f)))] = true
+			}
+		}
+	}
 	contextBuilder.WriteString("\nVerification Failure Diagnostics:\n" + headUTF8(diagnostics, 16*1024) + "\n")
 
 	if g, err := surgeon.InspectWorkspaceGraph(base); err == nil && g != nil {
@@ -109,12 +118,21 @@ func (e *Executor) replanWithArchitect(ctx context.Context, base, instruction st
 	if err != nil {
 		return nil, err
 	}
+	var filtered []architect.Subtask
 	for _, st := range recoveryPlan.Subtasks {
 		if st.Action != architect.ActionVerify {
 			if err := surgeon.AllowedPath(st.TargetFile); err != nil {
 				return nil, err
 			}
+			if len(onlyChangesAllowed) > 0 && st.Action != architect.ActionRead {
+				clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(st.TargetFile)))
+				if !onlyChangesAllowed[clean] {
+					continue
+				}
+			}
 		}
+		filtered = append(filtered, st)
 	}
+	recoveryPlan.Subtasks = filtered
 	return recoveryPlan, nil
 }

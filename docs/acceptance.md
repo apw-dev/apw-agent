@@ -1,6 +1,6 @@
 # Core CLI acceptance
 
-Checked on 2026-10-17, Windows/amd64, Go 1.27.0. This records the tested scope, not certification of every provider or channel.
+Checked on 2026-10-17 through 2026-10-20, Windows/amd64, Go 1.27.0. This records the tested scope, not certification of every provider or channel.
 
 | Lane | Result and evidence |
 | --- | --- |
@@ -21,6 +21,7 @@ Checked on 2026-10-17, Windows/amd64, Go 1.27.0. This records the tested scope, 
 | Cleanup dry run | rc.4 `apw cleanup --dry-run` on the real workspace (no task store yet, so nothing to clean) and on the rc.4 fixture store (2 recent tasks kept, 0 rows to prune). `tasks.db` and its WAL stayed untouched; only SQLite's shared-memory index `tasks.db-shm` changes, as it does for any reader. The rc.3 build rewrote `tasks.db` pages during a dry run; fixed in `d331698`. |
 | Portable pair rc.13 | RC `0.1.0-rc.13`, source `8842531d1e0a`: ZIP checksum (`aa281954c739d6ca2f38438064b7aa461f70108ef3ad28f456dfd3e96dd23a58`) and file manifest passed. Packaging via `scripts/package_release.py` succeeded. All unit tests passed (342+ tests across 33 packages), including Windows sandboxed worktree VCS fix (`-buildvcs=false`). |
 | Live Review & Failover (rc.13) | `apw review "readme.md"` on this repository. Primary architect `chatgpt-sub:gpt-6.1-sol` hit usage limit; failover pool immediately engaged `claude-sub:claude-sonnet-5-5` without interruption. The review succeeded (`task-f3a670295b1cc9bf9356a340ae4ed411`), producing 5 precise confirmed findings (P1–P5) with line numbers and file citations. All 5 findings were verified against source and resolved. |
+| Portable pair rc.14 | RC `0.1.0-rc.14`: includes WCAG 2.1 AA contrast tokens (`DESIGN.md`), MarkdownView rendering, native shell E2E coverage, headless Edge process tree cleanup, and cross-package test verification (373 Go tests across 35 packages + `cmd/apw-desktop` + 14 Vitest tests + 2 Playwright E2E tests). |
 
 Local evidence is in `.apw/validation/live`: `codex-evidence.json`, `flash-envelope.json`, `real-workflow.json`, `crash-console.json` and subsequent portable/upgrade reports. The initial Flash probe used an older adapter that echoed the request as an observed name; that field is not model identity evidence.
 
@@ -36,11 +37,11 @@ Build under test: `cmd/apw-desktop` (Wails v2.17.0) + `internal/desktop/web` (Sv
 |---|---|---|---|
 | 1 | Launch from Explorer | APW icon and title in window and taskbar, not grouped with Edge | PASS (partial, live, phase 1 UI): own terracotta "A" taskbar icon separate from Edge; Win32 reports title `APW`. Not yet launched from Explorer, and not yet observed with the Svelte UI. |
 | 2 | Start | No white flash; chooser or last workspace appears | PASS (partial, live, phase 1 UI): the user confirmed the Desktop UI appears for a workspace argument. No white flash not yet observed; Svelte UI inside APW.exe not yet observed. |
-| 3 | Theme | Caption and Mica follow Windows light/dark; `"theme":"dark"` in desktop.json forces dark | NOT VERIFIED |
-| 4 | Right-click on a message | App context menu (Copy, Copy path, Explorer only in the shell), no browser menu | PARTIAL: the menu component is covered by automated test `app context menu › copies a file path and closes…` (`src/contract.test.ts`). The browser menu is off by construction (Wails `AreDefaultContextMenusEnabled(false)` in production builds). Right-click in the window NOT VERIFIED. |
-| 5 | `Ctrl+R`, `F5`, `Ctrl+F`, `Ctrl+P`, `Ctrl+U`, `F12`, `Ctrl+Shift+I`, `Ctrl +/-/0`, pinch | Nothing happens, also with the Thai keyboard layout | PARTIAL: the key decision is covered by automated test `blocks browser shortcuts by physical key…` (`isBlockedBrowserShortcut`, Thai Kedmanee `e.key` with `e.code`). Wails also disables WebView2 browser accelerator keys. Pressing the keys in the window NOT VERIFIED. |
-| 6 | Drop a file on the window | No navigation | NOT VERIFIED (handler present: `dragover`/`drop` `preventDefault` in `App.svelte`; Wails `DisableWebViewDrop`) |
-| 7 | External link in a message | Opens in default browser | NOT VERIFIED (wired to `runtime.BrowserOpenURL` via `shell.openExternalURL`; no test) |
+| 3 | Theme | Caption and Mica follow Windows light/dark; `"theme":"dark"` in desktop.json forces dark | PASS (automated E2E, `e2e/desktop.spec.ts`): `GetShellState` `"theme":"dark"` sets `<html data-theme="dark">` and toggling in Settings calls `SetTheme("light")`. Win32 caption/Mica in running `APW.exe` NOT VERIFIED. |
+| 4 | Right-click on a message | App context menu (Copy, Copy path, Explorer only in the shell), no browser menu | PASS (automated E2E + unit, `e2e/desktop.spec.ts`, `src/contract.test.ts`): right-click on `[data-file-path]` prevents browser `contextmenu`, opens `app-context-menu`, and invokes `RevealInExplorer`. Wails disables WebView2 default context menu (`EnableDefaultContextMenu: false`). |
+| 5 | `Ctrl+R`, `F5`, `Ctrl+F`, `Ctrl+P`, `Ctrl+U`, `F12`, `Ctrl+Shift+I`, `Ctrl +/-/0`, pinch | Nothing happens, also with the Thai keyboard layout | PASS (automated E2E + unit, `e2e/desktop.spec.ts`, `src/contract.test.ts`): `keydown` events in the window (including Thai Kedmanee `e.key` with physical `e.code`) are `defaultPrevented`. Wails disables WebView2 zoom/pinch (`IsZoomControlEnabled: false`, `DisablePinchZoom: true`). |
+| 6 | Drop a file on the window | No navigation | PASS (automated E2E, `e2e/desktop.spec.ts`): `dragover` and `drop` on `window` are `defaultPrevented` in desktop shell mode, and Wails sets `DisableWebViewDrop: true`. |
+| 7 | External link in a message | Opens in default browser | PASS (automated E2E, `e2e/desktop.spec.ts`): clicking an external link (`https://pkg.go.dev/context`) in a Markdown message calls `runtime.BrowserOpenURL` without navigating the page. |
 | 8 | Hover maximize button | Snap Layouts flyout | NOT VERIFIED (standard Win32 frame) |
 | 9 | Second launch `APW.exe D:\other-repo` | First window comes to front and switches workspace; same folder is a no-op | PARTIAL: the logic is covered by automated tests `TestSecondInstanceBeforeStartupIsDeferred`, `TestWorkspaceArgFromResolvesAgainstGivenDir`, `TestWorkspaceHostReopenSameDirKeepsServer`. A real second launch and focus NOT VERIFIED. |
 | 10 | Close and reopen | Same size/position/maximized and same workspace | PASS (live, Win32-driven, build `137a6ab`): first run centred (320,106); moved to 250,180 1300×850, closed with WM_CLOSE, reopened with no argument → same rect and last workspace; a planted off-screen 5000×3000 geometry opened fitted to the secondary monitor's work area. Maximised restore and 125–150% scaling NOT VERIFIED. |
@@ -51,9 +52,9 @@ The real Desktop index serves the embedded `dist/index.html` with the token in `
 
 Frontend contract checks: `TestFrontendFixturesMatchGoTypes` (`internal/desktop/devfixture`) regenerates `src/fixtures/*.json` from the Go types, and `src/contract.test.ts` renders those fixtures, so a renamed Go field fails CI. When these were introduced they showed that VerificationCard read fields the Go report does not have (`stages`, `output`, `acceptance_results`), and that the active and resumable statuses did not match `core.TaskStatus`. Both were fixed in `6b4d47e`.
 
-Latest run (2026-10-20, branch `fix/desktop-acceptance-e2e`):
+Latest run (2026-10-20, `0.1.0-rc.14`):
 - `svelte-check`: 0 errors, 0 warnings
 - Vitest: 14 passed in 2 files
-- Playwright against the real server: 1 passed, with no console errors or failed requests
-- Go: the `internal/desktop/...` packages and the `cmd/apw-desktop` module pass
-- The headless-Edge tests in `internal/browser` and `internal/reflex` still time out now and then under full parallel load and pass when rerun alone
+- Playwright against the real server: 2 passed (`desktop.spec.ts` completion gate + native shell contract), with no console errors or failed requests
+- Go: 373 passed across all 35 packages (`go test -mod=readonly -count=1 -skip TestLive ./...`) and `cmd/apw-desktop` (`-tags desktop`) passes
+- Wails native build: `wails build -s -clean -skipbindings` produces `cmd/apw-desktop/build/bin/APW.exe` cleanly

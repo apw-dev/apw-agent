@@ -28,7 +28,6 @@ func initTestGitRepo(t *testing.T) string {
 	run("config", "user.email", "agent@apw.local")
 	run("config", "commit.gpgsign", "false")
 
-	// Create initial file and commit
 	initialFile := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(initialFile, []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -134,7 +133,6 @@ func TestWorktree_SyncDirtyFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create an uncommitted file and modify an existing file
 	dirtyFile := filepath.Join(repoDir, "dirty.go")
 	if err := os.WriteFile(dirtyFile, []byte("package main\n// uncommitted file\n"), 0644); err != nil {
 		t.Fatal(err)

@@ -87,6 +87,7 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 		e.emit(ProgressEvent{Stage: "baseline", Message: "Checking baseline before editing"})
 		baseline := reflex.NewVerifierForProfile(wt.Path, e.Profile(wt.Path))
 		baseline.Sandbox = e.Sandbox
+		baseline.OnlyFiles = plannedTargetFiles(plan)
 		e.VerificationBaseline = baseline.Verify(ctx)
 	}
 	return e.runPreparedPlan(ctx, plan, wt, 0, nil, instruction)
@@ -269,11 +270,13 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		e.emit(ProgressEvent{Stage: "verifying", Message: "Verifying isolated changes"})
 		engine := reflex.NewReflexEngineForProfile(wt.Path, e.Reflex.MaxRetries, e.Profile(wt.Path))
 		engine.Verifier.Sandbox = e.Sandbox
+		engine.Verifier.OnlyFiles = modified
 		attempts, err := engine.Run(ctx, func(ctx context.Context, diagnostics string) error {
 			if e.Mode == core.ModeVerify {
 				return errors.New("verification failed; verification mode does not repair files")
 			}
 			err := e.repairWithReflex(ctx, wt.Path, surg, diagnostics, &modified)
+			engine.Verifier.OnlyFiles = modified
 			if err == nil {
 				e.Pending = nil
 			}
@@ -312,8 +315,10 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 				e.Pending = nil
 				appendModifiedFile(&modified, path)
 			}
+			engine.Verifier.OnlyFiles = modified
 			moreAttempts, verifyErr := engine.Run(ctx, func(ctx context.Context, diagnostics string) error {
 				rErr := e.repairWithReflex(ctx, wt.Path, surg, diagnostics, &modified)
+				engine.Verifier.OnlyFiles = modified
 				if rErr == nil {
 					e.Pending = nil
 				}
@@ -451,4 +456,17 @@ func (e *Executor) Apply(ctx context.Context, cp PlanCheckpoint) (*ExecutionRepo
 	e.emit(ProgressEvent{Stage: "applied", Message: "Verified set applied"})
 	// Keep the checkpoint/report and worktree for inspection; cleanup is a separate retention policy.
 	return cp.Report, nil
+}
+
+func plannedTargetFiles(plan *architect.ExecutionPlan) []string {
+	if plan == nil {
+		return nil
+	}
+	var out []string
+	for _, st := range plan.Subtasks {
+		if st.Action == architect.ActionCreate || st.Action == architect.ActionPatch || st.Action == architect.ActionDelete {
+			appendModifiedFile(&out, st.TargetFile)
+		}
+	}
+	return out
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"io"
@@ -382,6 +383,7 @@ func (s *Surgeon) PatchWorkspaceFile(base, rel string, op PatchOperation, hooks 
 		count = -1
 	}
 	content := strings.Replace(current, op.OldContent, op.NewContent, count)
+	content = FormatGoIfValid(rel, content)
 	for _, hook := range hooks {
 		if err := hook(FileState{Exists: true, Hash: hash, Mode: perm}, FileState{Exists: true, Hash: CalculateHash(content), Mode: perm}); err != nil {
 			return "", err
@@ -393,4 +395,24 @@ func (s *Surgeon) PatchWorkspaceFile(base, rel string, op PatchOperation, hooks 
 	hash = CalculateHash(content)
 	s.snapshots[key] = FileSnapshot{Path: filepath.Join(base, rel), Content: content, Hash: hash, LineCount: strings.Count(content, "\n") + 1}
 	return hash, nil
+}
+
+// FormatGoIfValid formats .go content with go/format.Source when it is syntactically valid,
+// preserving CRLF line endings when present. If formatting fails (syntax error), content is
+// returned unchanged so verification diagnostics can report the exact compiler error.
+func FormatGoIfValid(rel, content string) string {
+	if !strings.HasSuffix(strings.ToLower(rel), ".go") {
+		return content
+	}
+	hasCRLF := strings.Contains(content, "\r\n")
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	formatted, err := format.Source([]byte(normalized))
+	if err != nil {
+		return content
+	}
+	out := string(formatted)
+	if hasCRLF {
+		out = toCRLF(out)
+	}
+	return out
 }

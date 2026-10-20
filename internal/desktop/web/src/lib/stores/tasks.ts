@@ -11,6 +11,7 @@ import {
 import { workspaceStatus } from "./workspace";
 import {
   currentSessionId,
+  sessionTurns,
   ensureActiveSession,
   loadSessions,
   loadSessionDetail,
@@ -179,10 +180,15 @@ export async function loadTasks(): Promise<TaskJob[]> {
   tasks.set(list);
 
   const ws = get(workspaceStatus)?.workspace || "";
+  const sid = get(currentSessionId);
+  const turnIds = new Set(get(sessionTurns).map((t) => t.task_id).filter(Boolean));
   const savedTask = getSelectionForWorkspace(ws).task_id || get(selectedTaskId);
   if (savedTask && list.some((t) => t.id === savedTask)) {
     selectedTaskId.set(savedTask);
-  } else if (!get(selectedTaskId) && list.length > 0) {
+  } else if (!get(selectedTaskId) && sid) {
+    const sessionTask = list.find((t) => t.session_id === sid || turnIds.has(t.id));
+    if (sessionTask) selectedTaskId.set(sessionTask.id);
+  } else if (!get(selectedTaskId) && !sid && list.length > 0) {
     selectedTaskId.set(list[0].id);
   }
 
@@ -198,6 +204,20 @@ export async function selectTask(taskId: string, openReview = false): Promise<Ta
   if (!taskId) return null;
   selectedTaskId.set(taskId);
   selectedDiffFile.set("");
+  latestPlans.set([]);
+  const known = get(tasks).find((t) => t.id === taskId);
+  if (known?.session_id) {
+    if (get(currentSessionId) !== known.session_id) {
+      currentSessionId.set(known.session_id);
+      void loadSessionDetail(known.session_id);
+    }
+  } else if (known && get(currentSessionId)) {
+    const inCurrentTurns = get(sessionTurns).some((t) => t.task_id === taskId);
+    if (!inCurrentTurns) {
+      currentSessionId.set("");
+      sessionTurns.set([]);
+    }
+  }
   const ws = get(workspaceStatus)?.workspace || "";
   rememberSelectionForWorkspace(ws, { task_id: taskId });
   if (openReview) {

@@ -53,7 +53,11 @@ type Verifier struct {
 	Profile *project.Profile
 	// Sandbox isolates repository commands (see package sandbox); the zero value runs them directly.
 	Sandbox sandbox.Policy
-	session *sandbox.Session
+	// OnlyFiles, when non-empty, scopes checkFormat (gofmt) to those workspace-relative files so
+	// pre-existing formatting differences in unrelated files do not fail the task or trigger
+	// out-of-scope repairs.
+	OnlyFiles []string
+	session   *sandbox.Session
 }
 
 // NewVerifierForProfile creates a Verifier that runs the given project pipeline.
@@ -71,7 +75,7 @@ func NewVerifier(workspace string, packages ...string) *Verifier {
 	}
 	return &Verifier{
 		Workspace: workspace,
-		Timeout:   60 * time.Second,
+		Timeout:   5 * time.Minute,
 		Packages:  pkgs,
 	}
 }
@@ -159,6 +163,17 @@ func failed(stage, out string, err error, start time.Time) *VerificationResult {
 
 // checkFormat inspects source files without traversing state, dependencies, or test fixtures.
 func (v *Verifier) checkFormat(ctx context.Context) (string, error) {
+	var allowed map[string]bool
+	if len(v.OnlyFiles) > 0 {
+		allowed = make(map[string]bool, len(v.OnlyFiles))
+		for _, f := range v.OnlyFiles {
+			clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(f)))
+			clean = strings.TrimPrefix(clean, "."+string(filepath.Separator))
+			if clean != "" && clean != "." {
+				allowed[clean] = true
+			}
+		}
+	}
 	var files []string
 	err := filepath.WalkDir(v.Workspace, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -177,6 +192,13 @@ func (v *Verifier) checkFormat(ctx context.Context) (string, error) {
 			return nil
 		}
 		if entry.Type()&fs.ModeSymlink != 0 || !strings.HasSuffix(entry.Name(), ".go") {
+			return nil
+		}
+		rel, err := filepath.Rel(v.Workspace, path)
+		if err != nil {
+			return err
+		}
+		if allowed != nil && !allowed[filepath.Clean(rel)] {
 			return nil
 		}
 		file, err := os.Open(path)
@@ -201,10 +223,6 @@ func (v *Verifier) checkFormat(ctx context.Context) (string, error) {
 			return closeErr
 		}
 		if !generated {
-			rel, err := filepath.Rel(v.Workspace, path)
-			if err != nil {
-				return err
-			}
 			files = append(files, "."+string(filepath.Separator)+rel)
 		}
 		return nil

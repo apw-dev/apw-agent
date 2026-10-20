@@ -296,6 +296,7 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 		if content == "" {
 			content = dir.NewContent
 		}
+		content = surgeon.FormatGoIfValid(st.TargetFile, content)
 		if err = ctx.Err(); err != nil {
 			return sr, "", err
 		}

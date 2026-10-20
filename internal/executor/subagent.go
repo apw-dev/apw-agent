@@ -206,6 +206,7 @@ func (e *Executor) runSubagentWave(
 			if content == "" {
 				content = res.directive.NewContent
 			}
+			content = surgeon.FormatGoIfValid(st.TargetFile, content)
 			before, err := surgeon.StateInRoot(base, st.TargetFile)
 			if err != nil {
 				stepErr = err

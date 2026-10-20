@@ -365,7 +365,6 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, plan)
 }
 
-// runnableMode reports whether /api/run accepts m.
 func runnableMode(m core.TaskMode) bool {
 	switch m {
 	case core.ModeExecute, core.ModePreview, core.ModeReview, core.ModeUnverified:
@@ -420,7 +419,6 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, job)
 }
 
-// writeSubmitError maps a backend Submit failure to a JSON error.
 func writeSubmitError(w http.ResponseWriter, err error) {
 	switch {
 	case isTransportError(err):

@@ -60,7 +60,7 @@ export async function setNativeTheme(mode: "system" | "light" | "dark"): Promise
     try {
       await window.go.main.App.SetTheme(mode);
     } catch {
-      // Ignore outside native shell
+      return;
     }
   }
 }
@@ -81,7 +81,7 @@ export async function saveNativeUIPreferences(ui: UIPreferences): Promise<void> 
     try {
       await window.go.main.App.SaveUIPreferences(ui);
     } catch {
-      // Ignore outside native shell
+      return;
     }
   }
 }
@@ -91,7 +91,7 @@ export async function revealInExplorer(target: string): Promise<void> {
     try {
       await window.go.main.App.RevealInExplorer(target);
     } catch {
-      // Ignore
+      return;
     }
   }
 }

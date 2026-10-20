@@ -133,6 +133,9 @@
           </button>
         </div>
         <div class="list">
+          {#if ($autonomyState?.goals || []).length === 0}
+            <div class="muted">ยังไม่มี Goal ที่ตั้งไว้</div>
+          {/if}
           {#each $autonomyState?.goals || [] as g (g.id)}
             <div class="item">
               <div class="item-main">
@@ -159,6 +162,9 @@
           </button>
         </div>
         <div class="list">
+          {#if ($autonomyState?.schedules || []).length === 0}
+            <div class="muted">ยังไม่มีตารางรันอัตโนมัติ</div>
+          {/if}
           {#each $autonomyState?.schedules || [] as s (s.id)}
             <div class="item">
               <div class="item-main">
@@ -193,6 +199,9 @@
           </div>
         {/if}
         <div class="list">
+          {#if ($autonomyState?.episodes || []).length === 0}
+            <div class="muted">ยังไม่มีประวัติการทำงานอัตโนมัติ</div>
+          {/if}
           {#each ($autonomyState?.episodes || []).slice(0, 8) as ep, i (i)}
             <div class="item">
               <div class="item-main selectable">
@@ -353,7 +362,11 @@
     border: none;
     background: transparent;
     color: var(--err);
-    padding: 4px;
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
+    display: inline-grid;
+    place-items: center;
     border-radius: 5px;
   }
 </style>
