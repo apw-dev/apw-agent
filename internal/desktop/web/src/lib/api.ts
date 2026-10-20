@@ -74,31 +74,36 @@ export interface SurgeonStepReport {
   message: string;
 }
 
-export interface StageOutcome {
-  name: string;
+// The report types mirror the Go JSON (executor.ExecutionReport, reflex.VerificationResult,
+// executor.CheckResult). Fixtures generated from Go (src/fixtures, internal/desktop/devfixture)
+// keep them honest.
+export interface ReflexDiagnostic {
+  stage: string;
+  file?: string;
+  line?: number;
+  col?: number;
+  message: string;
+  raw_error?: string;
+}
+
+export interface VerificationResult {
   passed: boolean;
-  command?: string;
-  output?: string;
+  failed_stage?: string;
+  diagnostics?: ReflexDiagnostic[];
+  raw_output?: string;
   duration?: number;
+  sandbox?: string;
 }
 
 export interface ReflexAttempt {
   Number: number;
-  Result?: {
-    passed: boolean;
-    failed_stage?: string;
-    duration?: number;
-    stages?: StageOutcome[];
-    output?: string;
-  };
+  Result?: VerificationResult;
 }
 
 export interface AcceptanceCheckReport {
-  kind?: string;
-  value?: string;
-  description?: string;
+  criterion: string;
   passed: boolean;
-  detail?: string;
+  evidence: string;
 }
 
 export interface TaskReport {
@@ -113,7 +118,10 @@ export interface TaskReport {
   plan?: ExecutionPlan;
   steps?: SurgeonStepReport[];
   reflex_attempts?: ReflexAttempt[];
-  acceptance_results?: AcceptanceCheckReport[];
+  baseline?: VerificationResult;
+  acceptance?: AcceptanceCheckReport[];
+  applied?: boolean;
+  worktree_path?: string;
 }
 
 export interface TaskJob {

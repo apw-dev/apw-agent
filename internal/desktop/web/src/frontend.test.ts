@@ -8,6 +8,7 @@ import ChangesCard from "./components/cards/ChangesCard.svelte";
 import VerificationCard from "./components/cards/VerificationCard.svelte";
 import DiffView from "./components/DiffView.svelte";
 import type { TaskJob, SearchPayload } from "./lib/api";
+import failedJobFixture from "./fixtures/failed-job.json";
 
 describe("stores & helpers", () => {
   it("maps real task status to Plan -> Patch -> Verify -> Apply steps without simulated progress", () => {
@@ -15,7 +16,7 @@ describe("stores & helpers", () => {
       id: "task-1",
       instruction: "แก้บั๊ก governor",
       mode: "execute",
-      status: "running",
+      status: "patching",
       report: { plan: { plan_id: "p1", objective: "obj" }, steps: [{ subtask_id: "s1", action: "modify", success: true, message: "ok" }] }
     };
     const runningSteps = mapTaskSteps(runningJob);
@@ -95,7 +96,7 @@ describe("components", () => {
 
     const runningJob: TaskJob = {
       ...readyJob,
-      status: "running"
+      status: "patching"
     };
     const r2 = render(TaskCard, { props: { job: runningJob, events: [] } });
     expect(screen.getByTestId("cancel-task-btn")).toBeInTheDocument();
@@ -113,38 +114,17 @@ describe("components", () => {
   });
 
   it("renders ChangesCard with +/- counts and VerificationCard with expandable failed log", async () => {
-    const job: TaskJob = {
-      id: "task-cards",
-      instruction: "test cards",
-      mode: "execute",
-      status: "ready_to_apply",
-      report: {
-        modified_files: ["main.go"],
-        diff: `--- a/main.go\n+++ b/main.go\n@@ -1,2 +1,3 @@\n package main\n-func old() {}\n+func newOne() {}\n+func newTwo() {}\n`,
-        reflex_attempts: [
-          {
-            Number: 1,
-            Result: {
-              passed: false,
-              failed_stage: "go test",
-              stages: [
-                { name: "go vet", passed: true },
-                { name: "go test", passed: false, output: "FAIL: TestSomething (0.01s)" }
-              ]
-            }
-          }
-        ]
-      }
-    };
+    // Real report shape (generated from the Go types by internal/desktop/devfixture).
+    const job = failedJobFixture as unknown as TaskJob;
 
     render(ChangesCard, { job });
-    expect(screen.getByTestId("changes-card")).toHaveTextContent("main.go");
+    expect(screen.getByTestId("changes-card")).toHaveTextContent("internal/store/autonomy.go");
     expect(screen.getByTestId("changes-card")).toHaveTextContent("+2");
     expect(screen.getByTestId("changes-card")).toHaveTextContent("−1");
 
     render(VerificationCard, { job });
-    expect(screen.getByTestId("verification-card")).toHaveTextContent("1/2");
-    expect(screen.getByTestId("verification-log")).toHaveTextContent("FAIL: TestSomething (0.01s)");
+    expect(screen.getByTestId("verification-card")).toHaveTextContent("0/2");
+    expect(screen.getAllByTestId("verification-log")[0]).toHaveTextContent("--- FAIL: TestGovernorPause");
   });
 
   it("highlights supported languages in DiffView, falls back to plain text on unknown language and >3000-line diffs", async () => {
@@ -171,5 +151,5 @@ describe("components", () => {
     };
     render(DiffView, { job: bigJob });
     expect(screen.getByTestId("plain-fallback-banner")).toBeInTheDocument();
-  });
+  }, 30_000); // first Shiki grammar/theme load takes ~4s, more on a busy machine
 });

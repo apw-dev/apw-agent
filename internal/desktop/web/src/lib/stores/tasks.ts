@@ -26,14 +26,18 @@ import {
 
 export type ComposerMode = "execute" | "preview" | "review" | "plan" | "unverified";
 
+// Non-terminal core.TaskStatus values: the UI keeps polling these tasks.
 export const ACTIVE_TASK_STATUSES = new Set([
   "queued",
-  "running",
+  "analyzing",
   "planning",
   "patching",
   "verifying",
-  "repairing"
+  "applying"
 ]);
+
+// Statuses app.Service.Resume requeues (ready_to_apply is applied, not resumed).
+export const RESUMABLE_TASK_STATUSES = new Set(["interrupted", "failed", "cancelled", "preview_ready"]);
 
 export const tasks = writable<TaskJob[]>([]);
 export const selectedTaskId = writable<string>("");
@@ -65,10 +69,11 @@ export function mapTaskSteps(job: TaskJob, events: TaskEvent[] = []): StepBarSta
   const st = (job.status || "").toLowerCase();
   const mode = (job.mode || "execute").toLowerCase();
   const stagesSeen = new Set(events.map((e) => (e.stage || "").toLowerCase()));
-  const hasPlan = Boolean(job.report?.plan) || stagesSeen.has("plan") || stagesSeen.has("architect");
-  const hasSteps = Boolean(job.report?.steps?.length) || stagesSeen.has("patch") || stagesSeen.has("surgeon");
+  // Progress event stages as app.Service records them (planning, step_start, verifying, ...).
+  const hasPlan = Boolean(job.report?.plan) || stagesSeen.has("planning");
+  const hasSteps = Boolean(job.report?.steps?.length) || stagesSeen.has("step_start");
   const hasVerify =
-    Boolean(job.report?.reflex_attempts?.length) || stagesSeen.has("verify") || stagesSeen.has("reflex");
+    Boolean(job.report?.reflex_attempts?.length) || stagesSeen.has("verifying") || stagesSeen.has("baseline");
 
   if (st === "succeeded") {
     return {
@@ -90,7 +95,7 @@ export function mapTaskSteps(job: TaskJob, events: TaskEvent[] = []): StepBarSta
       ]
     };
   }
-  if (st === "failed" || st === "cancelled") {
+  if (st === "failed" || st === "cancelled" || st === "interrupted" || st === "provider_unavailable") {
     return {
       steps: [
         { label: "Plan", state: hasPlan ? "done" : "failed" },
@@ -100,8 +105,18 @@ export function mapTaskSteps(job: TaskJob, events: TaskEvent[] = []): StepBarSta
       ]
     };
   }
-  // Running / queued
-  if (hasVerify) {
+  // In flight: the core status names the active step.
+  if (st === "applying") {
+    return {
+      steps: [
+        { label: "Plan", state: "done" },
+        { label: "Patch", state: "done" },
+        { label: "Verify", state: "done" },
+        { label: "Apply", state: "active" }
+      ]
+    };
+  }
+  if (st === "verifying") {
     return {
       steps: [
         { label: "Plan", state: "done" },
@@ -111,7 +126,7 @@ export function mapTaskSteps(job: TaskJob, events: TaskEvent[] = []): StepBarSta
       ]
     };
   }
-  if (hasSteps) {
+  if (st === "patching") {
     return {
       steps: [
         { label: "Plan", state: "done" },

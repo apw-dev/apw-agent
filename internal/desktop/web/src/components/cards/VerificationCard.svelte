@@ -19,33 +19,26 @@
     const out: VerificationItem[] = [];
     const attempts = job.report?.reflex_attempts || [];
     const lastAttempt = attempts.length > 0 ? attempts[attempts.length - 1] : null;
-    if (lastAttempt?.Result?.stages?.length) {
-      for (const st of lastAttempt.Result.stages) {
-        out.push({
-          id: "stage-" + st.name,
-          label: st.name,
-          passed: st.passed,
-          log: st.output || (!st.passed ? lastAttempt.Result.output : undefined)
-        });
-      }
-    } else if (lastAttempt?.Result) {
+    if (lastAttempt?.Result) {
+      const r = lastAttempt.Result;
+      const diagnostics = (r.diagnostics || [])
+        .map((d) => (d.file ? `${d.file}${d.line ? ":" + d.line : ""}: ` : "") + d.message)
+        .join("\n");
       out.push({
         id: "reflex-" + lastAttempt.Number,
-        label: lastAttempt.Result.failed_stage
-          ? `Reflex (${lastAttempt.Result.failed_stage})`
-          : `Reflex round #${lastAttempt.Number}`,
-        passed: lastAttempt.Result.passed,
-        log: lastAttempt.Result.output
+        label: r.failed_stage ? `Reflex (${r.failed_stage})` : `Reflex round #${lastAttempt.Number}`,
+        passed: r.passed,
+        log: r.raw_output || diagnostics || undefined
       });
     }
 
-    for (let i = 0; i < (job.report?.acceptance_results || []).length; i++) {
-      const ac = job.report!.acceptance_results![i];
+    const checks = job.report?.acceptance || [];
+    for (let i = 0; i < checks.length; i++) {
       out.push({
         id: "acc-" + i,
-        label: ac.description || ac.value || ac.kind || `Acceptance #${i + 1}`,
-        passed: ac.passed,
-        log: ac.detail
+        label: checks[i].criterion || `Acceptance #${i + 1}`,
+        passed: checks[i].passed,
+        log: checks[i].evidence || undefined
       });
     }
     return out;

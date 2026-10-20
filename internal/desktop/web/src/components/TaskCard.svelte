@@ -3,6 +3,7 @@
   import type { TaskJob, TaskEvent } from "../lib/api";
   import {
     ACTIVE_TASK_STATUSES,
+    RESUMABLE_TASK_STATUSES,
     mapTaskSteps,
     selectTask,
     applyTaskChanges,
@@ -22,9 +23,7 @@
   const stepBar = $derived(mapTaskSteps(job, events));
   const isRunning = $derived(ACTIVE_TASK_STATUSES.has(job.status));
   const canApply = $derived(job.status === "ready_to_apply");
-  const canResume = $derived(
-    job.status === "failed" || job.status === "cancelled" || job.status === "preview_ready"
-  );
+  const canResume = $derived(RESUMABLE_TASK_STATUSES.has(job.status));
   const changedFiles = $derived.by(() => {
     const mod = job.report?.modified_files || [];
     if (mod.length > 0) return mod;

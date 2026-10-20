@@ -2,3 +2,12 @@
 *.go   text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf
+
+# Frontend sources and build output stay LF on every OS, so a Windows build reproduces the
+# committed internal/desktop/web/dist byte for byte (CI checks it with git diff --exit-code).
+internal/desktop/web/**/*.html   text eol=lf
+internal/desktop/web/**/*.ts     text eol=lf
+internal/desktop/web/**/*.js     text eol=lf
+internal/desktop/web/**/*.css    text eol=lf
+internal/desktop/web/**/*.svelte text eol=lf
+internal/desktop/web/**/*.json   text eol=lf
