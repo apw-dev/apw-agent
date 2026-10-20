@@ -234,9 +234,11 @@ Wails pinned at **v2.17.0** (`cmd/apw-desktop/go.mod`). Branch `feat/apw-desktop
 | Browser accelerators, zoom, default context menu off | ✔ by construction, manual check pending | Wails sets `AreBrowserAcceleratorKeysEnabled(false)`, `AreDefaultContextMenusEnabled(false)` in production; options `IsZoomControlEnabled:false`, `DisablePinchZoom:true` |
 | Mica, caption theme, hidden-until-ready, single instance, geometry restore | built, manual check pending | `docs/acceptance.md` rows 3–11 |
 | DevTools on demand | ✘ as specified, adjusted | Wails compiles DevTools out of production builds; `--devtools` needs a `-tags devtools` build (documented in `cmd/apw-desktop/README.md`) |
-| Restoring onto a specific secondary monitor | ✘ partial | Wails v2 positions are monitor-relative and expose no monitor origin; the window is clamped onto the monitor it opens on |
+| Geometry restore, incl. secondary monitors and scaled displays | ✔ via Win32 | Wails v2's position getter is absolute but its setter is work-area relative, and its sizes are DPI-scaled, so geometry is saved with `GetWindowRect` and restored with `SetWindowPos` into the nearest monitor's work area (`ClampRect`). Verified live at 100% scaling: centred first run, exact round trip, off-screen 5000×3000 fitted onto the secondary monitor. Not yet tried on a 125–150% display. |
+| Second launch during startup | ✔ after review fix | a second launch before `OnStartup` reached the runtime with a nil context (`log.Fatalf`). It is now queued until the window is shown. |
 
 Deviations from this spec:
+- **Startup workspace:** opened in `main()` before the window exists, not in `OnStartup`, which raced the first page load. A bad folder argument falls back to the last workspace.
 - **Errors from choosing a workspace:** shown in a native message dialog, not inline text. At startup, the chooser shows why the last workspace could not be reopened.
 - **Build tag:** the Wails code carries the `desktop` build tag.
 - **Native shell guards in `ui.go`:** they only take effect when the Wails globals exist. Phase 2 replaces `ui.go`.

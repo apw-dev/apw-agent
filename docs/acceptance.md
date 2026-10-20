@@ -45,7 +45,7 @@ Build under test: `cmd/apw-desktop` on branch `feat/apw-desktop-shell`, Wails v2
 | 7 | External link in a message | Opens in default browser | NOT VERIFIED |
 | 8 | Hover maximize button | Snap Layouts flyout | NOT VERIFIED |
 | 9 | Second launch `APW.exe D:\other-repo` | First window focuses and switches workspace | NOT VERIFIED |
-| 10 | Close and reopen | Same size/position/maximized and same workspace | NOT VERIFIED |
+| 10 | Close and reopen | Same size/position/maximized and same workspace | PASS (partial, Win32-driven): first run centred (320,106); moved to 250,180 1300×850, closed with WM_CLOSE, reopened with no argument → same rect and the last workspace. A planted off-screen 5000×3000 geometry opened fitted to the secondary monitor's work area. Maximised restore and scaled displays not yet tried. |
 | 11 | Workspace folder renamed, reopen | Chooser with error text | NOT VERIFIED |
 | 12 | Desktop completion gate (spec §1 criterion 2) on current UI | Passes end to end | NOT VERIFIED |
 
