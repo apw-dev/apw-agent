@@ -1,0 +1,25 @@
+{
+  "in_flight": [
+    "queued",
+    "analyzing",
+    "planning",
+    "patching",
+    "verifying",
+    "applying"
+  ],
+  "resumable": [
+    "interrupted",
+    "failed",
+    "cancelled",
+    "preview_ready"
+  ],
+  "terminal": [
+    "succeeded",
+    "failed",
+    "cancelled",
+    "provider_unavailable",
+    "ready_to_apply",
+    "preview_ready",
+    "interrupted"
+  ]
+}

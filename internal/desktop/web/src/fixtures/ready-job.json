@@ -1,0 +1,55 @@
+{
+  "id": "task-ready",
+  "workspace": "/workspace",
+  "instruction": "แก้ไขและรันทดสอบ governor",
+  "mode": "execute",
+  "status": "ready_to_apply",
+  "created_at": "2026-10-20T09:00:00Z",
+  "updated_at": "2026-10-20T09:00:00Z",
+  "owner": "local",
+  "request_id": "req-task-ready",
+  "action": "",
+  "report": {
+    "task_id": "task-ready",
+    "plan": {
+      "plan_id": "plan-governor",
+      "task_id": "",
+      "objective": "Keep governor limits when pausing",
+      "affected_files": [
+        "internal/store/autonomy.go"
+      ],
+      "subtasks": null,
+      "acceptance_criteria": [
+        "pause keeps configured limits"
+      ],
+      "created_at": "2026-10-20T09:00:00Z"
+    },
+    "steps": null,
+    "reflex_attempts": [
+      {
+        "Number": 1,
+        "Result": {
+          "passed": true,
+          "duration": 0
+        }
+      }
+    ],
+    "passed": true,
+    "duration": 0,
+    "summary": "Verified: governor keeps configured limits.",
+    "mode": "execute",
+    "modified_files": [
+      "internal/store/autonomy.go"
+    ],
+    "diff": "--- a/internal/store/autonomy.go\n+++ b/internal/store/autonomy.go\n@@ -1,2 +1,3 @@\n package store\n-var oldLimit = 0\n+var defaultLimit = 6\n+var keepExisting = true\n",
+    "acceptance": [
+      {
+        "criterion": "pause keeps configured limits",
+        "passed": true,
+        "evidence": "ok  internal/store 0.42s"
+      }
+    ],
+    "applied": false
+  },
+  "cancel_requested": false
+}

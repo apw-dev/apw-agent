@@ -1,0 +1,67 @@
+{
+  "id": "task-failed",
+  "workspace": "/workspace",
+  "instruction": "แก้ไขและรันทดสอบ governor",
+  "mode": "execute",
+  "status": "failed",
+  "created_at": "2026-10-20T09:00:00Z",
+  "updated_at": "2026-10-20T09:00:00Z",
+  "owner": "local",
+  "request_id": "req-task-failed",
+  "action": "",
+  "report": {
+    "task_id": "task-failed",
+    "plan": {
+      "plan_id": "plan-governor",
+      "task_id": "",
+      "objective": "Keep governor limits when pausing",
+      "affected_files": [
+        "internal/store/autonomy.go"
+      ],
+      "subtasks": null,
+      "acceptance_criteria": [
+        "pause keeps configured limits"
+      ],
+      "created_at": "2026-10-20T09:00:00Z"
+    },
+    "steps": null,
+    "reflex_attempts": [
+      {
+        "Number": 1,
+        "Result": {
+          "passed": false,
+          "failed_stage": "test",
+          "diagnostics": [
+            {
+              "stage": "test",
+              "file": "internal/store/autonomy_test.go",
+              "line": 42,
+              "message": "limit reset to 10",
+              "raw_error": ""
+            }
+          ],
+          "raw_output": "--- FAIL: TestGovernorPause (0.01s)\n    autonomy_test.go:42: limit reset to 10",
+          "duration": 0
+        }
+      }
+    ],
+    "passed": false,
+    "duration": 0,
+    "summary": "go test failed",
+    "mode": "execute",
+    "modified_files": [
+      "internal/store/autonomy.go"
+    ],
+    "diff": "--- a/internal/store/autonomy.go\n+++ b/internal/store/autonomy.go\n@@ -1,2 +1,3 @@\n package store\n-var oldLimit = 0\n+var defaultLimit = 6\n+var keepExisting = true\n",
+    "acceptance": [
+      {
+        "criterion": "pause keeps configured limits",
+        "passed": false,
+        "evidence": "max_tasks_per_hour reset to 10"
+      }
+    ],
+    "applied": false
+  },
+  "error": "go test failed",
+  "cancel_requested": false
+}
