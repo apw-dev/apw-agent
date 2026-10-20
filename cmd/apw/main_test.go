@@ -116,6 +116,47 @@ func TestRun_UnknownCommand(t *testing.T) {
 	}
 }
 
+func TestFindSiblingNativeDesktop(t *testing.T) {
+	dir := t.TempDir()
+	apwExe := filepath.Join(dir, "apw.exe")
+	if err := os.WriteFile(apwExe, []byte("cli"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// On case-insensitive Windows filesystems, apw.exe must never match itself as APW.exe.
+	if _, ok := findSiblingNativeDesktop("windows", apwExe); ok {
+		t.Fatal("expected false when native desktop binary is absent")
+	}
+	nativeExe := filepath.Join(dir, "apw-desktop.exe")
+	if err := os.WriteFile(nativeExe, []byte("gui"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := findSiblingNativeDesktop("windows", apwExe)
+	if !ok || got != nativeExe {
+		t.Fatalf("findSiblingNativeDesktop = %q, %v; want %q, true", got, ok, nativeExe)
+	}
+	// Also supports parent ../APW.exe layout (e.g. $INSTDIR/bin/apw.exe -> $INSTDIR/APW.exe).
+	instDir := t.TempDir()
+	binDir := filepath.Join(instDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binApw := filepath.Join(binDir, "apw.exe")
+	parentAPW := filepath.Join(instDir, "APW.exe")
+	if err := os.WriteFile(binApw, []byte("cli"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parentAPW, []byte("gui"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gotParent, ok := findSiblingNativeDesktop("windows", binApw)
+	if !ok || gotParent != parentAPW {
+		t.Fatalf("findSiblingNativeDesktop(bin/apw.exe) = %q, %v; want %q, true", gotParent, ok, parentAPW)
+	}
+	if _, ok := findSiblingNativeDesktop("linux", apwExe); ok {
+		t.Fatal("expected false on non-windows GOOS")
+	}
+}
+
 func mustQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

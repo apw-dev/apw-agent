@@ -1,6 +1,6 @@
 # apw — Apiwat Agent
 
-ลำดับงานปัจจุบัน: **Core CLI → ทดสอบ provider จริงและเตรียม release → Desktop ตามภาพอ้างอิงเป็นเฟสสุดท้าย** ดู [roadmap](docs/roadmap.md).
+ลำดับงานปัจจุบัน: **Core CLI → ทดสอบ provider จริงและเตรียม release → Native Windows Desktop (`APW.exe` + Svelte 5)** ดู [roadmap](docs/roadmap.md).
 
 **ระบบปฏิบัติการ AI สำหรับนักพัฒนาซอฟต์แวร์ (Ground-Up AI Developer OS)** ที่สร้างขึ้นใหม่ตั้งแต่ศูนย์ด้วยภาษา Go โดยไม่พึ่งพาเฟรมเวิร์กสำเร็จรูปที่เทอะทะ ผสานสมองสองระบบ (**System 1: Reflex** และ **System 2: Architect**), ศัลยแพทย์โค้ดความแม่นยำสูง (**Surgeon**), บริการเบื้องหลัง 24/7 (**`apwd` Daemon**) และระบบความจำ/ทักษะอัตโนมัติเข้าเป็นเนื้อเดียวกัน
 
@@ -18,7 +18,7 @@
 | **2. System 2 — Spec-First Architecture** | วางแผนสถาปัตยกรรมเป็นขั้นตอน (`ExecutionPlan` / `plan.json`) และตรวจสอบขอบเขตความปลอดภัยก่อนอนุญาตให้แตะไฟล์โค้ด | `internal/architect` |
 | **3. Precision Code Surgery** | ผ่าตัดแก้ไขไฟล์เฉพาะจุด (Read-Before-Write + SHA-256 Base Hash + Surgical Diff) พร้อมรัน Compiler/Test วนลูปอัตโนมัติ | `internal/surgeon` |
 | **4. 24/7 Autonomous Daemon & Skills** | รันเบื้องหลังตลอดเวลา (`apwd`), จัดการคิวงาน, ความจำระยะยาว (SQLite) และระบบขยายทักษะ (Skill Hub) | `internal/daemon`, `internal/store`, `skills/` |
-| **5. Headless Core & Multi-Client Protocol** | แยกส่วนสมองออกจากหน้าจอ เชื่อมต่อได้ทั้ง Interactive CLI (`apw`), Desktop UI (`apw desktop`), Editor (ACP / JSON-RPC) และ Chat (`Telegram`) | `internal/acp`, `internal/desktop`, `internal/channels`, `internal/transport` |
+| **5. Headless Core & Multi-Client Protocol** | แยกส่วนสมองออกจากหน้าจอ เชื่อมต่อได้ทั้ง Interactive CLI (`apw`), Native Desktop (`APW.exe` / `apw desktop`), Editor (ACP / JSON-RPC) และ Chat (`Telegram`) | `internal/acp`, `internal/desktop`, `cmd/apw-desktop`, `internal/channels`, `internal/transport` |
 
 ---
 
@@ -27,7 +27,7 @@
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                        Surface Layer (Multi-Client)                        │
-│     [ $ apw CLI ]      [ $ apw desktop UI ]       [ Telegram / Chat ]      │
+│     [ $ apw CLI ]   [ APW.exe / apw desktop ]    [ Telegram / Chat ]       │
 └─────────────────────────────────────┬──────────────────────────────────────┘
                                       │ JSON-RPC 2.0 / HTTP / Local Socket
 ┌─────────────────────────────────────▼──────────────────────────────────────┐
@@ -70,7 +70,8 @@
 apw-agent/
 ├── cmd/
 │   ├── apw/                        # Surface CLI & Interactive Shell (apw > _)
-│   └── apwd/                       # 24/7 Background Core Daemon
+│   ├── apwd/                       # 24/7 Background Core Daemon
+│   └── apw-desktop/                # Native Windows Desktop Shell (APW.exe via Wails v2)
 ├── internal/
 │   ├── core/                       # Core Domain Models (Task, Request, Response, Capabilities)
 │   ├── config/                     # ระบบตั้งค่า apw.json + Validation
@@ -79,7 +80,7 @@ apw-agent/
 │   ├── surgeon/                    # [Surgeon] Read-Before-Write Snapshot, SHA-256 Drift Guard, AST Symbol Parser
 │   ├── executor/                   # Triad Orchestrator (เชื่อม Architect -> Surgeon -> Reflex ครบวงจร)
 │   ├── daemon/                     # Auto-start & Lifecycle Manager สำหรับ apwd + Skill Discovery
-│   ├── desktop/                    # Native Desktop Web UI Server (apw desktop / apw ui)
+│   ├── desktop/                    # Desktop Backend & Embedded Svelte 5 Frontend (internal/desktop/web/)
 │   ├── acp/                        # Agent Client Protocol (ACP) stdio server
 │   ├── eval/                       # Benchmarking & Hidden Test Fixture Runner (apw eval)
 │   ├── retention/                  # นโยบายล้างงานเก่าและ Prune tasks (apw cleanup)
@@ -102,14 +103,14 @@ apw-agent/
 
 ## 4. การเริ่มต้นใช้งาน (Quick Start)
 
-### ติดตั้งไบนารี (`apw` และ `apwd`)
+### ติดตั้งไบนารี (`apw`, `apwd`, และ `APW.exe`)
 ต้องใช้ Go 1.27 ขึ้นไป (`go.mod` ระบุ `go 1.27.0`) จากนั้น clone repository และเข้าโฟลเดอร์ก่อนติดตั้ง:
 ```bash
 git clone https://github.com/apiwat/apw-agent.git
 cd apw-agent
 go install ./cmd/...
 ```
-หรือใช้ชุด portable (`apw.exe` + `apwd.exe`) ตาม [docs/release.md](docs/release.md) โดยวางไฟล์ทั้งสองไว้ในโฟลเดอร์เดียวกัน
+หรือใช้ตัวติดตั้ง NSIS (`APW-Setup-<version>.exe`) หรือชุด portable (`APW.exe` + `apw.exe` + `apwd.exe`) ตาม [docs/release.md](docs/release.md) โดยวางไฟล์ทั้งหมดไว้ในโฟลเดอร์เดียวกัน
 
 ### 1) โหมด Interactive CLI (`apw > _`)
 พิมพ์ `apw` จากโฟลเดอร์โปรเจกต์ใดก็ได้ ระบบจะปลุก `apwd` เบื้องหลังอัตโนมัติและเข้าสู่หน้าต่างโต้ตอบทันที:
@@ -126,10 +127,11 @@ go install ./cmd/...
 apw > _
 ```
 
-### 2) โหมดหน้าต่าง Desktop UI (`apw desktop`)
+### 2) โหมดหน้าต่าง Native Desktop UI (`APW.exe` / `apw desktop`)
 ```bash
 apw desktop
 ```
+บน Windows หากมีไฟล์ `APW.exe` อยู่ในโฟลเดอร์เดียวกับ `apw.exe` คำสั่ง `apw desktop` จะเปิดหน้าต่าง Native Windows (`APW.exe` ที่สร้างด้วย Wails v2 + Svelte 5 แบบ in-process โดยไม่เปิดพอร์ต localhost) ให้โดยอัตโนมัติ หรือสามารถดับเบิลคลิกเปิด `APW.exe` โดยตรงก็ได้ (หากไม่มี `APW.exe` จะ fallback ไปเปิดผ่าน Edge `--app`)
 
 ### 3) คำสั่งบรรทัดคำสั่งโดยตรง (Direct CLI Commands)
 ```bash

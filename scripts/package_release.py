@@ -1,4 +1,4 @@
-"""Build a matching portable apw/apwd pair without overwriting existing releases."""
+"""Build a matching portable apw/apwd/APW release without overwriting existing releases."""
 import argparse
 import hashlib
 import json
@@ -25,7 +25,7 @@ def source_hash():
         path = ROOT / name
         if not name or not path.is_file() or path.is_symlink():
             continue
-        if path.suffix != ".go" and name not in ("go.mod", "go.sum"):
+        if path.suffix != ".go" and name not in ("go.mod", "go.sum", "cmd/apw-desktop/go.mod", "cmd/apw-desktop/go.sum"):
             continue
         digest.update(name.replace("\\", "/").encode("utf-8") + b"\0")
         digest.update(path.read_bytes() + b"\0")
@@ -53,6 +53,12 @@ def main():
     for command in ("apw", "apwd"):
         run(["go", "build", "-mod=readonly", "-trimpath", "-ldflags", ldflags,
              "-o", str(package / (command + suffix)), "./cmd/" + command])
+        if source_hash() != fingerprint:
+            raise RuntimeError("source changed during build; release was not packaged")
+    if goos == "windows":
+        run(["go", "-C", "cmd/apw-desktop", "build", "-mod=readonly", "-trimpath",
+             "-tags", "desktop,production", "-ldflags", "-H windowsgui " + ldflags,
+             "-o", str(package / "apw-desktop.exe"), "."])
         if source_hash() != fingerprint:
             raise RuntimeError("source changed during build; release was not packaged")
     infos = []

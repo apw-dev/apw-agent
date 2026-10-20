@@ -244,3 +244,21 @@ Deviations from this spec:
 - **Native shell guards in `ui.go`:** they only take effect when the Wails globals exist. Phase 2 replaces `ui.go`.
 
 Phase 2 can proceed as designed. Two things need a person at the machine before then: the manual checklist rows, and the completion gate on the current UI.
+
+
+### Phase 2 & Phase 3 results (2026-10-20)
+
+- **Phase 1 polish items resolved:**
+  1. Keyboard shortcuts now match `e.code` (`KeyO`, `KeyB`, `KeyJ`, `KeyK`, `KeyI`, `BLOCKED_CTRL_CODES`) so Thai keyboard layout works identically.
+  2. `LoadSettings` strips UTF-8 BOM (`\xef\xbb\xbf`) before JSON decoding (`TestLoadSettingsUTF8BOM`).
+  3. Reopening the currently active workspace directory in `WorkspaceHost.Open` and `App.OpenWorkspace` is a no-op that preserves the existing `desktop.Server` (session token and session approvals) and skips `WindowReloadApp` (`TestWorkspaceHostReopenSameDirKeepsServer`).
+  4. Added Win32 `focusWindow` (`ShowWindow(SW_RESTORE)` only when `isMinimised`, then `SetForegroundWindow`) on `secondInstance` and initial `domReady`.
+  5. Added `WorkspaceHost.TakeNotice` so a failing startup folder argument that falls back to `last_workspace` shows a native `MessageDialog` notice after `domReady`.
+  6. Extended `TestInProcessHostTrustedOnlyWhenConfigured` to verify `/`, `/api/status`, and `/v1/health` return `403 Forbidden` even with a valid Bearer token when `InProcessHost` is unset.
+- **Phase 2 (Svelte 5 + TypeScript + Vite frontend):**
+  - Implemented in `internal/desktop/web/` with modular components (<300 lines each), bundled variable `.woff2` fonts (`Noto Sans` + `Noto Sans Thai`), Shiki fine-grained JS regex syntax highlighter (11 languages, >3,000-line plain fallback), `<meta name="apw-token">` injection, and strict CSP (`script-src 'self'`).
+  - Legacy `internal/desktop/ui.go` and `internal/desktop/ui_css.go` removed; `internal/desktop/web/dist` embedded via `internal/desktop/embed.go`.
+  - Verified with `svelte-check` (0 errors, 0 warnings), Vitest (5 passed), Playwright E2E completion gate (`e2e/desktop.spec.ts` passed), and Go tests (`internal/desktop`).
+- **Phase 3 (Native launcher, NSIS installer, CI & Release):**
+  - `cmd/apw` (`apw desktop` / `apw ui`) on Windows automatically launches a sibling `APW.exe` when present (unless `--no-open` or custom `--addr` is passed), falling back to Edge `--app`.
+  - Added NSIS installer script (`cmd/apw-desktop/build/windows/installer/project.nsi`), `frontend` CI job (`.github/workflows/ci.yml`), release workflow (`.github/workflows/release.yml`), and `APW.exe` packaging in `scripts/package_release.py`.

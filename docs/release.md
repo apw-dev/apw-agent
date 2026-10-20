@@ -1,16 +1,33 @@
-# Portable Windows release
+# Portable Windows release & NSIS installer
 
-Build both executables from the same saved source:
+Build the portable executables (`apw.exe`, `apwd.exe`, and `APW.exe`) from the same saved source:
 
 ```powershell
-python scripts/package_release.py --version 0.1.0-rc.1
+npm --prefix internal/desktop/web ci
+npm --prefix internal/desktop/web run build
+python scripts/package_release.py --version 0.1.0-rc.14
 ```
 
-The output is a new directory and ZIP under `.apw/releases`, a SHA-256 checksum, a file manifest, and matching version/revision/time/source fingerprints embedded in both executables. The builder refuses an existing output directory or source changes during compilation. `--install` additionally installs the matching pair through Go. A checksum detects changed bytes; this package is not code-signed.
+The output is a new directory and ZIP under `.apw/releases`, a SHA-256 checksum, a file manifest, and matching version/revision/time/source fingerprints embedded in the executables. The builder refuses an existing output directory or source changes during compilation. `--install` additionally installs the matching CLI/daemon pair through Go. A checksum detects changed bytes; this package is not code-signed (unsigned Windows builds trigger a SmartScreen warning).
 
-Extract both `apw.exe` and `apwd.exe` into the same folder. Add that folder to PATH or call `apw.exe` by its absolute path. The CLI prefers its sibling daemon over another version on PATH. Check the pair with `apw version --json` and `apwd --version`.
+## Native Desktop (`APW.exe`) and NSIS installer
 
-Before upgrading, inspect current tasks and stop the daemon for each active workspace with `apw daemon --config <path> stop`. Keep the existing binaries as a rollback copy and close interactive CLI sessions. Replace both binaries together. Preserve the workspace's `apw.json`, `.apw`, `.git` and `.worktrees` directories. Start the replacement CLI and inspect tasks before explicitly resuming interrupted work. The CLI rejects a running packaged daemon with a different source fingerprint.
+`APW.exe` is the native Windows Desktop shell built with Wails v2 (`cmd/apw-desktop`). It hosts the workspace's `internal/desktop` server in-process via the Wails AssetServer (no localhost port opened) and embeds the compiled Svelte 5 + TypeScript + Vite frontend (`internal/desktop/web/dist`).
+
+To build the NSIS installer (`APW-Setup-<version>.exe`) with Start Menu shortcut, uninstaller, and optional PATH registration:
+
+```powershell
+cd cmd/apw-desktop
+wails build -s -clean -skipbindings
+go -C ../.. build -mod=readonly -trimpath -o cmd/apw-desktop/build/bin/cli/apw.exe ./cmd/apw
+go -C ../.. build -mod=readonly -trimpath -o cmd/apw-desktop/build/bin/apwd.exe ./cmd/apwd
+Copy-Item ../../apw.example.json build/bin/apw.example.json -Force
+makensis /DINFO_PRODUCTVERSION="0.1.0" build/windows/installer/project.nsi
+```
+
+Extract or install `APW.exe`, `apw.exe`, and `apwd.exe` into the same folder. Add that folder to PATH or call `apw.exe` / `APW.exe` by its absolute path. The CLI and Desktop prefer their sibling `apwd.exe` over another version on PATH, and `apw desktop` on Windows automatically launches a sibling `APW.exe` when present (falling back to Edge `--app` only when `APW.exe` is absent or `--port`/`--no-open` is passed). Check the pair with `apw version --json` and `apwd --version`.
+
+Before upgrading, inspect current tasks and stop the daemon for each active workspace with `apw daemon --config <path> stop`. Keep the existing binaries as a rollback copy and close interactive CLI and `APW.exe` sessions. Replace all binaries together. Preserve the workspace's `apw.json`, `.apw`, `.git` and `.worktrees` directories. Start the replacement CLI or Desktop and inspect tasks before explicitly resuming interrupted work. The CLI rejects a running packaged daemon with a different source fingerprint.
 
 Do not replace an existing configuration with `apw.example.json`. It is a template for a new workspace. This release supports Go verification; a Git worktree does not sandbox malicious build/test code. Trust a repository before allowing its code to execute.
 

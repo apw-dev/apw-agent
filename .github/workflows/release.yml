@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: internal/desktop/web/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build Desktop Frontend
+        working-directory: internal/desktop/web
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npm run build
+
+      - name: Verify committed dist matches source
+        run: git diff --exit-code internal/desktop/web/dist
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.version }}") {
+            $ver = "${{ github.event.inputs.version }}"
+          } else {
+            $ver = ("${{ github.ref_name }}" -replace "^v", "")
+          }
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
+
+      - name: Build Wails APW.exe and NSIS Installer
+        working-directory: cmd/apw-desktop
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          wails build -s -clean -skipbindings
+          go -C ../.. build -mod=readonly -trimpath -o cmd/apw-desktop/build/bin/cli/apw.exe ./cmd/apw
+          go -C ../.. build -mod=readonly -trimpath -o cmd/apw-desktop/build/bin/apwd.exe ./cmd/apwd
+          Copy-Item ../../apw.example.json build/bin/apw.example.json -Force
+          makensis /DINFO_PRODUCTVERSION="$ver" build/windows/installer/project.nsi
+          $setup = Get-Item "build/bin/APW-Setup-$ver.exe"
+          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($setup.Name)" | Set-Content -Path "$($setup.FullName).sha256" -Encoding utf8
+
+      - name: Build Portable Release Package
+        shell: pwsh
+        run: |
+          python scripts/package_release.py --version "${{ steps.version.outputs.version }}"
+
+      - name: Publish GitHub Release Assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          $assets = @(
+            "cmd/apw-desktop/build/bin/APW-Setup-$ver.exe",
+            "cmd/apw-desktop/build/bin/APW-Setup-$ver.exe.sha256"
+          )
+          $zips = Get-ChildItem ".apw/releases/*.zip*" | ForEach-Object { $_.FullName }
+          gh release upload "${{ github.ref_name }}" @assets @zips --clobber

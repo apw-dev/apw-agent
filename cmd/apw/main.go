@@ -8,8 +8,10 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -413,6 +415,13 @@ func runDesktopApp(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	if !*noOpen && *addr == "127.0.0.1:0" {
+		if launched, wsDir := tryLaunchNativeDesktop(*cfgPath); launched {
+			fmt.Fprintf(stdout, "Launched APW.exe for workspace %s\n", wsDir)
+			return 0
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -428,6 +437,68 @@ func runDesktopApp(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "  Press Ctrl+C to close Desktop service.")
 	<-ctx.Done()
 	return 0
+}
+
+// findSiblingNativeDesktop returns the path to the native desktop executable
+// (desktop/APW.exe, apw-desktop.exe, ../APW.exe, or APW.exe when distinct from exePath)
+// when installed alongside exePath on Windows.
+func findSiblingNativeDesktop(goos, exePath string) (string, bool) {
+	if goos != "windows" || exePath == "" {
+		return "", false
+	}
+	dir := filepath.Dir(exePath)
+	selfInfo, _ := os.Stat(exePath)
+	candidates := []string{
+		filepath.Join(dir, "desktop", "APW.exe"),
+		filepath.Join(dir, "apw-desktop.exe"),
+		filepath.Join(dir, "APW.exe"),
+		filepath.Join(filepath.Dir(dir), "APW.exe"),
+	}
+	for _, candidate := range candidates {
+		fi, err := os.Stat(candidate)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		if selfInfo != nil && os.SameFile(selfInfo, fi) {
+			continue
+		}
+		if strings.EqualFold(filepath.Clean(candidate), filepath.Clean(exePath)) {
+			continue
+		}
+		return candidate, true
+	}
+	return "", false
+}
+
+func resolveDesktopWorkspace(cfgPath string) string {
+	if cfg, _, err := daemon.LoadConfig(cfgPath); err == nil && cfg.Workspace != "" {
+		if abs, err := filepath.Abs(cfg.Workspace); err == nil {
+			return abs
+		}
+		return cfg.Workspace
+	}
+	if abs, err := filepath.Abs(filepath.Dir(cfgPath)); err == nil {
+		return abs
+	}
+	return "."
+}
+
+func tryLaunchNativeDesktop(cfgPath string) (bool, string) {
+	exe, err := os.Executable()
+	if err != nil {
+		return false, ""
+	}
+	nativeBin, ok := findSiblingNativeDesktop(runtime.GOOS, exe)
+	if !ok {
+		return false, ""
+	}
+	wsDir := resolveDesktopWorkspace(cfgPath)
+	cmd := exec.Command(nativeBin, wsDir)
+	if err := cmd.Start(); err != nil {
+		return false, ""
+	}
+	_ = cmd.Process.Release()
+	return true, wsDir
 }
 
 func parseConfigAndTaskArgs(cmdName string, args []string, stderr io.Writer) (string, string, bool, int) {

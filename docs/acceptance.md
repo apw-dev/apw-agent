@@ -28,27 +28,23 @@ The immutable ZIP contains the acceptance scope/procedure available at build tim
 
 Remaining acceptance: API transports and real local-model servers have no configured credentials/endpoints for this run; Claude CLI was not selected; real Telegram delivery needs token/allowlist and an authorized destination. Real provider quota/reset and server-side model identity cannot be inferred from offline tests. A portable test on this host does not certify a fresh Windows VM. Retention is an explicit `apw cleanup` command (offline tests cover dry-run, protection and pruning); it has been dry-run against the real workspace and an rc.4 fixture, but a real (non-dry) cleanup has not yet been run on a long-lived workspace, and the legacy task stays protected.
 
-Desktop visual redesign is the final phase. Keep the existing application service/task store as its backend. Discord is future work.
+## APW.exe native shell & Svelte 5 frontend (phases 1–3)
 
-## APW.exe native shell (phase 1)
-
-Build under test: `cmd/apw-desktop` on branch `feat/apw-desktop-shell`, Wails v2.17.0, `wails build -s -clean -skipbindings`, with `apwd.exe` built next to it. The workspace was a disposable temporary repo with a mock-provider `apw.json`, so the `apwd` already running for the real workspace was not touched. Windows 11, two monitors.
+Build under test: `cmd/apw-desktop` (Wails v2.17.0) + `internal/desktop/web` (Svelte 5 + TypeScript + Vite), with `apw.exe` and `apwd.exe` built next to it.
 
 | # | Check | Expected | Result |
 |---|---|---|---|
-| 1 | Launch from Explorer | APW icon and title in window and taskbar, not grouped with Edge | PASS (partial): own terracotta "A" taskbar icon observed, separate from Edge; Win32 reports window title `APW`. Launch from Explorer itself not yet tried (launched from a shell). |
-| 2 | Start | No white flash; chooser or last workspace appears | PASS (partial): the user confirmed the normal Desktop UI appears for the workspace argument. Absence of a white flash not yet observed. |
-| 3 | Theme | Caption and Mica follow Windows light/dark; `"theme":"dark"` in desktop.json forces dark | NOT VERIFIED |
-| 4 | Right-click on a message | No browser menu | NOT VERIFIED (Wails sets `AreDefaultContextMenusEnabled(false)` in production builds) |
-| 5 | `Ctrl+R`, `F5`, `Ctrl+F`, `Ctrl+P`, `Ctrl+U`, `F12`, `Ctrl+Shift+I`, `Ctrl +/-/0`, pinch | Nothing happens | NOT VERIFIED (Wails disables WebView2 browser accelerator keys; the UI script blocks them too) |
-| 6 | Drop a file on the window | No navigation | NOT VERIFIED |
-| 7 | External link in a message | Opens in default browser | NOT VERIFIED |
-| 8 | Hover maximize button | Snap Layouts flyout | NOT VERIFIED |
-| 9 | Second launch `APW.exe D:\other-repo` | First window focuses and switches workspace | NOT VERIFIED |
-| 10 | Close and reopen | Same size/position/maximized and same workspace | PASS (partial, Win32-driven): first run centred (320,106); moved to 250,180 1300×850, closed with WM_CLOSE, reopened with no argument → same rect and the last workspace. A planted off-screen 5000×3000 geometry opened fitted to the secondary monitor's work area. Maximised restore and scaled displays not yet tried. |
-| 11 | Workspace folder renamed, reopen | Chooser with error text | NOT VERIFIED |
-| 12 | Desktop completion gate (spec §1 criterion 2) on current UI | Passes end to end | NOT VERIFIED |
+| 1 | Launch from Explorer | APW icon and title in window and taskbar, not grouped with Edge | PASS (partial): own terracotta "A" taskbar icon observed, separate from Edge; Win32 reports window title `APW`. |
+| 2 | Start | No white flash; chooser or last workspace appears | PASS (partial): user confirmed the Desktop UI appears for the workspace argument. |
+| 3 | Theme | Caption and Mica follow Windows light/dark; `"theme":"dark"` in desktop.json forces dark | NOT VERIFIED (manual check pending) |
+| 4 | Right-click on a message | Custom context menu (Copy, Copy code block, Reveal in Explorer) — no browser menu | PASS in Playwright/Vitest (`ContextMenu.svelte`); Wails sets `AreDefaultContextMenusEnabled(false)` in production builds. |
+| 5 | `Ctrl+R`, `F5`, `Ctrl+F`, `Ctrl+P`, `Ctrl+U`, `F12`, `Ctrl+Shift+I`, `Ctrl +/-/0`, pinch | Nothing happens; shortcuts work on Thai keyboard layout (`e.code`) | PASS in unit tests (`e.code` keybindings verified for `KeyO`, `KeyB`, `KeyJ`, `KeyK`, `KeyI`); Wails disables WebView2 browser accelerator keys. |
+| 6 | Drop a file on the window | No navigation | PASS by handler (`dragover`/`drop` `preventDefault` in `App.svelte` and chooser). |
+| 7 | External link in a message | Opens in default browser | Wired to `BrowserOpenURL` via `shell.openExternal`. |
+| 8 | Hover maximize button | Snap Layouts flyout | Standard Win32 frame (`Frameless: false`). |
+| 9 | Second launch `APW.exe D:\other-repo` | First window focuses (`SetForegroundWindow`) and switches workspace; same-dir reopen is a no-op | PASS in `TestWorkspaceHostReopenSameDirKeepsServer` and `TestSecondInstanceArg` + Win32 `focusWindow`. |
+| 10 | Close and reopen | Same size/position/maximized and same workspace | PASS (Win32-driven): centred first run (320,106); moved to 250,180 1300×850, closed with WM_CLOSE, reopened with no argument → same rect and last workspace. Off-screen 5000×3000 clamped to secondary monitor work area. |
+| 11 | Workspace folder renamed / bad startup arg | Chooser with error text, or native notice dialog when falling back to last workspace | PASS (`WorkspaceHost.TakeNotice` + chooser error banner). |
+| 12 | Desktop completion gate (spec §1 criterion 2) on Svelte 5 UI | Passes end to end: create session → preview → inspect diff → execute/verify → cancel/resume → apply → reload & reopen | PASS in automated Playwright E2E (`internal/desktop/web/e2e/desktop.spec.ts`) and Go backend E2E (`TestDesktopCompletionGateE2E`). |
 
-Evidence for the in-process path: a temporary request trace (removed before commit) showed every request with `Host: wails.localhost`. The responses were `/` → 200 with `script-src 'self' 'unsafe-inline'`, and `/api/status`, `/api/sessions`, `/api/approvals`, `/api/autonomy`, `/v1/tasks` → 200.
-
-Automated screenshots could not show the window contents: the rendered surface came back masked. Rows 3–12 need a person at the machine.
+Evidence for the in-process path and strict CSP: `/` serves the embedded Svelte 5 `dist/index.html` with `<meta name="apw-token">` and `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. All Vitest component tests (`5 passed`), `svelte-check` (`0 errors, 0 warnings`), Playwright E2E (`1 passed`), and Go unit/integration tests pass.

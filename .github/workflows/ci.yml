@@ -50,6 +50,42 @@ jobs:
             go test -count=1 ./...
           fi
 
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: internal/desktop/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: internal/desktop/web/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: svelte-check
+        run: npm run check
+
+      - name: vitest
+        run: npm test
+
+      - name: vite build
+        run: npm run build
+
+      - name: Verify committed dist matches source
+        working-directory: .
+        run: git diff --exit-code internal/desktop/web/dist
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright E2E
+        run: npm run test:e2e
+
   # APW.exe: the native Desktop shell lives in its own module (cmd/apw-desktop) so the
   # root module above never pulls in Wails.
   desktop-windows:
@@ -64,6 +100,16 @@ jobs:
         with:
           go-version-file: cmd/apw-desktop/go.mod
           cache-dependency-path: cmd/apw-desktop/go.sum
+
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Files not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
 
       - name: go mod tidy
         run: go mod tidy -diff
