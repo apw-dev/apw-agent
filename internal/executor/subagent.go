@@ -27,8 +27,10 @@ type subagentSynthesis struct {
 	err          error
 }
 
-// collectDisjointMutationWave identifies a contiguous wave of 2..maxWorkers subtasks starting at
-// start that create or patch strictly distinct files and can be synthesized in parallel by subagents.
+// collectDisjointMutationWave identifies a contiguous wave of 2..maxWorkers create subtasks starting at
+// start that target strictly distinct files and can be synthesized in parallel by subagents.
+// Patch subtasks run sequentially so each step updates ReadContext and saves an exact-step checkpoint
+// before the next model request is sent.
 func collectDisjointMutationWave(subtasks []architect.Subtask, start, maxWorkers int) []int {
 	if maxWorkers <= 1 || start < 0 || start+1 >= len(subtasks) {
 		return nil
@@ -40,7 +42,7 @@ func collectDisjointMutationWave(subtasks []architect.Subtask, start, maxWorkers
 	var wave []int
 	for i := start; i < len(subtasks) && len(wave) < maxWorkers; i++ {
 		st := subtasks[i]
-		if st.Action != architect.ActionCreate && st.Action != architect.ActionPatch {
+		if st.Action != architect.ActionCreate {
 			break
 		}
 		norm := filepath.ToSlash(strings.TrimSpace(st.TargetFile))
