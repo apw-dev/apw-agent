@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -40,10 +41,49 @@ func TestExternalRootIsUserOnly(t *testing.T) {
 		sddl := sd.String()
 		dacl := sddl[strings.Index(sddl, "D:"):]
 		// Protected (no inherited entries) and granting only the current user and SYSTEM.
-		if !strings.HasPrefix(dacl, "D:P") || strings.Count(dacl, "(A;") != 2 || !strings.Contains(dacl, sid.String()) || !strings.Contains(dacl, ";;;SY)") {
+		// Compare ACE SIDs rather than SDDL text: SDDL prints some accounts as aliases
+		// (the built-in Administrator on CI runners renders as "LA", not its SID).
+		if !strings.HasPrefix(dacl, "D:P") || !daclGrantsOnly(t, sd, sid) {
 			t.Fatalf("%s DACL = %s, want protected user+SYSTEM only", dir, dacl)
 		}
 	}
+}
+
+// daclGrantsOnly reports whether the DACL holds exactly two allow entries: one for user and one
+// for SYSTEM.
+func daclGrantsOnly(t *testing.T, sd *windows.SECURITY_DESCRIPTOR, user *windows.SID) bool {
+	t.Helper()
+	acl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acl == nil || acl.AceCount != 2 {
+		return false
+	}
+	var sawUser, sawSystem bool
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return false
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch {
+		case sid.Equals(user):
+			sawUser = true
+		case sid.Equals(system):
+			sawSystem = true
+		default:
+			return false
+		}
+	}
+	return sawUser && sawSystem
 }
 
 func TestExternalRootRefusesJunctions(t *testing.T) {

@@ -167,7 +167,8 @@ func TestSurgeon_SnapshotKeyNormalized(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	altPath := p + string(filepath.Separator) + "."
+	// Non-canonical on every OS; "x.go/." is not a valid path on POSIX (ENOTDIR).
+	altPath := dir + string(filepath.Separator) + "." + string(filepath.Separator) + "x.go"
 	if _, err := s.ApplyPatch(PatchOperation{
 		Path:       altPath,
 		OldContent: "var a = 1",

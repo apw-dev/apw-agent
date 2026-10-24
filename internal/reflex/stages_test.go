@@ -50,6 +50,7 @@ func readLog(t *testing.T, path string) []string {
 }
 
 func TestStagesRunInOrderAndStopAtFirstFailure(t *testing.T) {
+	t.Setenv("CI", "") // CI runners export CI=true; the helper logs the inherited value.
 	root := t.TempDir()
 	log := filepath.Join(t.TempDir(), "log")
 	p := project.Profile{Kind: "node", Summary: "fixture", Stages: []project.Stage{
@@ -88,6 +89,7 @@ func TestStageEnvironmentAndSkipIfMissing(t *testing.T) {
 }
 
 func TestInstallStageRunsOnceUntilInputsChange(t *testing.T) {
+	t.Setenv("CI", "")
 	root := t.TempDir()
 	log := filepath.Join(t.TempDir(), "log")
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"a":1}`), 0644); err != nil {

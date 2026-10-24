@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -24,8 +25,11 @@ func TestRootSeparators(t *testing.T) {
 	if _, err := root.ReadFile("a/b/c.txt"); err != nil {
 		t.Fatalf("ReadFile slash failed: %v", err)
 	}
-	if _, err := root.ReadFile("a\\b\\c.txt"); err != nil {
-		t.Fatalf("ReadFile backslash failed: %v", err)
+	// Backslash is a path separator only on Windows; elsewhere it is part of the name.
+	if runtime.GOOS == "windows" {
+		if _, err := root.ReadFile("a\\b\\c.txt"); err != nil {
+			t.Fatalf("ReadFile backslash failed: %v", err)
+		}
 	}
 }
 
