@@ -119,7 +119,7 @@ func (e *Executor) gatherContext(ctx context.Context, task core.Task, overview s
 		}
 		if err != nil {
 			if turn == 1 {
-				e.emit(ProgressEvent{Stage: "research_skipped", Message: "Planning without extra context: " + err.Error()})
+				e.emit(ProgressEvent{Stage: "research_skipped", Message: "Planning without extra context: " + clip(err.Error(), 200)})
 				return "", nil
 			}
 			break
@@ -296,7 +296,7 @@ func (e *Executor) coolDown(c FailoverCandidate, err error) {
 	if quotaFailure(err) {
 		e.Failover.Groups[candidateGroup(c)] = time.Now().Add(quotaCooldown(err))
 	} else {
-		e.Failover.Models[candidateID(c)] = time.Now().Add(5 * time.Minute)
+		e.Failover.Models[candidateID(c)] = time.Now().Add(45 * time.Second)
 	}
 }
 

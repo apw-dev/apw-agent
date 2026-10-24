@@ -201,3 +201,20 @@ func TestQuotaCooldownCheckpointAndExpiry(t *testing.T) {
 		t.Fatalf("expired quota did not become eligible: %v", err)
 	}
 }
+
+func TestDirectiveModelCooldownUnblocksWhenPoolExhausted(t *testing.T) {
+	codex := &routingProvider{name: "codex-cli", ask: routingSuccess}
+	argon := &routingProvider{name: "agy", ask: func(context.Context, core.ModelRequest) (*core.ModelResponse, error) {
+		return nil, context.DeadlineExceeded
+	}}
+	ex := New(t.TempDir(), codex, argon, "gpt-6.1-sol", "gemini-4-argon-high", 1)
+	ex.Failover.Models = map[string]time.Time{
+		"codex-cli:gpt-6.1-sol": time.Now().Add(5 * time.Minute),
+	}
+	if _, err := ex.askDirective(context.Background(), "patch"); err != nil {
+		t.Fatalf("expected model-paused candidate to recover when active candidate timed out: %v", err)
+	}
+	if codex.calls != 1 {
+		t.Fatalf("expected codex fallback to be retried once, got %d", codex.calls)
+	}
+}

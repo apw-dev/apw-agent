@@ -103,15 +103,89 @@ func DiscoverWorkspaceSkills(root string) []WorkspaceSkill {
 	return out
 }
 
+// BuiltinSkills returns the built-in procedural skills always available in APW Desktop & CLI.
+func BuiltinSkills() []WorkspaceSkill {
+	return []WorkspaceSkill{
+		{
+			Slug:        "diagram-design",
+			Name:        "diagram-design",
+			Description: "Architecture, Mermaid flowchart, sequence, data-flow & system overview diagrams",
+			Path:        "builtin:diagram-design",
+			Body:        "Create clear, well-structured Mermaid diagrams (`flowchart TD/LR`, `sequenceDiagram`, `stateDiagram-v2`, `erDiagram`) and architectural breakdowns covering every subsystem, component boundary, API contract, and data flow. Always quote node labels containing parentheses or special characters.",
+		},
+		{
+			Slug:        "code-audit",
+			Name:        "code-audit",
+			Description: "Full-stack Backend & Frontend codebase security, concurrency, and quality audit",
+			Path:        "builtin:code-audit",
+			Body:        "Audit both Backend and Frontend layers systematically: check security boundaries, path/input validation, error handling, concurrency safety, and test coverage. Cite exact file paths and distinguish confirmed defects from suggestions.",
+		},
+		{
+			Slug:        "ux-ui-design",
+			Name:        "ux-ui-design",
+			Description: "Modern responsive UI/UX components, accessibility, contrast & clean layout systems",
+			Path:        "builtin:ux-ui-design",
+			Body:        "Follow modern UX/UI engineering standards: consistent spacing/typography tokens, clear interactive states (hover, focus, disabled, loading), high contrast in both light and dark themes, and accessible keyboard navigation.",
+		},
+		{
+			Slug:        "test-generation",
+			Name:        "test-generation",
+			Description: "Automated unit, edge-case & integration test suite synthesis",
+			Path:        "builtin:test-generation",
+			Body:        "Synthesize deterministic unit and integration tests covering happy paths, boundary conditions, and failure modes without network flakiness or external side effects.",
+		},
+		{
+			Slug:        "refactor-safe",
+			Name:        "refactor-safe",
+			Description: "Surgical multi-file refactoring with strict behavior and API preservation",
+			Path:        "builtin:refactor-safe",
+			Body:        "Perform surgical, behavior-preserving refactorings across files while keeping public signatures, existing tests, and module boundaries intact.",
+		},
+	}
+}
+
+// DiscoverAllSkills combines workspace skills (.apw/skills/*/SKILL.md) with built-in APW skills.
+// Workspace skills with the same slug take precedence over built-in skills.
+func DiscoverAllSkills(root string) []WorkspaceSkill {
+	ws := DiscoverWorkspaceSkills(root)
+	seen := make(map[string]bool, len(ws))
+	out := make([]WorkspaceSkill, 0, len(ws)+5)
+	for _, sk := range ws {
+		seen[strings.ToLower(sk.Slug)] = true
+		out = append(out, sk)
+	}
+	for _, b := range BuiltinSkills() {
+		if !seen[strings.ToLower(b.Slug)] {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 // ProgressiveSkillsContext implements Antigravity-style progressive disclosure for .apw/skills:
 // all discovered skills are listed by name + description, while skills matching the instruction
 // (or explicitly pinned via @skill:<slug>) have their full procedure expanded automatically.
 func ProgressiveSkillsContext(root, instruction string) string {
 	skills := DiscoverWorkspaceSkills(root)
+	instrLower := strings.ToLower(instruction)
+	for _, b := range BuiltinSkills() {
+		slugLower := strings.ToLower(b.Slug)
+		if strings.Contains(instrLower, "@skill:"+slugLower) || strings.Contains(instrLower, "[<> "+slugLower+"]") {
+			exists := false
+			for _, w := range skills {
+				if strings.EqualFold(w.Slug, b.Slug) {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				skills = append(skills, b)
+			}
+		}
+	}
 	if len(skills) == 0 {
 		return ""
 	}
-	instrLower := strings.ToLower(instruction)
 	tokens := extractSearchTokens(instruction)
 
 	type scoredSkill struct {

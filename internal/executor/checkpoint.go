@@ -142,6 +142,7 @@ func loadResumePlan(workspace string, cp PlanCheckpoint) (*architect.ExecutionPl
 	if plan.PlanID != cp.PlanID || plan.TaskID != cp.TaskID {
 		return nil, fmt.Errorf("checkpoint and plan identity mismatch")
 	}
+	architect.NormalizePlan(plan)
 	if err := plan.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid resume plan: %w", err)
 	}

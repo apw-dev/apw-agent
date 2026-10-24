@@ -130,9 +130,14 @@ func TestRootOperationsRejectLinksAndProtectedPaths(t *testing.T) {
 	if err := RemoveInRoot(ws, "escape/secret.go"); err == nil {
 		t.Fatal("delete escaped root")
 	}
-	for _, path := range []string{"../escape.go", ".git/config", ".apw/auth.json", ".env"} {
+	for _, path := range []string{"../escape.go", ".git/config", ".apw/auth.json", ".env", ".env.local"} {
 		if err := WriteInRoot(ws, path, nil, 0644, false); err == nil {
 			t.Fatalf("allowed protected path %s", path)
+		}
+	}
+	for _, allowed := range []string{".env.example", "deploy/.env.example", ".env.sample", ".env.template"} {
+		if err := AllowedPath(allowed); err != nil {
+			t.Fatalf("rejected safe template path %s: %v", allowed, err)
 		}
 	}
 	data, _ := os.ReadFile(secret)

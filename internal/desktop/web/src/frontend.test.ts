@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
-import { mapTaskSteps } from "./lib/stores/tasks";
-import { detectActiveToken, queryMentionCandidates } from "./lib/stores/search";
+import { mapTaskSteps, extractTaskSubagents } from "./lib/stores/tasks";
+import { detectActiveToken, queryMentionCandidates, parseInstructionSkillPills } from "./lib/stores/search";
+import { workspaceFiles } from "./lib/stores/workspace";
 import { parseUnifiedDiff, tokenizeCodeLines, MAX_HIGHLIGHT_LINES } from "./lib/diff";
 import TaskCard from "./components/TaskCard.svelte";
+import Message from "./components/Message.svelte";
+import SubagentsCard from "./components/cards/SubagentsCard.svelte";
+import FileTreeView from "./components/FileTreeView.svelte";
+import AgentBoardView from "./components/AgentBoardView.svelte";
 import ChangesCard from "./components/cards/ChangesCard.svelte";
 import VerificationCard from "./components/cards/VerificationCard.svelte";
 import DiffView from "./components/DiffView.svelte";
@@ -152,4 +157,96 @@ describe("components", () => {
     render(DiffView, { job: bigJob });
     expect(screen.getByTestId("plain-fallback-banner")).toBeInTheDocument();
   }, 30_000); // first Shiki grammar/theme load takes ~4s, more on a busy machine
+
+  it("renders Skill Pills, SubagentsCard, and FileTreeView", async () => {
+    const parsed = parseInstructionSkillPills("@skill:diagram-design ช่วยทำ diagram ของทุกระบบ");
+    expect(parsed.skills).toEqual(["diagram-design"]);
+    expect(parsed.cleanText).toBe("ช่วยทำ diagram ของทุกระบบ");
+
+    const { unmount: unmountMsg } = render(Message, {
+      props: {
+        turn: {
+          index: 1,
+          timestamp: "2026-10-21T00:00:00Z",
+          instruction: "@skill:diagram-design ช่วยทำ diagram ของทุกระบบ",
+          success: true,
+          applied: false,
+          summary: "done"
+        }
+      }
+    });
+    expect(screen.getByTestId("skill-pill")).toHaveTextContent("diagram-design");
+    unmountMsg();
+
+    const subJob: TaskJob = {
+      id: "task-sub-1",
+      instruction: "@skill:diagram-design วิเคราะห์ระบบ",
+      mode: "review",
+      status: "planning",
+      report: {}
+    };
+    const subEvents = [
+      {
+        seq: 1,
+        stage: "subagent_start",
+        message: "[SUBAGENT · start] Backend Codebase Auditor — internal/app/service.go (auditor-backend)"
+      },
+      {
+        seq: 2,
+        stage: "subagent_start",
+        message: "[SUBAGENT · start] Frontend Codebase Auditor — internal/desktop/web/src/App.svelte (auditor-frontend)"
+      }
+    ];
+    const extracted = extractTaskSubagents(subJob, subEvents);
+    expect(extracted.length).toBe(2);
+    expect(extracted[0].role).toBe("Backend Codebase Auditor");
+    expect(extracted[1].role).toBe("Frontend Codebase Auditor");
+
+    const { unmount: unmountSub } = render(SubagentsCard, { props: { job: subJob, events: subEvents } });
+    expect(screen.getByTestId("subagents-card")).toHaveTextContent("Subagents (2)");
+    expect(screen.getByTestId("subagents-card")).toHaveTextContent("2 running");
+    unmountSub();
+
+    workspaceFiles.set([
+      { path: ".apw/skills/diagram-design/SKILL.md", size: 120 },
+      { path: "cmd/apw-desktop/main.go", size: 340 },
+      { path: "internal/executor/subagent.go", size: 900 }
+    ]);
+    render(FileTreeView);
+    expect(screen.getByTestId("files-tree-view")).toHaveTextContent(".apw");
+    expect(screen.getByTestId("files-tree-view")).toHaveTextContent("cmd");
+    expect(screen.getByTestId("files-tree-view")).toHaveTextContent("internal");
+  });
+
+  it("renders AgentBoardView with Interactive Diagram Canvas, Structural Diff (Auto-collapsed Tests/Docs), Decision Log Red Pins, and Privacy Telemetry switch", async () => {
+    render(AgentBoardView);
+    expect(screen.getByTestId("agent-board-view")).toBeInTheDocument();
+    expect(screen.getByTestId("board-readonly-badge")).toHaveTextContent("READ-ONLY REVIEW");
+
+    // 1. Visual Sequence Lifeline SVG & XYFlow Interactive Node Canvas are rendered
+    expect(screen.getByTestId("sequence-lifeline-block")).toBeInTheDocument();
+    expect(screen.getByTestId("sequence-lifeline-svg")).toBeInTheDocument();
+    expect(screen.getByTestId("xyflow-canvas-block")).toBeInTheDocument();
+    expect(screen.getByTestId("xyflow-viewport")).toBeInTheDocument();
+
+    // Highlight element on Diagram Canvas -> Visual Feedback Loop dock shows up
+    const highlightBtn = screen.getByTestId("highlight-node-mcp");
+    await fireEvent.click(highlightBtn);
+    expect(screen.getByTestId("copy-visual-feedback-btn")).toBeInTheDocument();
+
+    // 2. Structural Diff has Core expanded by default and Tests/Docs auto-collapsed
+    expect(screen.getByTestId("diff-group-core")).toHaveTextContent("INPUT");
+    expect(screen.getByTestId("diff-group-test")).toHaveTextContent("พับเก็บอัตโนมัติ");
+    await fireEvent.click(screen.getByTestId("toggle-test-group-btn"));
+    expect(screen.getByTestId("diff-group-test")).toHaveTextContent("กางออกแล้ว");
+
+    // 3. Decision Log shows red pins for unprompted agent decisions
+    expect(screen.getAllByTestId("red-pin-indicator").length).toBeGreaterThan(0);
+
+    // 4. Privacy telemetry switch can be toggled
+    const telemetryToggle = screen.getByTestId("telemetry-switch-input") as HTMLInputElement;
+    expect(telemetryToggle.checked).toBe(false);
+    await fireEvent.click(telemetryToggle);
+    expect(telemetryToggle.checked).toBe(true);
+  });
 });

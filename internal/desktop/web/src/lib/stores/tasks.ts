@@ -6,7 +6,8 @@ import {
   type TaskEvent,
   type ToolApprovalRequest,
   type ApprovalsPayload,
-  type ExecutionPlan
+  type ExecutionPlan,
+  type SubagentReport
 } from "../api";
 import { workspaceStatus } from "./workspace";
 import {
@@ -147,7 +148,109 @@ export function mapTaskSteps(job: TaskJob, events: TaskEvent[] = []): StepBarSta
   };
 }
 
+/**
+ * Extracts active and completed subagents for a task from both persisted report.subagents
+ * and live streaming progress events (subagent_start / subagent_done / subagent_wave).
+ */
+export function extractTaskSubagents(job: TaskJob | null | undefined, events: TaskEvent[] = []): SubagentReport[] {
+  if (!job) return [];
+  const isRunning = ACTIVE_TASK_STATUSES.has(job.status);
+  const byId = new Map<string, SubagentReport>();
+
+  for (const s of job.report?.subagents || []) {
+    if (s && s.id) {
+      byId.set(s.id, { ...s });
+    }
+  }
+
+  const eventPattern = /^\[SUBAGENT\s*·\s*(start|done|failed|create|patch|read)\]\s*(.+?)\s*—\s*([^\s(]+)(?:\s*\(([^)]+)\))?$/i;
+
+  for (const ev of events) {
+    const stg = (ev.stage || "").toLowerCase();
+    const msg = (ev.message || "").trim();
+    if (stg === "subagent_start" || stg === "subagent_done" || (stg === "step_start" && msg.startsWith("[SUBAGENT"))) {
+      const m = eventPattern.exec(msg);
+      if (m) {
+        const rawKind = m[1].toLowerCase();
+        const roleOrId = m[2].trim();
+        const target = m[3].trim();
+        const explicitId = (m[4] || "").trim() || `${roleOrId}-${target}`;
+        const prev = byId.get(explicitId);
+        let status: "running" | "done" | "failed" = "running";
+        if (stg === "subagent_done" || rawKind === "done") {
+          status = "done";
+        } else if (rawKind === "failed") {
+          status = "failed";
+        } else if (prev?.status === "done" || prev?.status === "failed") {
+          status = prev.status as "done" | "failed";
+        }
+        const role =
+          roleOrId.includes("Auditor") || roleOrId.includes("Surgeon")
+            ? roleOrId
+            : `Surgeon Subagent · ${roleOrId}`;
+        byId.set(explicitId, {
+          id: explicitId,
+          role,
+          action: prev?.action || (role.includes("Auditor") ? "audit" : "create"),
+          target_file: target,
+          status,
+          detail: prev?.detail || target
+        });
+      }
+    }
+  }
+
+  const list = Array.from(byId.values());
+  if (!isRunning) {
+    for (const item of list) {
+      if (item.status === "running") {
+        item.status = job.status === "failed" ? "failed" : "done";
+      }
+    }
+  }
+  return list;
+}
+
 const watchedIds = new Set<string>();
+const DISMISSED_TASKS_KEY = "apw_dismissed_tasks_v1";
+
+function loadDismissedTaskIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_TASKS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return new Set(parsed);
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return new Set();
+}
+
+function saveDismissedTaskIds(set: Set<string>) {
+  try {
+    localStorage.setItem(DISMISSED_TASKS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export function dismissTask(taskId: string) {
+  if (!taskId) return;
+  const existing = get(tasks).find((t) => t.id === taskId);
+  if (existing && ACTIVE_TASK_STATUSES.has(existing.status)) {
+    void postAPI("/v1/tasks/" + encodeURIComponent(taskId) + "/cancel", {});
+  }
+  const dismissed = loadDismissedTaskIds();
+  dismissed.add(taskId);
+  saveDismissedTaskIds(dismissed);
+  tasks.update((list) => list.filter((t) => t.id !== taskId));
+  if (get(selectedTaskId) === taskId) {
+    selectedTaskId.set("");
+    const ws = get(workspaceStatus)?.workspace || "";
+    rememberSelectionForWorkspace(ws, { task_id: "" });
+  }
+}
 
 export async function loadApprovals(): Promise<ToolApprovalRequest[]> {
   const res = await getAPI<ApprovalsPayload>("/api/approvals");
@@ -176,7 +279,8 @@ export async function loadTasks(): Promise<TaskJob[]> {
   if (!res.ok || !Array.isArray(res.data)) {
     return [];
   }
-  const list = res.data;
+  const dismissed = loadDismissedTaskIds();
+  const list = res.data.filter((t) => !dismissed.has(t.id));
   tasks.set(list);
 
   const ws = get(workspaceStatus)?.workspace || "";
@@ -188,11 +292,9 @@ export async function loadTasks(): Promise<TaskJob[]> {
   } else if (!get(selectedTaskId) && sid) {
     const sessionTask = list.find((t) => t.session_id === sid || turnIds.has(t.id));
     if (sessionTask) selectedTaskId.set(sessionTask.id);
-  } else if (!get(selectedTaskId) && !sid && list.length > 0) {
-    selectedTaskId.set(list[0].id);
   }
 
-  for (const job of list.slice(0, 6)) {
+  for (const job of list) {
     if (ACTIVE_TASK_STATUSES.has(job.status)) {
       void watchTask(job.id);
     }
@@ -206,20 +308,16 @@ export async function selectTask(taskId: string, openReview = false): Promise<Ta
   selectedDiffFile.set("");
   latestPlans.set([]);
   const known = get(tasks).find((t) => t.id === taskId);
+  const ws = get(workspaceStatus)?.workspace || "";
   if (known?.session_id) {
     if (get(currentSessionId) !== known.session_id) {
       currentSessionId.set(known.session_id);
       void loadSessionDetail(known.session_id);
     }
-  } else if (known && get(currentSessionId)) {
-    const inCurrentTurns = get(sessionTurns).some((t) => t.task_id === taskId);
-    if (!inCurrentTurns) {
-      currentSessionId.set("");
-      sessionTurns.set([]);
-    }
+    rememberSelectionForWorkspace(ws, { session_id: known.session_id, task_id: taskId });
+  } else {
+    rememberSelectionForWorkspace(ws, { task_id: taskId });
   }
-  const ws = get(workspaceStatus)?.workspace || "";
-  rememberSelectionForWorkspace(ws, { task_id: taskId });
   if (openReview) {
     rightCollapsed.set(false);
     rightPanelView.set("cards");
@@ -254,6 +352,7 @@ export async function watchTask(taskId: string): Promise<void> {
   }
 
   try {
+    let failCount = 0;
     while (true) {
       const [evRes, jobRes] = await Promise.all([
         getAPI<TaskEvent[]>("/v1/tasks/" + encodeURIComponent(taskId) + "/events?after=" + cursor),
@@ -262,7 +361,11 @@ export async function watchTask(taskId: string): Promise<void> {
       void loadApprovals();
 
       if (evRes.ok && Array.isArray(evRes.data) && evRes.data.length > 0) {
-        const incoming = evRes.data;
+        const nowIso = new Date().toISOString();
+        const incoming = evRes.data.map((ev) => ({
+          ...ev,
+          timestamp: ev.timestamp || nowIso
+        }));
         cursor = incoming[incoming.length - 1].seq;
         taskEvents.update((cur) => ({
           ...cur,
@@ -270,8 +373,14 @@ export async function watchTask(taskId: string): Promise<void> {
         }));
       }
       if (!jobRes.ok || !jobRes.data) {
-        break;
+        failCount++;
+        if (failCount >= 10) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
       }
+      failCount = 0;
       const job = jobRes.data;
       tasks.update((list) => {
         const idx = list.findIndex((j) => j.id === job.id);
@@ -349,7 +458,7 @@ export async function submitComposerInstruction(
   tasks.update((list) => [job, ...list.filter((j) => j.id !== job.id)]);
   selectedTaskId.set(job.id);
   const ws = get(workspaceStatus)?.workspace || "";
-  rememberSelectionForWorkspace(ws, { task_id: job.id });
+  rememberSelectionForWorkspace(ws, { session_id: sessionId, task_id: job.id });
   recordOptimisticTurn(sessionId, {
     task_id: job.id,
     instruction,

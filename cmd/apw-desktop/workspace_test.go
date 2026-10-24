@@ -123,3 +123,27 @@ func TestWorkspaceHostReopenSameDirKeepsServer(t *testing.T) {
 		t.Fatal("reopening the same workspace replaced the desktop.Server (token changed)")
 	}
 }
+
+func TestBootstrapWorkspaceInitializesConfigAndGit(t *testing.T) {
+	tmplDir := t.TempDir()
+	writeConfig(t, tmplDir)
+	_ = os.MkdirAll(filepath.Join(tmplDir, ".apw"), 0o700)
+	_ = os.WriteFile(filepath.Join(tmplDir, ".apw", "auth.json"), []byte(`{"TEST_KEY":"secret"}`), 0o600)
+
+	targetDir := t.TempDir()
+	if err := BootstrapWorkspace(targetDir, tmplDir); err != nil {
+		t.Fatalf("BootstrapWorkspace: %v", err)
+	}
+
+	h := NewWorkspaceHost()
+	if err := h.Open(targetDir); err != nil {
+		t.Fatalf("Open bootstrapped workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, ".apw", "auth.json")); err != nil {
+		t.Fatalf("expected auth.json to be copied to bootstrapped workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, ".git")); err != nil {
+		t.Fatalf("expected .git to be initialized in bootstrapped workspace: %v", err)
+	}
+}
+

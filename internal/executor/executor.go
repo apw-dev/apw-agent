@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -31,11 +32,22 @@ type StepReport struct {
 	Message    string                  `json:"message"`
 }
 
+// SubagentReport records a named parallel subagent worker (Auditor or Surgeon) spawned during a task.
+type SubagentReport struct {
+	ID         string `json:"id"`
+	Role       string `json:"role"`
+	Action     string `json:"action"`
+	TargetFile string `json:"target_file,omitempty"`
+	Status     string `json:"status"` // "running", "done", "failed"
+	Detail     string `json:"detail,omitempty"`
+}
+
 // ExecutionReport summarizes the full Triad loop (Architect -> Surgeon -> Reflex).
 type ExecutionReport struct {
 	TaskID         string                     `json:"task_id"`
 	Plan           *architect.ExecutionPlan   `json:"plan"`
 	Steps          []StepReport               `json:"steps"`
+	Subagents      []SubagentReport           `json:"subagents,omitempty"`
 	ReflexAttempts []reflex.Attempt           `json:"reflex_attempts,omitempty"`
 	Passed         bool                       `json:"passed"`
 	Duration       time.Duration              `json:"duration"`
@@ -83,6 +95,7 @@ type Executor struct {
 	VerificationBaseline *reflex.VerificationResult
 	VerifiedFiles        map[string]surgeon.FileState
 	CurrentReport        *ExecutionReport
+	CurrentPlan          *architect.ExecutionPlan
 	Workspace            string
 	Architect            *architect.Architect
 	Surgeon              *surgeon.Surgeon
@@ -121,7 +134,10 @@ type Executor struct {
 	EpisodicContext string
 	// SubagentConcurrency bounds how many parallel Surgeon subagents may synthesize disjoint-file mutations in one wave.
 	SubagentConcurrency int
+	Subagents           []SubagentReport
+	subagentMu          sync.Mutex
 	directiveMu         sync.Mutex
+	progressMu          sync.Mutex
 }
 
 // Profile detects the project at root, applying any configured verification override.
@@ -135,6 +151,8 @@ func (e *Executor) Profile(root string) project.Profile {
 
 func (e *Executor) emit(ev ProgressEvent) {
 	if e.OnProgress != nil {
+		e.progressMu.Lock()
+		defer e.progressMu.Unlock()
 		e.OnProgress(ev)
 	}
 }
@@ -281,6 +299,12 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 	case architect.ActionRead:
 		content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) && e.Mode != core.ModeReview {
+				e.rememberRead(st.TargetFile, "(file does not exist yet)")
+				sr.Success = true
+				sr.Message = fmt.Sprintf("read %s (not found; will be created if needed)", st.TargetFile)
+				return sr, "", nil
+			}
 			return sr, "", err
 		}
 		e.rememberRead(st.TargetFile, content)
@@ -288,7 +312,8 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 		sr.Message = fmt.Sprintf("read %s (sha256 %s)", st.TargetFile, shortHash(hash))
 		return sr, "", nil
 	case architect.ActionCreate:
-		dir, err := e.askDirective(ctx, fmt.Sprintf("Create file %s.\nInstruction: %s\nRespond ONLY with JSON: {\"file_content\":\"...\"}", st.TargetFile, st.Instruction))
+		accHints := acceptanceHintsForFile(e.CurrentPlan, st.TargetFile)
+		dir, err := e.askDirective(ctx, fmt.Sprintf("Create file %s.\nInstruction: %s%s\nRespond ONLY with JSON: {\"file_content\":\"...\"}", st.TargetFile, st.Instruction, accHints))
 		if err != nil {
 			return sr, "", err
 		}
@@ -296,6 +321,7 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 		if content == "" {
 			content = dir.NewContent
 		}
+		content = sanitizeCodexPatchContent(st.TargetFile, content)
 		content = surgeon.FormatGoIfValid(st.TargetFile, content)
 		if err = ctx.Err(); err != nil {
 			return sr, "", err
@@ -304,26 +330,56 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 		if err != nil {
 			return sr, "", err
 		}
-		if before.Exists {
-			return sr, "", errors.New("create target already exists")
-		}
 		if e.mutation != nil {
 			if err = e.mutation(st.TargetFile, before, surgeon.FileState{Exists: true, Hash: surgeon.CalculateHash(content), Mode: 0644}); err != nil {
 				return sr, "", err
 			}
 		}
-		if err = surgeon.WriteInRoot(base, st.TargetFile, []byte(content), 0644, true); err != nil {
-			return sr, "", err
-		}
-	case architect.ActionPatch:
-		content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
-		if err != nil {
+		if err = surgeon.WriteInRoot(base, st.TargetFile, []byte(content), 0644, !before.Exists); err != nil {
 			return sr, "", err
 		}
 		e.rememberRead(st.TargetFile, content)
-		prompt := fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, content)
+	case architect.ActionPatch:
+		accHints := acceptanceHintsForFile(e.CurrentPlan, st.TargetFile)
+		content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				dir, askErr := e.askDirective(ctx, fmt.Sprintf("Create file %s.\nInstruction: %s%s\nRespond ONLY with JSON: {\"file_content\":\"...\"}", st.TargetFile, st.Instruction, accHints))
+				if askErr != nil {
+					return sr, "", askErr
+				}
+				newFileContent := dir.FileContent
+				if newFileContent == "" {
+					newFileContent = dir.NewContent
+				}
+				newFileContent = sanitizeCodexPatchContent(st.TargetFile, newFileContent)
+				newFileContent = surgeon.FormatGoIfValid(st.TargetFile, newFileContent)
+				if err = ctx.Err(); err != nil {
+					return sr, "", err
+				}
+				before := surgeon.FileState{}
+				if e.mutation != nil {
+					if err = e.mutation(st.TargetFile, before, surgeon.FileState{Exists: true, Hash: surgeon.CalculateHash(newFileContent), Mode: 0644}); err != nil {
+						return sr, "", err
+					}
+				}
+				if err = surgeon.WriteInRoot(base, st.TargetFile, []byte(newFileContent), 0644, true); err != nil {
+					return sr, "", err
+				}
+				e.rememberRead(st.TargetFile, newFileContent)
+				sr.Success = true
+				sr.Message = fmt.Sprintf("create %s", st.TargetFile)
+				return sr, st.TargetFile, nil
+			}
+			return sr, "", err
+		}
+		e.rememberRead(st.TargetFile, content)
+		prompt := fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s%s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, accHints, promptSourceSnippet(st.TargetFile, content))
 		if _, err = e.patchWithRetry(ctx, base, surg, st.TargetFile, hash, false, prompt); err != nil {
 			return sr, "", err
+		}
+		if updated, _, readErr := surg.ReadWorkspaceFile(base, st.TargetFile); readErr == nil {
+			e.rememberRead(st.TargetFile, updated)
 		}
 	case architect.ActionDelete:
 		if err := ctx.Err(); err != nil {
@@ -351,11 +407,17 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 
 func (e *Executor) repairWithReflex(ctx context.Context, base string, surg *surgeon.Surgeon, diagnostics string, files *[]string) error {
 	target := ""
-	if len(*files) > 0 {
+	for i := len(*files) - 1; i >= 0; i-- {
+		if !isLockFile((*files)[i]) {
+			target = (*files)[i]
+			break
+		}
+	}
+	if target == "" && len(*files) > 0 {
 		target = (*files)[len(*files)-1]
 	}
 	diagFiles := extractDiagnosticFiles(base, diagnostics)
-	if target == "" && len(diagFiles) > 0 {
+	if len(diagFiles) > 0 && (target == "" || isLockFile(target)) {
 		target = diagFiles[0]
 	}
 	var content string
@@ -363,7 +425,7 @@ func (e *Executor) repairWithReflex(ctx context.Context, base string, surg *surg
 		content, _, _ = surg.ReadWorkspaceFile(base, target)
 	}
 	extraContext := buildDiagnosticContext(base, surg, target, diagFiles, *files)
-	prompt := fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, content, extraContext)
+	prompt := fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, promptSourceSnippet(target, content), extraContext)
 	patched, err := e.patchWithRetry(ctx, base, surg, target, "", true, prompt)
 	if err == nil {
 		appendModifiedFile(files, patched)
@@ -397,7 +459,7 @@ func (e *Executor) patchWithRetry(ctx context.Context, base string, surg *surgeo
 			return "", err
 		}
 		file := target
-		if allowTarget && dir.TargetFile != "" {
+		if allowTarget && dir.TargetFile != "" && dir.TargetFile != "apw.json" {
 			file = dir.TargetFile
 		}
 		if file == "" {
@@ -405,6 +467,23 @@ func (e *Executor) patchWithRetry(ctx context.Context, base string, surg *surgeo
 		}
 		current, hash, err := surg.ReadWorkspaceFile(base, file)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) && (dir.FileContent != "" || dir.NewContent != "") {
+				newFileContent := dir.FileContent
+				if newFileContent == "" {
+					newFileContent = dir.NewContent
+				}
+				newFileContent = sanitizeCodexPatchContent(file, newFileContent)
+				newFileContent = surgeon.FormatGoIfValid(file, newFileContent)
+				if e.mutation != nil {
+					if mErr := e.mutation(file, surgeon.FileState{}, surgeon.FileState{Exists: true, Hash: surgeon.CalculateHash(newFileContent), Mode: 0644}); mErr != nil {
+						return "", mErr
+					}
+				}
+				if wErr := surgeon.WriteInRoot(base, file, []byte(newFileContent), 0644, true); wErr != nil {
+					return "", wErr
+				}
+				return file, nil
+			}
 			return "", err
 		}
 		if attempt == 1 && shownHash != "" && file == target {
@@ -459,12 +538,16 @@ func parsePatchDirective(raw string) (*patchDirective, error) {
 	jsonStr := raw
 	if idx := strings.Index(raw, "```json"); idx != -1 {
 		rest := raw[idx+7:]
-		if endIdx := strings.Index(rest, "```"); endIdx != -1 {
+		if endIdx := strings.LastIndex(rest, "```"); endIdx != -1 {
+			jsonStr = rest[:endIdx]
+		} else if endIdx := strings.Index(rest, "```"); endIdx != -1 {
 			jsonStr = rest[:endIdx]
 		}
 	} else if idx := strings.Index(raw, "```"); idx != -1 {
 		rest := raw[idx+3:]
-		if endIdx := strings.Index(rest, "```"); endIdx != -1 {
+		if endIdx := strings.LastIndex(rest, "```"); endIdx != -1 {
+			jsonStr = rest[:endIdx]
+		} else if endIdx := strings.Index(rest, "```"); endIdx != -1 {
 			jsonStr = rest[:endIdx]
 		}
 	}
@@ -596,4 +679,62 @@ func shortHash(h string) string {
 		return h[:8]
 	}
 	return h
+}
+
+// sanitizeCodexPatchContent cleans file_content when a model accidentally emits an apply_patch
+// block (*** Begin Patch / *** Add File: ...) instead of raw file content.
+func sanitizeCodexPatchContent(targetFile, content string) string {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "*** Begin Patch") && !strings.HasPrefix(trimmed, "*** Add File:") && !strings.HasPrefix(trimmed, "*** Update File:") {
+		return content
+	}
+	normTarget := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(targetFile), "\\", "/"))
+	lines := strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n")
+
+	type fileSection struct {
+		path  string
+		lines []string
+	}
+	var sections []fileSection
+	var current *fileSection
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "*** Begin Patch") || strings.HasPrefix(line, "*** End Patch") {
+			continue
+		}
+		if strings.HasPrefix(line, "*** Add File:") || strings.HasPrefix(line, "*** Update File:") {
+			idx := strings.Index(line, ":")
+			p := ""
+			if idx != -1 {
+				p = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(line[idx+1:]), "\\", "/"))
+			}
+			sections = append(sections, fileSection{path: p})
+			current = &sections[len(sections)-1]
+			continue
+		}
+		if strings.HasPrefix(line, "*** ") || strings.HasPrefix(line, "@@") {
+			continue
+		}
+		if current == nil {
+			sections = append(sections, fileSection{path: normTarget})
+			current = &sections[len(sections)-1]
+		}
+		if strings.HasPrefix(line, "+") {
+			current.lines = append(current.lines, line[1:])
+		} else if !strings.HasPrefix(line, "-") {
+			current.lines = append(current.lines, line)
+		}
+	}
+
+	if len(sections) == 0 {
+		return content
+	}
+	chosen := sections[0]
+	for _, s := range sections {
+		if s.path == normTarget || (normTarget != "" && strings.HasSuffix(s.path, "/"+normTarget)) || (s.path != "" && strings.HasSuffix(normTarget, "/"+s.path)) {
+			chosen = s
+			break
+		}
+	}
+	return strings.Join(chosen.lines, "\n") + "\n"
 }

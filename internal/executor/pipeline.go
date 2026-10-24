@@ -39,6 +39,10 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	if !surgeon.IsGitRepo(e.Workspace) {
 		return nil, errors.New("preview/execute requires a Git repository with an initial commit")
 	}
+	e.emit(ProgressEvent{Stage: "analyzing", Message: "Scanning workspace structure and building AST context..."})
+	if pinned := expandPromptMentions(e.Workspace, instruction, nil); pinned != "" && !strings.Contains(e.ReadContext, pinned) {
+		e.ReadContext += pinned
+	}
 	contextText := overview + "\n" + ProjectOverviewForTask(e.Workspace, instruction, e.Profile(e.Workspace))
 	if e.EpisodicContext != "" {
 		contextText = e.EpisodicContext + "\n" + contextText
@@ -50,6 +54,11 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 		return nil, hookErr
 	} else if hookCtx != "" {
 		contextText = hookCtx + "\n" + contextText
+	}
+	if e.Mode != core.ModeVerify {
+		if auditCtx := e.runDomainAuditSubagents(ctx); auditCtx != "" {
+			contextText += "\n" + auditCtx
+		}
 	}
 	e.emit(ProgressEvent{Stage: "planning", Message: "Building plan from source context"})
 	var plan *architect.ExecutionPlan
@@ -100,6 +109,9 @@ func (e *Executor) review(ctx context.Context, instruction, overview string) (*E
 	if e.Session != nil {
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
+	if auditCtx := e.runDomainAuditSubagents(ctx); auditCtx != "" {
+		overview += "\n" + auditCtx
+	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})
 	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + ProjectOverviewForTask(e.Workspace, instruction, e.Profile(e.Workspace))
 	var summary string
@@ -120,7 +132,7 @@ func (e *Executor) review(ctx context.Context, instruction, overview string) (*E
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutionReport{TaskID: e.TaskID, Mode: core.ModeReview, Passed: true, Summary: summary}, nil
+	return &ExecutionReport{TaskID: e.TaskID, Mode: core.ModeReview, Passed: true, Summary: summary, Subagents: e.snapshotSubagents()}, nil
 }
 
 func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionReport, error) {
@@ -173,6 +185,7 @@ func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionRep
 	}
 	e.TaskID = cp.TaskID
 	e.Failover = cp.Failover
+	e.Failover.Models = make(map[string]time.Time)
 	e.ReadContext = cp.ReadContext
 	e.VerificationBaseline = cp.Baseline
 	e.Phase = "working"
@@ -181,10 +194,12 @@ func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionRep
 
 func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.ExecutionPlan, wt *surgeon.Worktree, completed int, files []string, instruction string) (*ExecutionReport, error) {
 	start := time.Now()
+	e.CurrentPlan = plan
 	modified := append([]string{}, files...)
-	report := &ExecutionReport{TaskID: plan.TaskID, Plan: plan, Mode: e.Mode, WorktreePath: wt.Path, Baseline: e.VerificationBaseline, Steps: append([]StepReport{}, e.RecoveredSteps...), Research: e.ResearchSources}
+	report := &ExecutionReport{TaskID: plan.TaskID, Plan: plan, Mode: e.Mode, WorktreePath: wt.Path, Baseline: e.VerificationBaseline, Steps: append([]StepReport{}, e.RecoveredSteps...), Subagents: e.snapshotSubagents(), Research: e.ResearchSources}
 	save := func() error {
 		report.ModifiedFiles = append([]string{}, modified...)
+		report.Subagents = e.snapshotSubagents()
 		report.Duration = time.Since(start)
 		e.CurrentReport = report
 		return e.saveExecutionCheckpoint(plan, wt, completed, modified)
@@ -204,6 +219,23 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 	for i := completed; i < len(plan.Subtasks); i++ {
 		if err := ctx.Err(); err != nil {
 			return report, errors.Join(err, save())
+		}
+		if readWave := collectDisjointReadWave(plan.Subtasks, i, e.SubagentConcurrency); len(readWave) >= 2 {
+			waveErr := e.runReadSubagentWave(ctx, wt.Path, surg, plan.Subtasks, readWave, func(stepIdx int, sr StepReport, _ string) error {
+				report.Steps = append(report.Steps, sr)
+				e.emit(ProgressEvent{Stage: "step_done", StepIndex: stepIdx + 1, TotalSteps: len(plan.Subtasks), Step: &sr, Message: sr.Message})
+				if !sr.Success {
+					return save()
+				}
+				completed = stepIdx + 1
+				e.Pending = nil
+				return save()
+			})
+			if waveErr != nil {
+				return report, errors.Join(waveErr, save())
+			}
+			i = readWave[len(readWave)-1]
+			continue
 		}
 		if wave := collectDisjointMutationWave(plan.Subtasks, i, e.SubagentConcurrency); len(wave) >= 2 && e.Mode != core.ModeReview {
 			waveErr := e.runSubagentWave(ctx, wt.Path, surg, plan.Subtasks, wave, func(stepIdx int, sr StepReport, path string) error {
@@ -267,26 +299,40 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 			report.Summary += "\nChanges are retained in the worktree. Explicit apply is required."
 		}
 	} else {
+		if e.Mode == core.ModeExecute {
+			e.repairUnmetAcceptance(ctx, wt.Path, surg, plan, wt, &modified, &report.Steps, save)
+		}
 		e.emit(ProgressEvent{Stage: "verifying", Message: "Verifying isolated changes"})
-		engine := reflex.NewReflexEngineForProfile(wt.Path, e.Reflex.MaxRetries, e.Profile(wt.Path))
+		prof := e.Profile(wt.Path)
+		engine := reflex.NewReflexEngineForProfile(wt.Path, e.Reflex.MaxRetries, prof)
 		engine.Verifier.Sandbox = e.Sandbox
 		engine.Verifier.OnlyFiles = modified
-		attempts, err := engine.Run(ctx, func(ctx context.Context, diagnostics string) error {
-			if e.Mode == core.ModeVerify {
-				return errors.New("verification failed; verification mode does not repair files")
-			}
-			err := e.repairWithReflex(ctx, wt.Path, surg, diagnostics, &modified)
-			engine.Verifier.OnlyFiles = modified
-			if err == nil {
-				e.Pending = nil
-			}
-			return errors.Join(err, save())
-		})
+		// Without a pipeline nothing can verify the change, and no source repair can add one:
+		// report the missing pipeline once instead of asking models to repair or re-plan.
+		// File-level checks alone never mark a task verified; unverified mode is for that.
+		noPipeline := len(prof.Stages) == 0
+		var attempts []reflex.Attempt
+		var err error
+		if noPipeline {
+			attempts = []reflex.Attempt{{Number: 1, Result: engine.Verifier.Verify(ctx)}}
+		} else {
+			attempts, err = engine.Run(ctx, func(ctx context.Context, diagnostics string) error {
+				if e.Mode == core.ModeVerify {
+					return errors.New("verification failed; verification mode does not repair files")
+				}
+				err := e.repairWithReflex(ctx, wt.Path, surg, diagnostics, &modified)
+				engine.Verifier.OnlyFiles = modified
+				if err == nil {
+					e.Pending = nil
+				}
+				return errors.Join(err, save())
+			})
+		}
 		report.ReflexAttempts = attempts
 		if len(attempts) > 0 {
 			report.Diagnostics = compareDiagnostics(report.Baseline, attempts[len(attempts)-1].Result)
 		}
-		for replanRound := 1; replanRound <= e.MaxReplans && e.Mode == core.ModeExecute && (err != nil || len(attempts) == 0 || !attempts[len(attempts)-1].Result.Passed); replanRound++ {
+		for replanRound := 1; replanRound <= e.MaxReplans && e.Mode == core.ModeExecute && !noPipeline && (err != nil || len(attempts) == 0 || !attempts[len(attempts)-1].Result.Passed); replanRound++ {
 			diagText := ""
 			if len(attempts) > 0 && attempts[len(attempts)-1].Result != nil {
 				diagText = reflex.FormatDiagnostics(attempts[len(attempts)-1].Result)
@@ -337,6 +383,10 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 		verified := len(attempts) > 0 && attempts[len(attempts)-1].Result.Passed
 		var accepted bool
 		report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, verified, wt, e.pageVisitor(ctx, wt.Path), false)
+		if !accepted && e.Mode == core.ModeExecute {
+			e.repairUnmetAcceptance(ctx, wt.Path, surg, plan, wt, &modified, &report.Steps, save)
+			report.Acceptance, accepted = acceptanceSnapshot(wt.Path, plan, verified, wt, e.pageVisitor(ctx, wt.Path), false)
+		}
 		report.Passed = verified && accepted
 		if hookCtx, hookErr := e.runLifecycleHooks(ctx, HookPostVerify, "", instruction); hookErr != nil {
 			report.Passed = false

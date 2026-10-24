@@ -191,7 +191,7 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 		instructionCommand := head == "run" || head == "review" || head == "preview" || head == "plan"
 		parseArgs := false
 		switch head {
-		case "verify", "symbols", "search", "resume", "apply", "task", "tasks", "cancel", "trust", "watch", "diff", "recover", "cleanup", "daemon", "model", "models", "config", "auth", "login", "mode":
+		case "verify", "symbols", "search", "resume", "apply", "task", "tasks", "cancel", "trust", "watch", "diff", "recover", "cleanup", "daemon", "model", "models", "config", "auth", "login", "channel", "channels", "messaging", "mode":
 			parseArgs = true
 		}
 		var args []string
@@ -287,6 +287,8 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 			_ = runModelCmdWithStdin(withConfig(args), stdin, stdout, stderr)
 		case "auth", "login":
 			_ = runAuthCmdWithStdin(withConfig(args), stdin, stdout, stderr)
+		case "channel", "channels", "messaging":
+			_ = runChannelCmdWithStdin(withConfig(args), stdin, stdout, stderr)
 		case "desktop", "ui":
 			url, err := desktop.NewServer(configPath, version).StartAndOpen(ctx, "127.0.0.1:0", true)
 			if err != nil {

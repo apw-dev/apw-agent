@@ -80,12 +80,15 @@ func (e *Executor) replanWithArchitect(ctx context.Context, base, instruction st
 	contextBuilder.WriteString("Previous Plan Objective: " + prevPlan.Objective + "\n")
 	contextBuilder.WriteString("Already Modified Files: " + strings.Join(modified, ", ") + "\n")
 	onlyChangesAllowed := map[string]bool{}
+	unchangedForbidden := map[string]bool{}
 	for _, chk := range prevPlan.Checks {
 		if chk.Kind == "only_changes" && len(chk.Files) > 0 {
 			contextBuilder.WriteString("Allowed Modified Files Constraint (only_changes): " + strings.Join(chk.Files, ", ") + " — DO NOT modify any files outside this list.\n")
 			for _, f := range chk.Files {
 				onlyChangesAllowed[filepath.Clean(filepath.FromSlash(strings.TrimSpace(f)))] = true
 			}
+		} else if chk.Kind == "unchanged" && strings.TrimSpace(chk.File) != "" {
+			unchangedForbidden[filepath.Clean(filepath.FromSlash(strings.TrimSpace(chk.File)))] = true
 		}
 	}
 	contextBuilder.WriteString("\nVerification Failure Diagnostics:\n" + headUTF8(diagnostics, 16*1024) + "\n")
@@ -124,9 +127,12 @@ func (e *Executor) replanWithArchitect(ctx context.Context, base, instruction st
 			if err := surgeon.AllowedPath(st.TargetFile); err != nil {
 				return nil, err
 			}
-			if len(onlyChangesAllowed) > 0 && st.Action != architect.ActionRead {
+			if st.Action != architect.ActionRead {
 				clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(st.TargetFile)))
-				if !onlyChangesAllowed[clean] {
+				if unchangedForbidden[clean] {
+					continue
+				}
+				if len(onlyChangesAllowed) > 0 && !onlyChangesAllowed[clean] {
 					continue
 				}
 			}

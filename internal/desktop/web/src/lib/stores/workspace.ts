@@ -4,20 +4,28 @@ import {
   postAPI,
   type StatusPayload,
   type ModelsPayload,
+  type ChannelsPayload,
   type AutonomyPayload,
   type FileSymbols,
   type GraphPayload,
-  type FilePayload
+  type FilePayload,
+  type FileTreeEntry,
+  type FilesTreePayload,
+  type AgentBoardPayload
 } from "../api";
 
 export const workspaceStatus = writable<StatusPayload | null>(null);
+export const agentBoardState = writable<AgentBoardPayload | null>(null);
 export const connectionState = writable<"connecting" | "connected" | "error">("connecting");
 export const connectionError = writable<string>("");
 export const modelsState = writable<ModelsPayload | null>(null);
+export const channelsState = writable<ChannelsPayload | null>(null);
 export const autonomyState = writable<AutonomyPayload | null>(null);
 export const instructionsContent = writable<{ path: string; content: string; truncated: boolean } | null>(null);
 export const workspaceSymbols = writable<FileSymbols[]>([]);
 export const workspaceGraph = writable<GraphPayload | null>(null);
+export const workspaceFiles = writable<FileTreeEntry[]>([]);
+export const workspaceFilesSource = writable<string>("workspace");
 export const activeFileView = writable<FilePayload | null>(null);
 export const inlineWorkspaceError = writable<string>("");
 
@@ -55,6 +63,31 @@ export async function saveModelsConfig(patch: {
   }
   modelsState.set(res.data);
   await loadStatus();
+  return { ok: true, message: "" };
+}
+
+export async function loadChannels(): Promise<ChannelsPayload | null> {
+  const res = await getAPI<ChannelsPayload>("/api/channels");
+  if (res.ok && res.data) {
+    channelsState.set(res.data);
+    return res.data;
+  }
+  return null;
+}
+
+export async function saveChannelsConfig(patch: {
+  telegram: {
+    enabled?: boolean;
+    token?: string;
+    clear_token?: boolean;
+    allow_users?: number[];
+  };
+}): Promise<{ ok: boolean; message: string }> {
+  const res = await postAPI<ChannelsPayload>("/api/channels", patch);
+  if (!res.ok || !res.data) {
+    return { ok: false, message: res.message };
+  }
+  channelsState.set(res.data);
   return { ok: true, message: "" };
 }
 
@@ -192,4 +225,23 @@ export async function fetchWorkspaceGraph(): Promise<{ ok: boolean; message: str
   if (!res.ok || !res.data) return { ok: false, message: res.message };
   workspaceGraph.set(res.data);
   return { ok: true, message: "" };
+}
+
+export async function fetchWorkspaceFiles(taskId?: string): Promise<{ ok: boolean; message: string }> {
+  const url = "/api/files" + (taskId ? "?task=" + encodeURIComponent(taskId) : "");
+  const res = await getAPI<FilesTreePayload>(url);
+  if (!res.ok || !res.data) return { ok: false, message: res.message };
+  workspaceFiles.set(res.data.files || []);
+  workspaceFilesSource.set(res.data.source || "workspace");
+  return { ok: true, message: "" };
+}
+
+export async function loadAgentBoard(taskId?: string): Promise<AgentBoardPayload | null> {
+  const url = "/api/board" + (taskId ? "?task=" + encodeURIComponent(taskId) : "");
+  const res = await getAPI<AgentBoardPayload>(url);
+  if (res.ok && res.data) {
+    agentBoardState.set(res.data);
+    return res.data;
+  }
+  return null;
 }

@@ -47,6 +47,18 @@ func (r winRect) rect() Rect {
 	return Rect{int(r.Left), int(r.Top), int(r.Right - r.Left), int(r.Bottom - r.Top)}
 }
 
+// existingWindowPID returns the PID of any process currently owning an APWDesktopWindow, or 0.
+func existingWindowPID() int {
+	cls, _ := windows.UTF16PtrFromString(windowClassName)
+	h, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(cls)), 0)
+	if h == 0 {
+		return 0
+	}
+	var pid uint32
+	procGetWindowThreadProcessId.Call(h, uintptr(unsafe.Pointer(&pid)))
+	return int(pid)
+}
+
 // mainWindow returns this process's APW window.
 func mainWindow() (uintptr, bool) {
 	cls, _ := windows.UTF16PtrFromString(windowClassName)

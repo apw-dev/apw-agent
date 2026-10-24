@@ -1,12 +1,30 @@
 <script lang="ts">
+  import { Play, Copy, Check, ExternalLink } from "lucide-svelte";
   import { parseMarkdownBlocks, type InlineToken } from "../lib/markdown";
   import { fetchWorkspaceFile } from "../lib/stores/workspace";
   import { rightCollapsed, rightPanelView } from "../lib/stores/settings";
   import { openExternalURL } from "../lib/shell";
+  import {
+    isRunnableCommandSnippet,
+    runCommandInAPW,
+    openCommandInExternalTerminal,
+    copyTextToClipboard
+  } from "../lib/stores/terminal";
 
   let { text = "", taskId }: { text: string; taskId?: string } = $props();
+  let copiedKey = $state("");
 
   const blocks = $derived(parseMarkdownBlocks(text));
+
+  async function flashCopy(key: string, value: string) {
+    const ok = await copyTextToClipboard(value);
+    if (ok) {
+      copiedKey = key;
+      setTimeout(() => {
+        if (copiedKey === key) copiedKey = "";
+      }, 1500);
+    }
+  }
 
   async function onLinkClick(tok: Extract<InlineToken, { kind: "link" }>) {
     if (tok.filePath) {
@@ -29,13 +47,44 @@
 </script>
 
 {#snippet renderInline(tokens: InlineToken[])}
-  {#each tokens as tok}
+  {#each tokens as tok, idx}
     {#if tok.kind === "text"}
       {tok.text}
     {:else if tok.kind === "bold"}
       <strong>{tok.text}</strong>
     {:else if tok.kind === "code"}
-      <code class="md-inline-code mono">{tok.text}</code>
+      {#if isRunnableCommandSnippet(tok.text)}
+        <span class="md-inline-cmd-pod mono">
+          <code class="md-inline-cmd-txt">{tok.text}</code>
+          <button
+            type="button"
+            class="inline-cmd-btn run"
+            onclick={() => runCommandInAPW(tok.text)}
+            title={`รันใน APW: ${tok.text}`}
+          >
+            ▶ รัน
+          </button>
+          <button
+            type="button"
+            class="inline-cmd-btn"
+            onclick={() => flashCopy(`inline-${idx}-${tok.text}`, tok.text)}
+            title={`คัดลอก: ${tok.text}`}
+          >
+            {copiedKey === `inline-${idx}-${tok.text}` ? "✓" : "คัดลอก"}
+          </button>
+        </span>
+      {:else if /^https?:\/\/(?:localhost|127\.0\.0\.1):\d+/i.test(tok.text.trim())}
+        <button
+          type="button"
+          class="md-link mono"
+          onclick={() => openExternalURL(tok.text.trim())}
+          title={`เปิด ${tok.text.trim()}`}
+        >
+          🌐 {tok.text.trim()}
+        </button>
+      {:else}
+        <code class="md-inline-code mono">{tok.text}</code>
+      {/if}
     {:else if tok.kind === "link"}
       {#if tok.filePath || tok.href.startsWith("http://") || tok.href.startsWith("https://")}
         <button
@@ -54,7 +103,7 @@
 {/snippet}
 
 <div class="md-body selectable">
-  {#each blocks as block}
+  {#each blocks as block, bIdx}
     {#if block.kind === "heading"}
       {#if block.level === 1}
         <h3 class="md-h1">{@render renderInline(block.tokens)}</h3>
@@ -64,10 +113,47 @@
         <h5 class="md-h3">{@render renderInline(block.tokens)}</h5>
       {/if}
     {:else if block.kind === "codeblock"}
-      <div class="md-codeblock">
-        {#if block.lang}
-          <div class="md-code-lang mono">{block.lang}</div>
-        {/if}
+      {@const runnable = isRunnableCommandSnippet(block.code, block.lang)}
+      <div class="md-codeblock" class:runnable-pod={runnable}>
+        <div class="md-code-hdr">
+          <span class="md-code-lang mono">{block.lang || (runnable ? "terminal" : "code")}</span>
+          <div class="md-code-actions">
+            {#if runnable}
+              <button
+                type="button"
+                class="code-act-btn run"
+                onclick={() => runCommandInAPW(block.code)}
+                title="รันคำสั่งนี้ใน APW Live Console"
+              >
+                <Play size={11} />
+                <span>รันใน APW</span>
+              </button>
+              <button
+                type="button"
+                class="code-act-btn"
+                onclick={() => openCommandInExternalTerminal(block.code)}
+                title="เปิดหน้าต่าง PowerShell แยกเพื่อรันคำสั่งนี้"
+              >
+                <ExternalLink size={11} />
+                <span>เปิด Terminal</span>
+              </button>
+            {/if}
+            <button
+              type="button"
+              class="code-act-btn"
+              onclick={() => flashCopy(`cb-${bIdx}`, block.code)}
+              title="คัดลอกโค้ด/คำสั่ง"
+            >
+              {#if copiedKey === `cb-${bIdx}`}
+                <Check size={11} />
+                <span>คัดลอกแล้ว</span>
+              {:else}
+                <Copy size={11} />
+                <span>คัดลอก</span>
+              {/if}
+            </button>
+          </div>
+        </div>
         <pre class="mono"><code>{block.code}</code></pre>
       </div>
     {:else if block.kind === "list"}
@@ -143,6 +229,39 @@
     font-size: 11.5px;
     color: var(--text);
   }
+  .md-inline-cmd-pod {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 4px 1px 6px;
+    border-radius: 6px;
+    background: var(--panel-subtle);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+    font-size: 11.5px;
+    vertical-align: middle;
+  }
+  .md-inline-cmd-txt {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .inline-cmd-btn {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--muted);
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 10px;
+    line-height: 1.5;
+  }
+  .inline-cmd-btn.run {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    font-weight: 600;
+  }
+  .inline-cmd-btn:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
   .md-link {
     border: none;
     background: var(--accent-soft);
@@ -158,16 +277,55 @@
   }
   .md-codeblock {
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--panel-subtle);
     overflow: hidden;
   }
-  .md-code-lang {
-    padding: 3px 8px;
-    font-size: 10.5px;
-    color: var(--faint);
+  .md-codeblock.runnable-pod {
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  }
+  .md-code-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
+  }
+  .md-code-lang {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .md-code-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .code-act-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 5px;
+    border: 1px solid var(--line);
+    background: var(--panel-subtle);
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 500;
+  }
+  .code-act-btn.run {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .code-act-btn:hover {
+    background: var(--hover);
+    color: var(--text);
   }
   .md-codeblock pre {
     margin: 0;

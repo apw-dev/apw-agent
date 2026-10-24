@@ -77,6 +77,14 @@ test("Desktop completion gate: create conversation -> review -> preview -> inspe
   await expect(page.getByTestId("status-card")).toContainText("Applied");
   await expect(page.getByText("แก้ไขและรันทดสอบ governor").first()).toBeVisible();
 
+  await page.getByTestId("new-conversation-btn").click();
+  await expect(page.getByTestId("task-card")).toHaveCount(0);
+  await expect(page.getByTestId("conversation-turn")).toHaveCount(0);
+
+  await expect(page.getByTestId("session-item")).toHaveCount(1);
+  await page.getByTestId("delete-session-btn").first().click({ force: true });
+  await expect(page.getByTestId("session-item")).toHaveCount(0);
+
   expect(problems, problems.join("\n")).toEqual([]);
 });
 
@@ -119,12 +127,23 @@ test("Desktop native shell behaviors: dark theme, custom context menu, blocked b
   await page.goto("/");
   await expect(page.getByTestId("app-shell")).toBeVisible();
 
-  // Check #3: dark theme loaded from GetShellState and toggled via Settings
+  // Check #3: dark theme loaded from GetShellState and toggled via Settings, plus Messaging channel settings
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.keyboard.press("Control+,");
   await expect(page.getByTestId("theme-light-btn")).toBeVisible();
   await page.getByTestId("theme-light-btn").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+  await page.getByTestId("settings-tab-messaging").click();
+  await page.getByTestId("telegram-enabled-checkbox").check();
+  await page.getByTestId("telegram-token-input").fill("123456789:ABCdefGHIjklMNOpqrSTUvwxYZ");
+  await page.getByTestId("telegram-allow-input").fill("111222333, 444555666");
+  await page.getByTestId("save-settings-btn").click();
+  await expect(page.getByTestId("settings-saved")).toBeVisible();
+  await expect(page.getByTestId("telegram-token-status")).toContainText("1234...xYZ");
+  await page.getByTestId("clear-telegram-token-btn").click();
+  await expect(page.getByTestId("telegram-token-status")).toHaveCount(0);
+
   await page.keyboard.press("Escape");
 
   // Submit review & preview so we have a markdown link and a [data-file-path] element

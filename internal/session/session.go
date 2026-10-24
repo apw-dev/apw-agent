@@ -105,6 +105,9 @@ func (s *Session) RecordTurn(t Turn) {
 		for i := len(s.History) - 1; i >= 0; i-- {
 			if s.History[i].TaskID == t.TaskID {
 				t.Index = s.History[i].Index
+				if !s.History[i].Timestamp.IsZero() {
+					t.Timestamp = s.History[i].Timestamp
+				}
 				if t.Instruction == "" {
 					t.Instruction = s.History[i].Instruction
 				}
@@ -323,6 +326,19 @@ func Load(workspace, sessionID string) (*Session, error) {
 		sess.Memory.FileCheckpoints = make(map[string]string)
 	}
 	return &sess, nil
+}
+
+// Delete removes a persisted session file from `.apw/sessions/<id>.json`.
+// Removing a missing session file is not an error.
+func Delete(workspace, sessionID string) error {
+	if !validID(sessionID) {
+		return fmt.Errorf("invalid session ID")
+	}
+	path := filepath.Join(workspace, ".apw", "sessions", fmt.Sprintf("%s.json", sessionID))
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove session file: %w", err)
+	}
+	return nil
 }
 
 // digest compresses a turn into one bounded line: index, outcome, request and changed files.

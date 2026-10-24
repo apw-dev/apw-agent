@@ -157,6 +157,28 @@ func TestOverrideFromConfigReplacesPipeline(t *testing.T) {
 	}
 }
 
+func TestDetectNodeMultiPackageSubprojects(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, map[string]string{
+		"api/package.json": `{"scripts":{"check":"tsc --noEmit","test":"vitest"},"dependencies":{"express":"^4"}}`,
+		"web/package.json": `{"scripts":{"check":"svelte-check","test":"vitest"},"dependencies":{"svelte":"^5"}}`,
+	})
+	p := Detect(root, nil)
+	if p.Kind != "node" || !strings.Contains(p.Summary, "api, web") {
+		t.Fatalf("unexpected multi-package profile: %+v", p)
+	}
+	wantStages := []string{"install", "check", "test", "install", "check", "test"}
+	if got := p.StageNames(); !reflect.DeepEqual(got, wantStages) {
+		t.Fatalf("stages = %v, want %v", got, wantStages)
+	}
+	if !reflect.DeepEqual(p.Stages[0].Command, []string{"npm", "--prefix", "api", "install", "--no-package-lock", "--no-audit", "--no-fund"}) || p.Stages[0].StampDir != "api/node_modules" {
+		t.Fatalf("api install stage: %+v", p.Stages[0])
+	}
+	if !reflect.DeepEqual(p.Stages[4].Command, []string{"npm", "--prefix", "web", "run", "check"}) {
+		t.Fatalf("web check stage: %+v", p.Stages[4])
+	}
+}
+
 func contains(list []string, want string) bool {
 	for _, v := range list {
 		if v == want {

@@ -46,9 +46,13 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_path", "path must be relative and stay inside the workspace")
 		return
 	}
-	if err := surgeon.AllowedPath(rel); err != nil {
-		writeError(w, http.StatusForbidden, "protected", "this path is protected and cannot be viewed")
-		return
+	slashRel := filepath.ToSlash(rel)
+	isAPWSkillDoc := strings.HasPrefix(slashRel, ".apw/skills/") && strings.HasSuffix(slashRel, "/SKILL.md")
+	if !isAPWSkillDoc {
+		if err := surgeon.AllowedPath(rel); err != nil {
+			writeError(w, http.StatusForbidden, "protected", "this path is protected and cannot be viewed")
+			return
+		}
 	}
 
 	base, source := cfg.Workspace, "workspace"
@@ -61,7 +65,14 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		base, source = wt, "worktree"
 	}
 
-	data, _, err := surgeon.ReadInRoot(base, rel)
+	var (
+		data []byte
+	)
+	if isAPWSkillDoc {
+		data, err = surgeon.ReadAPWCustomization(base, rel)
+	} else {
+		data, _, err = surgeon.ReadInRoot(base, rel)
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, os.ErrNotExist):
@@ -235,9 +246,84 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if symbols == nil {
 		symbols = []surgeon.SymbolDef{}
 	}
-	skills := executor.DiscoverWorkspaceSkills(cfg.Workspace)
+	skills := executor.DiscoverAllSkills(cfg.Workspace)
 	if skills == nil {
 		skills = []executor.WorkspaceSkill{}
 	}
 	writeJSON(w, searchPayload{Files: files, Symbols: symbols, Skills: skills})
+}
+
+type fileTreeEntry struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+type filesTreePayload struct {
+	Workspace string          `json:"workspace"`
+	Source    string          `json:"source"`
+	Files     []fileTreeEntry `json:"files"`
+}
+
+// handleFiles serves GET /api/files for the Desktop's Workspace File Tree Explorer.
+func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
+		return
+	}
+	base, source := cfg.Workspace, "workspace"
+	if task := strings.TrimSpace(r.URL.Query().Get("task")); task != "" {
+		if wt, status, _, _ := taskWorktree(cfg.Workspace, cfg.WorktreeRoot, task); status == 0 && wt != "" {
+			base, source = wt, "worktree"
+		}
+	}
+
+	var entries []fileTreeEntry
+	// Include safe .apw/skills/*/SKILL.md files so workspace skills are visible in the tree.
+	for _, sk := range executor.DiscoverWorkspaceSkills(base) {
+		if sk.Path != "" && strings.HasPrefix(sk.Path, ".apw/skills/") {
+			entries = append(entries, fileTreeEntry{Path: sk.Path, Size: int64(len(sk.Body))})
+		}
+	}
+
+	_ = filepath.WalkDir(base, func(fpath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".apw", ".worktrees", "vendor", "node_modules", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(base, fpath)
+		if relErr != nil || surgeon.AllowedPath(rel) != nil {
+			return nil
+		}
+		if len(entries) >= 2500 {
+			return filepath.SkipAll
+		}
+		var size int64
+		if fi, fiErr := d.Info(); fiErr == nil {
+			size = fi.Size()
+		}
+		entries = append(entries, fileTreeEntry{Path: filepath.ToSlash(rel), Size: size})
+		return nil
+	})
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Path < entries[j].Path
+	})
+	if entries == nil {
+		entries = []fileTreeEntry{}
+	}
+	writeJSON(w, filesTreePayload{
+		Workspace: cfg.Workspace,
+		Source:    source,
+		Files:     entries,
+	})
 }

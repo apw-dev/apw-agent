@@ -8,8 +8,8 @@ import {
 } from "../shell";
 
 export type ThemeMode = "system" | "light" | "dark";
-export type CenterView = "thread" | "autonomy";
-export type RightPanelView = "cards" | "diff" | "file" | "symbols" | "graph";
+export type CenterView = "thread" | "autonomy" | "board";
+export type RightPanelView = "cards" | "diff" | "file" | "files" | "symbols" | "graph";
 
 export interface ContextMenuState {
   x: number;
@@ -51,6 +51,8 @@ export const workspaceSelections = writable<Record<string, WorkspaceSelection>>(
 export const centerView = writable<CenterView>("thread");
 export const rightPanelView = writable<RightPanelView>("cards");
 export const selectedDiffFile = writable<string>("");
+export const highlightedFileLine = writable<number | null>(null);
+export const composerDraftText = writable<string>("");
 export const settingsModalOpen = writable<boolean>(false);
 export const workspacePopoverOpen = writable<boolean>(false);
 export const contextMenu = writable<ContextMenuState | null>(null);
@@ -138,11 +140,15 @@ export function toggleRightPanel() {
 export function rememberSelectionForWorkspace(workspace: string, patch: Partial<WorkspaceSelection>) {
   const key = workspace || "default";
   workspaceSelections.update((cur) => {
-    const prev = cur[key] || {};
-    return {
-      ...cur,
-      [key]: { ...prev, ...patch }
-    };
+    const next: Record<string, WorkspaceSelection> = { ...cur };
+    if (patch.task_id === "") {
+      for (const k of Object.keys(next)) {
+        next[k] = { ...next[k], task_id: "" };
+      }
+    }
+    const prev = next[key] || {};
+    next[key] = { ...prev, ...patch };
+    return next;
   });
   persistUIPreferences();
   if (patch.session_id !== undefined) {
@@ -172,8 +178,10 @@ export function getSelectionForWorkspace(workspace: string): WorkspaceSelection 
   } catch {
     /* storage unavailable */
   }
+  const hasExplicitTask = Object.prototype.hasOwnProperty.call(fromMap, "task_id");
+  const resolvedTask = hasExplicitTask ? fromMap.task_id || undefined : fallbackTask || undefined;
   return {
     session_id: fromMap.session_id || fallbackSession || undefined,
-    task_id: fromMap.task_id || fallbackTask || undefined
+    task_id: resolvedTask
   };
 }

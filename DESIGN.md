@@ -4,7 +4,7 @@
 
 - **Product:** APW Desktop (`apw-desktop`), a native Windows developer environment powered by Wails v2 + Svelte 5 for autonomous software engineering in isolated Git worktrees.
 - **Visual Direction:** Warm Editorial Utility (Warm Paper in Light Mode, Carbon Slate in Dark Mode). High-density, keyboard-first 3-pane workbench where every surface, badge, and diff line serves code inspection, verification evidence, or human-in-the-loop approval.
-- **No Decorative Slop:** No ambient gradients, no decorative blurs on non-overlay panels, no generic AI sparkle icons, and no em dashes (`—`) in UI copy.
+- **Focused Craft:** Clean editorial surfaces where every badge, card, and diff line serves code inspection, verification evidence, or human-in-the-loop approval.
 
 ---
 

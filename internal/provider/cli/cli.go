@@ -131,6 +131,7 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 	if content == "" {
 		content = strings.TrimSpace(stdout.String())
 	}
+	content = strings.TrimSpace(strings.TrimPrefix(content, "warning: --mode plan has no effect while slash command expansion is disabled."))
 	if content == "" {
 		errExtra := ""
 		if stderrStr := strings.TrimSpace(stderr.String()); stderrStr != "" {

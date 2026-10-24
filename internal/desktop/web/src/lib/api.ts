@@ -34,10 +34,23 @@ export interface ModelsPayload {
   providers: ProviderOption[];
 }
 
+export interface TelegramChannelConfig {
+  enabled: boolean;
+  token_env: string;
+  token_configured: boolean;
+  token_masked: string;
+  allow_users: number[];
+}
+
+export interface ChannelsPayload {
+  telegram: TelegramChannelConfig;
+}
+
 export interface SessionSummary {
   id: string;
   updated_at: string;
   turn_count: number;
+  first_instruction?: string;
   last_instruction: string;
 }
 
@@ -72,6 +85,15 @@ export interface SurgeonStepReport {
   target_file?: string;
   success: boolean;
   message: string;
+}
+
+export interface SubagentReport {
+  id: string;
+  role: string;
+  action: string;
+  target_file?: string;
+  status: "running" | "done" | "failed" | string;
+  detail?: string;
 }
 
 // The report types mirror the Go JSON (executor.ExecutionReport, reflex.VerificationResult,
@@ -117,6 +139,7 @@ export interface TaskReport {
   duration?: number;
   plan?: ExecutionPlan;
   steps?: SurgeonStepReport[];
+  subagents?: SubagentReport[];
   reflex_attempts?: ReflexAttempt[];
   baseline?: VerificationResult;
   acceptance?: AcceptanceCheckReport[];
@@ -160,6 +183,46 @@ export interface ApprovalsPayload {
   always_allowed: string[];
 }
 
+export interface QuickScript {
+  id: string;
+  label: string;
+  command: string;
+  category: string;
+  source: string;
+  default_port?: number;
+  target_port?: number;
+  port_conflict?: boolean;
+  hint_url?: string;
+  description?: string;
+}
+
+export interface TerminalSessionView {
+  id: string;
+  command: string;
+  cwd: string;
+  port?: number;
+  status: "running" | "exited" | "failed" | "stopped" | string;
+  pid?: number;
+  exit_code: number;
+  started_at: string;
+  updated_at: string;
+  output: string;
+  urls: string[];
+}
+
+export interface ActivePortInfo {
+  port: number;
+  url: string;
+  source?: string;
+}
+
+export interface TerminalStatePayload {
+  workspace: string;
+  scripts: QuickScript[];
+  sessions: TerminalSessionView[];
+  active_ports: ActivePortInfo[];
+}
+
 export interface SearchSymbol {
   name: string;
   kind: string;
@@ -186,6 +249,17 @@ export interface FilePayload {
   source: string;
   truncated: boolean;
   binary: boolean;
+}
+
+export interface FileTreeEntry {
+  path: string;
+  size: number;
+}
+
+export interface FilesTreePayload {
+  workspace: string;
+  source: string;
+  files: FileTreeEntry[];
 }
 
 export interface SymbolSpan {
@@ -247,6 +321,153 @@ export interface AutonomyPayload {
   }>;
   skills: string[];
   skills_loaded: number;
+}
+
+export interface BoardArchitectureInfo {
+  app_type: string;
+  license: string;
+  core_base: string;
+  diff_engine: string;
+  plugin_system: string;
+  supported_os: string[];
+  integration_mode: string;
+  recommended_models: string[];
+  active_architect: string;
+  active_reflex: string;
+  trace_access: string;
+  read_only_mode: boolean;
+  base_branch: string;
+  current_branch: string;
+  workspace: string;
+}
+
+export interface BoardSequenceNode {
+  id: string;
+  label: string;
+  role: string;
+  file: string;
+  start_line: number;
+  end_line: number;
+  description: string;
+}
+
+export interface BoardSequenceEdge {
+  id: string;
+  from: string;
+  to: string;
+  symbol: string;
+  label: string;
+  file: string;
+  line: number;
+  step_order: number;
+}
+
+export interface BoardERColumn {
+  name: string;
+  type: string;
+  key?: string;
+}
+
+export interface BoardERTable {
+  id: string;
+  name: string;
+  file: string;
+  line: number;
+  description: string;
+  columns: BoardERColumn[];
+}
+
+export interface BoardERRelation {
+  id: string;
+  from_table: string;
+  to_table: string;
+  cardinality: string;
+  label: string;
+  file: string;
+  line: number;
+}
+
+export interface BoardTraceNote {
+  id: string;
+  stage: string;
+  title: string;
+  summary: string;
+  file: string;
+  line: number;
+  timestamp: string;
+}
+
+export interface BoardDiagramCanvas {
+  sequence_nodes: BoardSequenceNode[];
+  sequence_edges: BoardSequenceEdge[];
+  er_tables: BoardERTable[];
+  er_relations: BoardERRelation[];
+  trace_notes: BoardTraceNote[];
+}
+
+export interface BoardPseudocode {
+  input: string;
+  process: string;
+  output: string;
+}
+
+export interface BoardStructuralItem {
+  id: string;
+  file: string;
+  symbol: string;
+  category: "core" | "test" | "docs" | string;
+  category_label: string;
+  auto_collapsed: boolean;
+  start_line: number;
+  end_line: number;
+  added: number;
+  deleted: number;
+  pseudocode: BoardPseudocode;
+  code_snippet: string;
+}
+
+export interface BoardDecisionItem {
+  id: string;
+  kind: "unprompted" | "requested" | string;
+  pinned_alert: boolean;
+  title: string;
+  user_requested: string;
+  agent_decision: string;
+  rationale: string;
+  file: string;
+  line: number;
+  symbol: string;
+}
+
+export interface BoardPromptStep {
+  step: number;
+  title: string;
+  description: string;
+  example: string;
+}
+
+export interface BoardPromptTemplate {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  steps: BoardPromptStep[];
+  prompt_text: string;
+}
+
+export interface BoardPrivacySpec {
+  telemetry_enabled: boolean;
+  redacted_fields: string[];
+  beta_constraints: string[];
+}
+
+export interface AgentBoardPayload {
+  architecture: BoardArchitectureInfo;
+  diagram: BoardDiagramCanvas;
+  structural_diff: BoardStructuralItem[];
+  decision_log: BoardDecisionItem[];
+  prompt_templates: BoardPromptTemplate[];
+  privacy: BoardPrivacySpec;
 }
 
 export interface ApiResult<T> {

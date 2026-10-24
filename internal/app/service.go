@@ -249,13 +249,19 @@ func (s *Service) Resume(ctx context.Context, id, owner string) (*store.Job, err
 	if !cfg.Policy.Trusted {
 		return nil, errors.New("workspace is not trusted for build/test")
 	}
-	if _, err := s.Store.Job(ctx, id, owner); err != nil {
+	job, err := s.Store.Job(ctx, id, owner)
+	if err != nil {
 		return nil, err
 	}
+	action := "resume"
 	if _, err := executor.CheckpointForTask(s.Config.Workspace, id); err != nil {
-		return nil, err
+		if job.Status == core.StatusFailed || job.Status == core.StatusInterrupted || job.Status == core.StatusCancelled {
+			action = "run"
+		} else {
+			return nil, err
+		}
 	}
-	j, err := s.Store.Requeue(ctx, id, owner, "resume", core.StatusInterrupted, core.StatusFailed, core.StatusCancelled, core.StatusPreview, core.StatusReady)
+	j, err := s.Store.Requeue(ctx, id, owner, action, core.StatusInterrupted, core.StatusFailed, core.StatusCancelled, core.StatusPreview, core.StatusReady)
 	if err == nil {
 		s.signal()
 	}
@@ -372,6 +378,14 @@ func (s *Service) run(j *store.Job) {
 	if sess.Conversation == "" {
 		sess.Conversation = j.SessionID
 	}
+	if j.Action == "run" && j.SessionID != "" {
+		sess.RecordTurn(session.Turn{
+			TaskID:      j.ID,
+			Timestamp:   current.CreatedAt,
+			Instruction: j.Instruction,
+		})
+		_ = sess.Save()
+	}
 	var report *executor.ExecutionReport
 	if err == nil {
 		defer closeProvider()
@@ -389,11 +403,11 @@ func (s *Service) run(j *store.Job) {
 		e.OnProgress = func(ev executor.ProgressEvent) {
 			status := core.TaskStatus("")
 			switch ev.Stage {
-			case "planning", "replanning":
-				status = core.StatusPlanning
-			case "reviewing":
+			case "analyzing", "reviewing":
 				status = core.StatusAnalyzing
-			case "step_start":
+			case "planning", "replanning", "planning_attempt", "replanning_attempt", "research", "research_attempt", "research_source", "research_done", "proposals", "proposal", "proposal_chosen", "proposal_judge", "plan_ready", "planning_fallback", "research_fallback":
+				status = core.StatusPlanning
+			case "step_start", "step_done", "directive_attempt", "step_directive_fallback", "patch_retry", "subagent_wave", "subagent_start", "subagent_done", "worktree_start", "worktree_ready":
 				status = core.StatusPatching
 			case "verifying", "baseline":
 				status = core.StatusVerifying
@@ -407,6 +421,12 @@ func (s *Service) run(j *store.Job) {
 				s.fail(eventErr)
 				cancel()
 			}
+		}
+		if j.Action != "apply" {
+			e.OnProgress(executor.ProgressEvent{
+				Stage:   "analyzing",
+				Message: "เริ่มดำเนินการ: กำลังวิเคราะห์โปรเจกต์และเตรียมสภาพแวดล้อม...",
+			})
 		}
 		if core.TaskMode(j.Mode) == core.ModeReview && j.Action != "apply" {
 			closeFallbacks, skipped := e.AddArchitectFallbacks(cfg)
@@ -458,7 +478,7 @@ func (s *Service) run(j *store.Job) {
 		}
 	}
 	if sess != nil && (report != nil || err != nil) {
-		turn := session.Turn{TaskID: j.ID, Instruction: j.Instruction}
+		turn := session.Turn{TaskID: j.ID, Timestamp: current.CreatedAt, Instruction: j.Instruction}
 		if report != nil {
 			turn.ModifiedFiles = report.ModifiedFiles
 			turn.Summary = report.Summary
@@ -496,6 +516,13 @@ func (s *Service) run(j *store.Job) {
 		}
 		if len(unmet) > 0 {
 			cause = "acceptance not satisfied: " + strings.Join(unmet, "; ")
+		} else if len(report.ReflexAttempts) > 0 {
+			if last := report.ReflexAttempts[len(report.ReflexAttempts)-1].Result; last != nil && !last.Passed {
+				cause = "verification failed at stage " + last.FailedStage
+				if len(last.Diagnostics) > 0 && last.Diagnostics[0].Message != "" {
+					cause += ": " + last.Diagnostics[0].Message
+				}
+			}
 		}
 	}
 	if err != nil {

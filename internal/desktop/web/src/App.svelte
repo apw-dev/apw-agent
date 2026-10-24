@@ -5,6 +5,7 @@
   import ReviewPanel from "./components/ReviewPanel.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
   import AutonomyView from "./components/AutonomyView.svelte";
+  import AgentBoardView from "./components/AgentBoardView.svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
   import {
     connectionState,
@@ -17,7 +18,7 @@
     loadSessions,
     createNewConversation
   } from "./lib/stores/sessions";
-  import { loadTasks, loadApprovals } from "./lib/stores/tasks";
+  import { loadTasks, loadApprovals, runningTasks } from "./lib/stores/tasks";
   import {
     initSettingsStore,
     leftWidth,
@@ -58,6 +59,8 @@
       if (st && prev !== "connected") {
         await ensureActiveSession();
         await Promise.all([loadSessions(), loadTasks(), loadApprovals(), loadAutonomy()]);
+      } else if (st && $runningTasks.length > 0) {
+        void loadTasks();
       }
     }, 4000);
 
@@ -205,6 +208,8 @@
     <div class="center-pane">
       {#if $centerView === "autonomy"}
         <AutonomyView />
+      {:else if $centerView === "board"}
+        <AgentBoardView />
       {:else}
         <Thread />
       {/if}

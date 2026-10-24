@@ -3,9 +3,11 @@
   import {
     workspaceStatus,
     connectionState,
+    fetchWorkspaceFiles,
     fetchWorkspaceSymbols,
     fetchWorkspaceGraph
   } from "../../lib/stores/workspace";
+  import { selectedTask } from "../../lib/stores/tasks";
   import { collapsedCards, toggleCardCollapsed, rightPanelView } from "../../lib/stores/settings";
 
   const collapsed = $derived(Boolean($collapsedCards["workspace"]));
@@ -43,6 +45,17 @@
         </b>
       </div>
       <div class="tools-row">
+        <button
+          type="button"
+          class="mini-btn"
+          onclick={async () => {
+            await fetchWorkspaceFiles($selectedTask?.id);
+            rightPanelView.set("files");
+          }}
+          data-testid="open-files-btn"
+        >
+          /files
+        </button>
         <button
           type="button"
           class="mini-btn"

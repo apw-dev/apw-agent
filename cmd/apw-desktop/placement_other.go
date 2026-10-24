@@ -6,6 +6,7 @@ package main
 
 const windowClassName = ""
 
+func existingWindowPID() int          { return 0 }
 func mainWindow() (uintptr, bool)     { return 0, false }
 func windowRect(uintptr) (Rect, bool) { return Rect{}, false }
 func isMaximised(uintptr) bool        { return false }

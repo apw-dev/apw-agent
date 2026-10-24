@@ -15,6 +15,13 @@ import (
 )
 
 func main() {
+	if exe, err := os.Executable(); err == nil {
+		if sha, err := ComputeFileSHA256(exe); err == nil {
+			if instPath, err := InstanceStatePath(); err == nil {
+				ReconcileDesktopInstance(instPath, os.Getpid(), exe, sha, existingWindowPID, killProcessByPID)
+			}
+		}
+	}
 	args := os.Args[1:]
 	settingsPath, err := SettingsPath()
 	settings := DefaultSettings()
@@ -22,6 +29,10 @@ func main() {
 		settings, _ = LoadSettings(settingsPath)
 	}
 	host := NewWorkspaceHost()
+	if wsArg := WorkspaceArg(args); wsArg != "" {
+		candidates := append([]string{settings.LastWorkspace}, settings.Recent...)
+		_ = BootstrapWorkspace(wsArg, candidates...)
+	}
 	// Open the startup workspace before the window exists, so its first page is never the
 	// chooser for a workspace that is still being opened.
 	OpenInitialWorkspace(host, args, settings.LastWorkspace)

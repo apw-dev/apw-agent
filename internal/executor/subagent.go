@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +20,65 @@ import (
 // spawned for disjoint-file mutation waves.
 const DefaultSubagentConcurrency = 4
 
+func (e *Executor) recordSubagent(sr SubagentReport) {
+	e.subagentMu.Lock()
+	updated := false
+	for i := range e.Subagents {
+		if e.Subagents[i].ID == sr.ID {
+			e.Subagents[i] = sr
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		e.Subagents = append(e.Subagents, sr)
+	}
+	if e.CurrentReport != nil {
+		cp := make([]SubagentReport, len(e.Subagents))
+		copy(cp, e.Subagents)
+		e.CurrentReport.Subagents = cp
+	}
+	e.subagentMu.Unlock()
+}
+
+func (e *Executor) snapshotSubagents() []SubagentReport {
+	e.subagentMu.Lock()
+	defer e.subagentMu.Unlock()
+	if len(e.Subagents) == 0 {
+		return nil
+	}
+	out := make([]SubagentReport, len(e.Subagents))
+	copy(out, e.Subagents)
+	return out
+}
+
+func subagentRoleForFile(path string, action architect.SubtaskAction) string {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	ext := strings.ToLower(filepath.Ext(lower))
+	isFrontend := ext == ".svelte" || ext == ".tsx" || ext == ".jsx" || ext == ".ts" || ext == ".js" || ext == ".css" || ext == ".html" ||
+		strings.Contains(lower, "frontend/") || strings.Contains(lower, "web/") || strings.Contains(lower, "static/") || strings.Contains(lower, "components/")
+	isDocs := ext == ".md" || ext == ".markdown" || ext == ".json" || ext == ".yaml" || ext == ".yml" || ext == ".toml" ||
+		strings.HasPrefix(lower, "docs/")
+	if action == architect.ActionRead {
+		switch {
+		case isFrontend:
+			return "Frontend Codebase Auditor"
+		case isDocs:
+			return "Architecture & Spec Auditor"
+		default:
+			return "Backend Codebase Auditor"
+		}
+	}
+	switch {
+	case isFrontend:
+		return "Frontend Surgeon"
+	case isDocs:
+		return "Architecture Surgeon"
+	default:
+		return "Backend Surgeon"
+	}
+}
+
 type subagentSynthesis struct {
 	subtaskIndex int
 	subtask      architect.Subtask
@@ -27,11 +88,8 @@ type subagentSynthesis struct {
 	err          error
 }
 
-// collectDisjointMutationWave identifies a contiguous wave of 2..maxWorkers create subtasks starting at
-// start that target strictly distinct files and can be synthesized in parallel by subagents.
-// Patch subtasks run sequentially so each step updates ReadContext and saves an exact-step checkpoint
-// before the next model request is sent.
-func collectDisjointMutationWave(subtasks []architect.Subtask, start, maxWorkers int) []int {
+// collectDisjointReadWave identifies a contiguous wave of 2..maxWorkers read subtasks starting at start.
+func collectDisjointReadWave(subtasks []architect.Subtask, start, maxWorkers int) []int {
 	if maxWorkers <= 1 || start < 0 || start+1 >= len(subtasks) {
 		return nil
 	}
@@ -42,7 +100,7 @@ func collectDisjointMutationWave(subtasks []architect.Subtask, start, maxWorkers
 	var wave []int
 	for i := start; i < len(subtasks) && len(wave) < maxWorkers; i++ {
 		st := subtasks[i]
-		if st.Action != architect.ActionCreate {
+		if st.Action != architect.ActionRead {
 			break
 		}
 		norm := filepath.ToSlash(strings.TrimSpace(st.TargetFile))
@@ -58,10 +116,313 @@ func collectDisjointMutationWave(subtasks []architect.Subtask, start, maxWorkers
 	return wave
 }
 
+// runReadSubagentWave spawns parallel Codebase Auditor subagents to read and inspect multiple workspace files concurrently.
+func (e *Executor) runReadSubagentWave(
+	ctx context.Context,
+	base string,
+	surg *surgeon.Surgeon,
+	subtasks []architect.Subtask,
+	wave []int,
+	commitStep func(stepIdx int, sr StepReport, path string) error,
+) error {
+	var targetNames []string
+	for _, idx := range wave {
+		targetNames = append(targetNames, subtasks[idx].TargetFile)
+	}
+	e.emit(ProgressEvent{
+		Stage:      "subagent_wave",
+		StepIndex:  wave[0] + 1,
+		TotalSteps: len(subtasks),
+		Message:    fmt.Sprintf("⚡ Spawning %d parallel Codebase Auditor Subagents: %s", len(wave), strings.Join(targetNames, ", ")),
+	})
+
+	type readResult struct {
+		subtaskIndex int
+		subtask      architect.Subtask
+		content      string
+		hash         string
+		notFound     bool
+		err          error
+	}
+	results := make([]readResult, len(wave))
+	var wg sync.WaitGroup
+	for wIdx, subIdx := range wave {
+		wg.Add(1)
+		go func(slot, idx int) {
+			defer wg.Done()
+			st := subtasks[idx]
+			role := subagentRoleForFile(st.TargetFile, architect.ActionRead)
+			subID := fmt.Sprintf("auditor-%s-%d", st.ID, idx+1)
+			e.recordSubagent(SubagentReport{
+				ID:         subID,
+				Role:       role,
+				Action:     "read",
+				TargetFile: st.TargetFile,
+				Status:     "running",
+				Detail:     fmt.Sprintf("Auditing %s", st.TargetFile),
+			})
+			e.emit(ProgressEvent{
+				Stage:      "subagent_start",
+				StepIndex:  idx + 1,
+				TotalSteps: len(subtasks),
+				Message:    fmt.Sprintf("[SUBAGENT · start] %s — %s (%s)", role, st.TargetFile, subID),
+			})
+
+			content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
+			res := readResult{subtaskIndex: idx, subtask: st, content: content, hash: hash, err: err}
+			if errors.Is(err, os.ErrNotExist) && e.Mode != core.ModeReview {
+				res.notFound = true
+				res.err = nil
+			}
+			status := "done"
+			detail := fmt.Sprintf("Audited %s", st.TargetFile)
+			if res.err != nil {
+				status = "failed"
+				detail = res.err.Error()
+			} else if res.notFound {
+				detail = fmt.Sprintf("%s (not created yet)", st.TargetFile)
+			}
+			e.recordSubagent(SubagentReport{
+				ID:         subID,
+				Role:       role,
+				Action:     "read",
+				TargetFile: st.TargetFile,
+				Status:     status,
+				Detail:     detail,
+			})
+			e.emit(ProgressEvent{
+				Stage:      "subagent_done",
+				StepIndex:  idx + 1,
+				TotalSteps: len(subtasks),
+				Passed:     res.err == nil,
+				Message:    fmt.Sprintf("[SUBAGENT · %s] %s — %s (%s)", status, role, st.TargetFile, subID),
+			})
+			results[slot] = res
+		}(wIdx, subIdx)
+	}
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	for _, res := range results {
+		st := res.subtask
+		idx := res.subtaskIndex
+		sr := StepReport{SubtaskID: st.ID, Action: st.Action, TargetFile: st.TargetFile}
+		if res.err != nil {
+			sr.Message = res.err.Error()
+			_ = commitStep(idx, sr, "")
+			return res.err
+		}
+		if res.notFound {
+			e.rememberRead(st.TargetFile, "(file does not exist yet)")
+			sr.Success = true
+			sr.Message = fmt.Sprintf("read %s (not found; will be created if needed)", st.TargetFile)
+		} else {
+			e.rememberRead(st.TargetFile, res.content)
+			sr.Success = true
+			sr.Message = fmt.Sprintf("read %s (sha256 %s · parallel auditor)", st.TargetFile, shortHash(res.hash))
+		}
+		if err := commitStep(idx, sr, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runDomainAuditSubagents spawns parallel domain auditors (Backend Codebase Auditor, Frontend Codebase Auditor,
+// Architecture & Spec Auditor) to inspect the workspace structure in parallel before planning or reviewing.
+func (e *Executor) runDomainAuditSubagents(ctx context.Context) string {
+	if e.Workspace == "" {
+		return ""
+	}
+	type domainBucket struct {
+		id    string
+		role  string
+		files []string
+	}
+	var backendFiles, frontendFiles, archFiles []string
+	_ = filepath.WalkDir(e.Workspace, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".apw", ".worktrees", "vendor", "node_modules", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(e.Workspace, path)
+		if relErr != nil || surgeon.AllowedPath(rel) != nil {
+			return nil
+		}
+		slash := filepath.ToSlash(rel)
+		role := subagentRoleForFile(slash, architect.ActionRead)
+		switch role {
+		case "Frontend Codebase Auditor":
+			if len(frontendFiles) < 24 {
+				frontendFiles = append(frontendFiles, slash)
+			}
+		case "Architecture & Spec Auditor":
+			if len(archFiles) < 16 {
+				archFiles = append(archFiles, slash)
+			}
+		default:
+			if len(backendFiles) < 24 {
+				backendFiles = append(backendFiles, slash)
+			}
+		}
+		return nil
+	})
+
+	var buckets []domainBucket
+	if len(backendFiles) > 0 {
+		buckets = append(buckets, domainBucket{id: "auditor-backend", role: "Backend Codebase Auditor", files: backendFiles})
+	}
+	if len(frontendFiles) > 0 {
+		buckets = append(buckets, domainBucket{id: "auditor-frontend", role: "Frontend Codebase Auditor", files: frontendFiles})
+	}
+	if len(archFiles) > 0 && len(buckets) < 3 {
+		buckets = append(buckets, domainBucket{id: "auditor-arch", role: "Architecture & Spec Auditor", files: archFiles})
+	}
+	if len(buckets) == 0 {
+		return ""
+	}
+
+	var roles []string
+	for _, b := range buckets {
+		roles = append(roles, b.role)
+	}
+	e.emit(ProgressEvent{
+		Stage:   "subagent_wave",
+		Message: fmt.Sprintf("⚡ Spawning %d parallel Codebase Auditor Subagents: %s", len(buckets), strings.Join(roles, ", ")),
+	})
+
+	summaries := make([]string, len(buckets))
+	var wg sync.WaitGroup
+	for i, b := range buckets {
+		wg.Add(1)
+		go func(slot int, dom domainBucket) {
+			defer wg.Done()
+			if ctx.Err() != nil {
+				return
+			}
+			sampleTarget := dom.files[0]
+			e.recordSubagent(SubagentReport{
+				ID:         dom.id,
+				Role:       dom.role,
+				Action:     "audit",
+				TargetFile: sampleTarget,
+				Status:     "running",
+				Detail:     fmt.Sprintf("Auditing %d files (%s…)", len(dom.files), sampleTarget),
+			})
+			e.emit(ProgressEvent{
+				Stage:   "subagent_start",
+				Message: fmt.Sprintf("[SUBAGENT · start] %s — %s (%s)", dom.role, sampleTarget, dom.id),
+			})
+
+			var symCount int
+			limit := len(dom.files)
+			if limit > 8 {
+				limit = 8
+			}
+			for _, f := range dom.files[:limit] {
+				if syms, err := surgeon.InspectWorkspaceSymbols(e.Workspace, filepath.FromSlash(f)); err == nil {
+					symCount += len(syms)
+				}
+			}
+			preview := dom.files
+			if len(preview) > 8 {
+				preview = preview[:8]
+			}
+			detail := fmt.Sprintf("Audited %d files (%d AST symbols): %s", len(dom.files), symCount, strings.Join(preview, ", "))
+			summaries[slot] = fmt.Sprintf("- %s: %s", dom.role, detail)
+
+			e.recordSubagent(SubagentReport{
+				ID:         dom.id,
+				Role:       dom.role,
+				Action:     "audit",
+				TargetFile: sampleTarget,
+				Status:     "done",
+				Detail:     detail,
+			})
+			e.emit(ProgressEvent{
+				Stage:   "subagent_done",
+				Passed:  true,
+				Message: fmt.Sprintf("[SUBAGENT · done] %s — %s (%s)", dom.role, sampleTarget, dom.id),
+			})
+		}(i, b)
+	}
+	wg.Wait()
+
+	var out strings.Builder
+	out.WriteString("\nParallel Subagent Codebase Audit:\n")
+	for _, s := range summaries {
+		if s != "" {
+			out.WriteString(s + "\n")
+		}
+	}
+	return out.String()
+}
+
+func createWaveTier(normPath string) int {
+	lower := strings.ToLower(normPath)
+	if strings.Contains(lower, "/test/") || strings.HasPrefix(lower, "test/") || strings.Contains(lower, ".test.") || strings.Contains(lower, "_test.") || strings.Contains(lower, ".spec.") {
+		return 3
+	}
+	if strings.Contains(lower, "/routes/") || strings.HasSuffix(lower, "/server.ts") || strings.HasSuffix(lower, "/main.tsx") || strings.HasSuffix(lower, "/app.tsx") {
+		return 2
+	}
+	return 1
+}
+
+// collectDisjointMutationWave identifies a contiguous wave of 2..maxWorkers create subtasks starting at
+// start that target strictly distinct files in the same dependency tier and can be synthesized in parallel by subagents.
+// Patch subtasks run sequentially so each step updates ReadContext and saves an exact-step checkpoint
+// before the next model request is sent.
+func collectDisjointMutationWave(subtasks []architect.Subtask, start, maxWorkers int) []int {
+	if maxWorkers <= 1 || start < 0 || start+1 >= len(subtasks) {
+		return nil
+	}
+	if maxWorkers > 8 {
+		maxWorkers = 8
+	}
+	seenFiles := make(map[string]bool)
+	var wave []int
+	firstTier := 0
+	for i := start; i < len(subtasks) && len(wave) < maxWorkers; i++ {
+		st := subtasks[i]
+		if st.Action != architect.ActionCreate {
+			break
+		}
+		norm := filepath.ToSlash(strings.TrimSpace(st.TargetFile))
+		if norm == "" || surgeon.AllowedPath(norm) != nil || seenFiles[norm] {
+			break
+		}
+		tier := createWaveTier(norm)
+		if len(wave) == 0 {
+			firstTier = tier
+		} else if tier != firstTier {
+			break
+		}
+		seenFiles[norm] = true
+		wave = append(wave, i)
+	}
+	if len(wave) < 2 {
+		return nil
+	}
+	return wave
+}
+
 // askDirectiveSafe invokes directive generation with mutex-guarded failover maps so parallel
 // Surgeon subagents can await model responses concurrently without data races.
 func (e *Executor) askDirectiveSafe(ctx context.Context, prompt, readSnapshot string) (*patchDirective, error) {
-	fullPrompt := prompt + InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + readSnapshot
+	fullPrompt := "CRITICAL: Do NOT use any tools, shell commands, apply_patch, or file readers. Everything you need is in this prompt. Act purely as an offline JSON generator and output ONLY the requested JSON object.\n" + prompt + InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + readSnapshot
 	e.directiveMu.Lock()
 	candidates := e.directiveCandidates()
 	timeout := e.DirectiveTimeout
@@ -159,10 +520,27 @@ func (e *Executor) runSubagentWave(
 		go func(slot, idx int) {
 			defer wg.Done()
 			st := subtasks[idx]
+			role := subagentRoleForFile(st.TargetFile, st.Action)
+			subID := fmt.Sprintf("surgeon-%s-%d", st.ID, idx+1)
+			e.recordSubagent(SubagentReport{
+				ID:         subID,
+				Role:       role,
+				Action:     string(st.Action),
+				TargetFile: st.TargetFile,
+				Status:     "running",
+				Detail:     fmt.Sprintf("%s %s", st.Action, st.TargetFile),
+			})
+			e.emit(ProgressEvent{
+				Stage:      "subagent_start",
+				StepIndex:  idx + 1,
+				TotalSteps: len(subtasks),
+				Message:    fmt.Sprintf("[SUBAGENT · start] %s — %s (%s)", role, st.TargetFile, subID),
+			})
 			res := subagentSynthesis{subtaskIndex: idx, subtask: st}
+			accHints := acceptanceHintsForFile(e.CurrentPlan, st.TargetFile)
 			switch st.Action {
 			case architect.ActionCreate:
-				prompt := fmt.Sprintf("Create file %s.\nInstruction: %s\nRespond ONLY with JSON: {\"file_content\":\"...\"}", st.TargetFile, st.Instruction)
+				prompt := fmt.Sprintf("Create file %s.\nInstruction: %s%s\nRespond ONLY with JSON: {\"file_content\":\"...\"}", st.TargetFile, st.Instruction, accHints)
 				res.directive, res.err = e.askDirectiveSafe(ctx, prompt, readSnapshot)
 			case architect.ActionPatch:
 				content, hash, err := surg.ReadWorkspaceFile(base, st.TargetFile)
@@ -172,9 +550,30 @@ func (e *Executor) runSubagentWave(
 				}
 				res.fileContent = content
 				res.fileHash = hash
-				prompt := fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, content)
+				prompt := fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s%s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, accHints, content)
 				res.directive, res.err = e.askDirectiveSafe(ctx, prompt, readSnapshot)
 			}
+			status := "done"
+			detail := fmt.Sprintf("Synthesized %s", st.TargetFile)
+			if res.err != nil {
+				status = "failed"
+				detail = res.err.Error()
+			}
+			e.recordSubagent(SubagentReport{
+				ID:         subID,
+				Role:       role,
+				Action:     string(st.Action),
+				TargetFile: st.TargetFile,
+				Status:     status,
+				Detail:     detail,
+			})
+			e.emit(ProgressEvent{
+				Stage:      "subagent_done",
+				StepIndex:  idx + 1,
+				TotalSteps: len(subtasks),
+				Passed:     res.err == nil,
+				Message:    fmt.Sprintf("[SUBAGENT · %s] %s — %s (%s)", status, role, st.TargetFile, subID),
+			})
 			results[slot] = res
 		}(wIdx, subIdx)
 	}
@@ -208,14 +607,11 @@ func (e *Executor) runSubagentWave(
 			if content == "" {
 				content = res.directive.NewContent
 			}
+			content = sanitizeCodexPatchContent(st.TargetFile, content)
 			content = surgeon.FormatGoIfValid(st.TargetFile, content)
 			before, err := surgeon.StateInRoot(base, st.TargetFile)
 			if err != nil {
 				stepErr = err
-				break
-			}
-			if before.Exists {
-				stepErr = errors.New("create target already exists")
 				break
 			}
 			if e.mutation != nil {
@@ -224,7 +620,10 @@ func (e *Executor) runSubagentWave(
 					break
 				}
 			}
-			stepErr = surgeon.WriteInRoot(base, st.TargetFile, []byte(content), 0o644, true)
+			stepErr = surgeon.WriteInRoot(base, st.TargetFile, []byte(content), 0o644, !before.Exists)
+			if stepErr == nil {
+				e.rememberRead(st.TargetFile, content)
+			}
 
 		case architect.ActionPatch:
 			e.rememberRead(st.TargetFile, res.fileContent)

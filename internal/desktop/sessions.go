@@ -23,10 +23,11 @@ const desktopOwner = "local"
 var conversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type sessionSummary struct {
-	ID              string    `json:"id"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	TurnCount       int       `json:"turn_count"`
-	LastInstruction string    `json:"last_instruction"`
+	ID               string    `json:"id"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	TurnCount        int       `json:"turn_count"`
+	FirstInstruction string    `json:"first_instruction,omitempty"`
+	LastInstruction  string    `json:"last_instruction"`
 }
 
 type turnView struct {
@@ -72,15 +73,18 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		if err != nil || sess.Owner != desktopOwner || sess.Conversation == "" {
 			continue
 		}
+		first := ""
 		last := ""
 		if n := len(sess.History); n > 0 {
+			first = sess.History[0].Instruction
 			last = sess.History[n-1].Instruction
 		}
 		out = append(out, sessionSummary{
-			ID:              sess.Conversation,
-			UpdatedAt:       sess.UpdatedAt,
-			TurnCount:       len(sess.History),
-			LastInstruction: last,
+			ID:               sess.Conversation,
+			UpdatedAt:        sess.UpdatedAt,
+			TurnCount:        len(sess.History),
+			FirstInstruction: first,
+			LastInstruction:  last,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
@@ -111,4 +115,22 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"id": id, "turns": turns})
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !conversationIDPattern.MatchString(id) {
+		writeError(w, http.StatusBadRequest, "invalid_id", "conversation id must be 1-64 letters, digits, '_' or '-'")
+		return
+	}
+	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
+		return
+	}
+	if err := session.Delete(cfg.Workspace, app.SessionFileID(desktopOwner, id)); err != nil {
+		writeError(w, http.StatusInternalServerError, "session_error", err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"id": id, "deleted": true})
 }

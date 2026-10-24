@@ -8,17 +8,25 @@
   } from "../lib/stores/settings";
   import {
     modelsState,
+    channelsState,
     workspaceStatus,
     loadModels,
     saveModelsConfig,
+    loadChannels,
+    saveChannelsConfig,
     toggleWorkspaceTrust
   } from "../lib/stores/workspace";
 
-  let activeTab = $state<"general" | "models" | "workspace">("general");
+  let activeTab = $state<"general" | "models" | "messaging" | "workspace">("general");
   let architect = $state("");
   let reflex = $state("");
   let approval = $state("ask");
   let sandboxMode = $state("off");
+
+  let telegramEnabled = $state(false);
+  let telegramToken = $state("");
+  let telegramAllowRaw = $state("");
+
   let busy = $state(false);
   let errorMsg = $state("");
   let savedMsg = $state("");
@@ -35,8 +43,50 @@
           sandboxMode = m.sandbox_mode || "off";
         }
       });
+      void loadChannels().then((c) => {
+        if (c?.telegram) {
+          telegramEnabled = c.telegram.enabled;
+          telegramToken = "";
+          telegramAllowRaw = (c.telegram.allow_users || []).join(", ");
+        }
+      });
     }
   });
+
+  function switchTab(tab: "general" | "models" | "messaging" | "workspace") {
+    activeTab = tab;
+    errorMsg = "";
+    savedMsg = "";
+  }
+
+  function parseAllowUsersInput(raw: string): { ok: boolean; ids: number[]; error: string } {
+    const parts = raw
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const ids: number[] = [];
+    for (const part of parts) {
+      if (!/^\d+$/.test(part)) {
+        return {
+          ok: false,
+          ids: [],
+          error: `Telegram User ID ไม่ถูกต้อง: "${part}" (ต้องเป็นตัวเลขจำนวนเต็มบวก)`
+        };
+      }
+      const n = Number(part);
+      if (!Number.isSafeInteger(n) || n <= 0) {
+        return {
+          ok: false,
+          ids: [],
+          error: `Telegram User ID ไม่ถูกต้อง: "${part}"`
+        };
+      }
+      if (!ids.includes(n)) {
+        ids.push(n);
+      }
+    }
+    return { ok: true, ids, error: "" };
+  }
 
   async function onSaveModels() {
     if (busy) return;
@@ -55,6 +105,62 @@
       savedMsg = "บันทึกการตั้งค่าเรียบร้อยแล้ว";
     }
     busy = false;
+  }
+
+  async function onSaveMessaging() {
+    if (busy) return;
+    errorMsg = "";
+    savedMsg = "";
+    const parsed = parseAllowUsersInput(telegramAllowRaw);
+    if (!parsed.ok) {
+      errorMsg = parsed.error;
+      return;
+    }
+    busy = true;
+    const res = await saveChannelsConfig({
+      telegram: {
+        enabled: telegramEnabled,
+        token: telegramToken.trim() || undefined,
+        allow_users: parsed.ids
+      }
+    });
+    if (!res.ok) {
+      errorMsg = res.message;
+    } else {
+      telegramToken = "";
+      telegramAllowRaw = parsed.ids.join(", ");
+      savedMsg = "บันทึกการตั้งค่า Messaging เรียบร้อยแล้ว";
+    }
+    busy = false;
+  }
+
+  async function onClearTelegramToken() {
+    if (busy) return;
+    busy = true;
+    errorMsg = "";
+    savedMsg = "";
+    const res = await saveChannelsConfig({
+      telegram: {
+        enabled: false,
+        clear_token: true
+      }
+    });
+    if (!res.ok) {
+      errorMsg = res.message;
+    } else {
+      telegramEnabled = false;
+      telegramToken = "";
+      savedMsg = "ลบ Telegram Bot Token ออกจาก .apw/auth.json เรียบร้อยแล้ว";
+    }
+    busy = false;
+  }
+
+  async function onSaveActiveTab() {
+    if (activeTab === "messaging") {
+      await onSaveMessaging();
+    } else {
+      await onSaveModels();
+    }
   }
 
   async function onThemeSelect(mode: ThemeMode) {
@@ -79,7 +185,8 @@
         type="button"
         class="tab"
         class:active={activeTab === "general"}
-        onclick={() => (activeTab = "general")}
+        onclick={() => switchTab("general")}
+        data-testid="settings-tab-general"
       >
         General
       </button>
@@ -87,15 +194,26 @@
         type="button"
         class="tab"
         class:active={activeTab === "models"}
-        onclick={() => (activeTab = "models")}
+        onclick={() => switchTab("models")}
+        data-testid="settings-tab-models"
       >
         Models
       </button>
       <button
         type="button"
         class="tab"
+        class:active={activeTab === "messaging"}
+        onclick={() => switchTab("messaging")}
+        data-testid="settings-tab-messaging"
+      >
+        Messaging
+      </button>
+      <button
+        type="button"
+        class="tab"
         class:active={activeTab === "workspace"}
-        onclick={() => (activeTab = "workspace")}
+        onclick={() => switchTab("workspace")}
+        data-testid="settings-tab-workspace"
       >
         Workspace & Sandbox
       </button>
@@ -149,6 +267,66 @@
             <option value="auto">auto: Apply อัตโนมัติหลัง Verify ผ่าน</option>
           </select>
         </div>
+      {:else if activeTab === "messaging"}
+        <div class="field">
+          <label class="toggle-row" for="chk-telegram-enabled">
+            <input
+              id="chk-telegram-enabled"
+              type="checkbox"
+              bind:checked={telegramEnabled}
+              data-testid="telegram-enabled-checkbox"
+            />
+            <span>เปิดใช้งาน Telegram Bot Gateway (apwd)</span>
+          </label>
+        </div>
+
+        <div class="field">
+          <div class="lbl-row">
+            <label for="inp-telegram-token">Telegram Bot Token (.apw/auth.json)</label>
+            {#if $channelsState?.telegram.token_configured}
+              <div class="token-status" data-testid="telegram-token-status">
+                <span class="mono">✓ {$channelsState.telegram.token_masked}</span>
+                <button
+                  type="button"
+                  class="link-btn"
+                  onclick={onClearTelegramToken}
+                  disabled={busy}
+                  data-testid="clear-telegram-token-btn"
+                >
+                  ล้าง Token
+                </button>
+              </div>
+            {/if}
+          </div>
+          <input
+            id="inp-telegram-token"
+            type="password"
+            class="mono text-inp"
+            placeholder={$channelsState?.telegram.token_configured
+              ? "เว้นว่างไว้เพื่อใช้ Token เดิม หรือกรอกใหม่เพื่อเปลี่ยน"
+              : "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"}
+            bind:value={telegramToken}
+            data-testid="telegram-token-input"
+          />
+          <div class="hint">
+            รับ Bot Token จาก @BotFather บน Telegram ระบบจะบันทึกไว้ใน .apw/auth.json เท่านั้น (ไม่เขียนลง apw.json)
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="inp-telegram-allow">Allowed Telegram User IDs (คั่นด้วยลูกน้ำ)</label>
+          <input
+            id="inp-telegram-allow"
+            type="text"
+            class="mono text-inp"
+            placeholder="เช่น 123456789, 987654321"
+            bind:value={telegramAllowRaw}
+            data-testid="telegram-allow-input"
+          />
+          <div class="hint">
+            ระบุหมายเลข Telegram User ID ที่ได้รับอนุญาตให้สั่งงาน APW (ต้องมีอย่างน้อย 1 ID เมื่อเปิดใช้งาน)
+          </div>
+        </div>
       {:else}
         <div class="field">
           <label for="sel-sandbox">โหมดแยกตัวกระบวนการ (Sandbox Mode)</label>
@@ -177,7 +355,7 @@
         <div class="err-msg" data-testid="settings-error">{errorMsg}</div>
       {/if}
       {#if savedMsg}
-        <div class="ok-msg">{savedMsg}</div>
+        <div class="ok-msg" data-testid="settings-saved">{savedMsg}</div>
       {/if}
     </div>
 
@@ -187,7 +365,7 @@
         <button
           type="button"
           class="btn primary"
-          onclick={onSaveModels}
+          onclick={onSaveActiveTab}
           disabled={busy}
           data-testid="save-settings-btn"
         >
@@ -210,7 +388,7 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 480px;
+    width: 500px;
     max-width: calc(100vw - 32px);
     background: var(--panel);
     border: 1px solid var(--line-strong);
@@ -248,6 +426,7 @@
     padding: 8px 16px;
     border-bottom: 1px solid var(--line);
     background: var(--bg);
+    flex-wrap: wrap;
   }
   .tab {
     padding: 5px 10px;
@@ -274,13 +453,28 @@
     flex-direction: column;
     gap: 5px;
   }
+  .lbl-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
   label,
   .lbl {
     font-size: 12px;
     font-weight: 500;
     color: var(--muted);
   }
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    font-size: 12.5px;
+    cursor: pointer;
+  }
   select,
+  .text-inp,
   .trust-toggle {
     padding: 7px 10px;
     border-radius: 6px;
@@ -289,6 +483,27 @@
     color: var(--text);
     font-size: 12.5px;
     text-align: left;
+  }
+  .token-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--ok);
+  }
+  .link-btn {
+    border: none;
+    background: transparent;
+    color: var(--err);
+    font-size: 11.5px;
+    padding: 2px 4px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .hint {
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.4;
   }
   .theme-group {
     display: flex;

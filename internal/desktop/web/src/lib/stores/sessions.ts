@@ -1,8 +1,14 @@
 import { writable, derived, get } from "svelte/store";
 import { getAPI, postAPI, type SessionSummary, type TurnView } from "../api";
 import { workspaceStatus } from "./workspace";
-import { getSelectionForWorkspace, rememberSelectionForWorkspace, centerView, selectedDiffFile } from "./settings";
-import { selectedTaskId, latestPlans, tasks } from "./tasks";
+import {
+  getSelectionForWorkspace,
+  rememberSelectionForWorkspace,
+  centerView,
+  rightPanelView,
+  selectedDiffFile
+} from "./settings";
+import { selectedTaskId, latestPlans, conflictBanner, tasks, ACTIVE_TASK_STATUSES } from "./tasks";
 
 export const sessions = writable<SessionSummary[]>([]);
 export const currentSessionId = writable<string>("");
@@ -55,10 +61,13 @@ function mergeTurns(sessionId: string, serverTurns: TurnView[]): TurnView[] {
   const pending = get(localPendingTurns)[sessionId] || [];
   if (!pending.length) return serverTurns;
   const knownTasks = new Set(serverTurns.map((t) => t.task_id).filter(Boolean));
-  const knownInstructions = new Set(serverTurns.map((t) => t.instruction));
-  const extra = pending.filter(
-    (p) => !(p.task_id && knownTasks.has(p.task_id)) && !knownInstructions.has(p.instruction)
-  );
+  const knownInstructions = new Set(serverTurns.filter((t) => !t.task_id).map((t) => t.instruction));
+  const extra = pending.filter((p) => {
+    if (p.task_id) {
+      return !knownTasks.has(p.task_id);
+    }
+    return !knownInstructions.has(p.instruction);
+  });
   return [...serverTurns, ...extra];
 }
 
@@ -86,32 +95,94 @@ export async function selectSession(id: string): Promise<void> {
   rememberSelectionForWorkspace(ws, { session_id: id, task_id: nextTaskId });
 }
 
+let explicitNewSessionId = "";
+
 export async function createNewConversation(): Promise<string> {
-  const res = await postAPI<{ id: string }>("/api/sessions", {});
-  if (!res.ok || !res.data?.id) {
-    return "";
-  }
-  const id = res.data.id;
-  currentSessionId.set(id);
+  const fallbackId = "conv-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  explicitNewSessionId = fallbackId;
+  currentSessionId.set(fallbackId);
   sessionTurns.set([]);
   selectedTaskId.set("");
   latestPlans.set([]);
   selectedDiffFile.set("");
+  conflictBanner.set(null);
+  rightPanelView.set("cards");
   centerView.set("thread");
   const ws = get(workspaceStatus)?.workspace || "";
-  rememberSelectionForWorkspace(ws, { session_id: id, task_id: "" });
+  rememberSelectionForWorkspace(ws, { session_id: fallbackId, task_id: "" });
+
+  if (typeof document !== "undefined") {
+    const input = document.getElementById("task-input") as HTMLTextAreaElement | null;
+    input?.focus();
+  }
+
+  const res = await postAPI<{ id: string }>("/api/sessions", {});
+  const id = res.ok && res.data?.id ? res.data.id : fallbackId;
+  explicitNewSessionId = id;
+  if (get(currentSessionId) === fallbackId && get(selectedTaskId) === "") {
+    currentSessionId.set(id);
+    const curWs = get(workspaceStatus)?.workspace || ws;
+    rememberSelectionForWorkspace(curWs, { session_id: id, task_id: "" });
+  }
   await loadSessions();
   return id;
 }
 
+export async function deleteSession(id: string): Promise<boolean> {
+  if (!id) return false;
+  const wasCurrent = get(currentSessionId) === id;
+  for (const job of get(tasks)) {
+    if (job.session_id === id && ACTIVE_TASK_STATUSES.has(job.status)) {
+      void postAPI("/v1/tasks/" + encodeURIComponent(job.id) + "/cancel", {});
+    }
+  }
+  sessions.update((list) => list.filter((s) => s.id !== id));
+  localPendingTurns.update((cur) => {
+    const next = { ...cur };
+    delete next[id];
+    return next;
+  });
+  const res = await postAPI<{ id: string; deleted: boolean }>(
+    "/api/sessions/" + encodeURIComponent(id) + "/delete",
+    {}
+  );
+  if (wasCurrent) {
+    await createNewConversation();
+  } else {
+    await loadSessions();
+  }
+  return res.ok;
+}
+
 export async function ensureActiveSession(): Promise<string> {
   const ws = get(workspaceStatus)?.workspace || "";
-  const saved = getSelectionForWorkspace(ws).session_id || get(currentSessionId);
+  const cur = get(currentSessionId);
+  const saved = cur || getSelectionForWorkspace(ws).session_id || "";
+
+  // Load existing sessions from the workspace so we reuse active conversation context
+  // instead of accidentally creating a blank conversation when one already exists.
+  const loaded = await loadSessions();
+
   if (saved) {
-    currentSessionId.set(saved);
-    await loadSessionDetail(saved);
-    return saved;
+    const existsOnServer = loaded.some((s) => s.id === saved);
+    const hasPending = Boolean(get(localPendingTurns)[saved]?.length);
+    const isExplicitNew = saved === explicitNewSessionId;
+    if (existsOnServer || hasPending || isExplicitNew || loaded.length === 0) {
+      currentSessionId.set(saved);
+      rememberSelectionForWorkspace(ws, { session_id: saved });
+      await loadSessionDetail(saved);
+      return saved;
+    }
   }
+
+  if (loaded.length > 0) {
+    const latestId = loaded[0].id;
+    currentSessionId.set(latestId);
+    rememberSelectionForWorkspace(ws, { session_id: latestId });
+    await loadSessionDetail(latestId);
+    return latestId;
+  }
+
   return createNewConversation();
 }
 

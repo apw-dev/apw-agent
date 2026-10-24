@@ -128,16 +128,28 @@ func detect(root string) Profile {
 			{Name: "test", Command: []string{"go", "test", "-mod=readonly", "./..."}},
 		}}
 	case exists(root, "package.json"):
-		return detectNode(root)
+		p := detectNode(root)
+		if len(p.Stages) == 0 {
+			if sub, ok := detectNodeSubprojects(root); ok {
+				return sub
+			}
+		}
+		return p
 	case exists(root, "Cargo.toml"):
 		return Profile{Kind: "rust", Summary: "Rust (Cargo)", Stages: []Stage{
 			{Name: "fmt", Command: []string{"cargo", "fmt", "--check"}, SkipIfMissing: true},
 			{Name: "build", Command: []string{"cargo", "build", "--all-targets"}, Timeout: defaultInstallTimeout},
 			{Name: "test", Command: []string{"cargo", "test"}, Timeout: defaultInstallTimeout},
 		}}
-	case exists(root, "pyproject.toml") || exists(root, "requirements.txt") || exists(root, "setup.py"):
+	case exists(root, "pyproject.toml") || exists(root, "requirements.txt") || exists(root, "setup.py") ||
+		exists(root, "backend/pyproject.toml") || exists(root, "backend/requirements.txt") || exists(root, "backend/setup.py"):
 		return detectPython(root)
-	case exists(root, "index.html") || len(globHTML(root)) > 0:
+	}
+	if sub, ok := detectNodeSubprojects(root); ok {
+		return sub
+	}
+	if exists(root, "index.html") || len(globHTML(root)) > 0 ||
+		exists(root, "frontend/index.html") || exists(root, "static/index.html") {
 		return Profile{Kind: "static-html", Summary: "Static HTML/CSS/JS site", Stages: withBrowser([]Stage{
 			{Name: "links", Builtin: BuiltinHTMLLinks},
 		}, ".")}
@@ -147,6 +159,7 @@ func detect(root string) Profile {
 
 type packageJSON struct {
 	PackageManager  string            `json:"packageManager"`
+	Workspaces      any               `json:"workspaces"`
 	Scripts         map[string]string `json:"scripts"`
 	Dependencies    map[string]string `json:"dependencies"`
 	DevDependencies map[string]string `json:"devDependencies"`
@@ -158,6 +171,38 @@ func (p packageJSON) has(dep string) bool {
 	return a || b
 }
 
+func subprojectManifests(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var manifests []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		switch name {
+		case "node_modules", "vendor", "dist", "build", "out", "coverage", "target", "testdata":
+			continue
+		}
+		rel := filepath.ToSlash(filepath.Join(name, "package.json"))
+		data, err := os.ReadFile(filepath.Join(root, name, "package.json"))
+		if err != nil {
+			continue
+		}
+		var sub packageJSON
+		if json.Unmarshal(data, &sub) == nil && len(sub.Dependencies)+len(sub.DevDependencies) > 0 {
+			manifests = append(manifests, rel)
+		}
+	}
+	sort.Strings(manifests)
+	return manifests
+}
+
 func detectNode(root string) Profile {
 	var pkg packageJSON
 	if data, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil {
@@ -167,8 +212,10 @@ func detectNode(root string) Profile {
 	env := []string{"NO_COLOR=1", "FORCE_COLOR=0"}
 
 	var stages []Stage
-	if len(pkg.Dependencies)+len(pkg.DevDependencies) > 0 {
+	subManifests := subprojectManifests(root)
+	if len(pkg.Dependencies)+len(pkg.DevDependencies) > 0 || pkg.Workspaces != nil || len(subManifests) > 0 {
 		inputs := []string{"package.json"}
+		inputs = append(inputs, subManifests...)
 		if lockfile != "" {
 			inputs = append(inputs, lockfile)
 		}
@@ -194,8 +241,11 @@ func detectNode(root string) Profile {
 	if s := script("lint"); s != "" {
 		run("lint", s)
 	}
+	if s := script("check"); s != "" {
+		run("check", s)
+	}
 	typescript := exists(root, "tsconfig.json") || pkg.has("typescript")
-	build := pkg.Scripts["build"]
+	build := pkg.Scripts["build"] + " " + pkg.Scripts["check"]
 	if s := script("typecheck", "type-check", "check-types", "tsc"); s != "" {
 		run("typecheck", s)
 	} else if typescript && exists(root, "tsconfig.json") && pkg.has("typescript") && !strings.Contains(build, "tsc") {
@@ -233,6 +283,98 @@ func detectNode(root string) Profile {
 	}
 	return Profile{Kind: "node", PackageManager: pm, Stages: stages,
 		Summary: "Node.js (" + strings.Join(traits, ", ") + "; package manager " + pm + ")"}
+}
+
+// detectNodeSubprojects inspects immediate subdirectories (such as api/ and web/) for package.json
+// when the workspace root has no manifest or no runnable stages of its own.
+func detectNodeSubprojects(root string) (Profile, bool) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return Profile{}, false
+	}
+	var subs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		switch name {
+		case "node_modules", "vendor", "dist", "build", "out", "coverage", "target", "testdata":
+			continue
+		}
+		if exists(filepath.Join(root, name), "package.json") {
+			subs = append(subs, name)
+		}
+	}
+	if len(subs) == 0 {
+		return Profile{}, false
+	}
+	sort.Strings(subs)
+	var allStages []Stage
+	primaryPM := "npm"
+	for i, sub := range subs {
+		subProf := detectNode(filepath.Join(root, sub))
+		if i == 0 && subProf.PackageManager != "" {
+			primaryPM = subProf.PackageManager
+		}
+		for _, st := range subProf.Stages {
+			scoped := st
+			if len(st.Command) > 0 {
+				scoped.Command = scopeNodeSubdirCommand(sub, st.Command)
+			}
+			if st.StampDir != "" {
+				scoped.StampDir = filepath.ToSlash(filepath.Join(sub, st.StampDir))
+			}
+			if st.Dir != "" {
+				scoped.Dir = filepath.ToSlash(filepath.Join(sub, st.Dir))
+			}
+			if len(st.OnceInputs) > 0 {
+				inputs := make([]string, len(st.OnceInputs))
+				for j, in := range st.OnceInputs {
+					inputs[j] = filepath.ToSlash(filepath.Join(sub, in))
+				}
+				scoped.OnceInputs = inputs
+			}
+			allStages = append(allStages, scoped)
+		}
+	}
+	if len(allStages) == 0 {
+		return Profile{}, false
+	}
+	return Profile{
+		Kind:           "node",
+		PackageManager: primaryPM,
+		Stages:         allStages,
+		Summary:        "Node.js multi-package workspace (" + strings.Join(subs, ", ") + "; package manager " + primaryPM + ")",
+	}, true
+}
+
+func scopeNodeSubdirCommand(sub string, cmd []string) []string {
+	if len(cmd) == 0 {
+		return cmd
+	}
+	switch cmd[0] {
+	case "npm":
+		return append([]string{"npm", "--prefix", sub}, cmd[1:]...)
+	case "npx":
+		// ["npx", "--no-install", "tsc", "--noEmit"] -> ["npm", "--prefix", sub, "exec", "--", "tsc", "--noEmit"]
+		rest := cmd[1:]
+		if len(rest) > 0 && rest[0] == "--no-install" {
+			rest = rest[1:]
+		}
+		return append([]string{"npm", "--prefix", sub, "exec", "--"}, rest...)
+	case "pnpm":
+		return append([]string{"pnpm", "--dir", sub}, cmd[1:]...)
+	case "yarn":
+		return append([]string{"yarn", "--cwd", sub}, cmd[1:]...)
+	case "bun":
+		return append([]string{"bun", "--cwd", sub}, cmd[1:]...)
+	default:
+		return cmd
+	}
 }
 
 // nodePackageManager honors the packageManager field, then lockfiles; npm otherwise.
@@ -305,7 +447,8 @@ func detectPython(root string) Profile {
 	env := []string{"PYTHONDONTWRITEBYTECODE=1"}
 	p := Profile{Kind: "python", Summary: "Python"}
 	p.Stages = append(p.Stages, Stage{Name: "lint", Command: []string{"ruff", "check", "."}, Env: env, SkipIfMissing: true})
-	if exists(root, "tests") || exists(root, "pytest.ini") || exists(root, "conftest.py") || fileContains(root, "pyproject.toml", "[tool.pytest") {
+	if exists(root, "tests") || exists(root, "pytest.ini") || exists(root, "conftest.py") || fileContains(root, "pyproject.toml", "[tool.pytest") ||
+		exists(root, "backend/tests") || exists(root, "backend/pytest.ini") || exists(root, "backend/conftest.py") || fileContains(root, "backend/pyproject.toml", "[tool.pytest") {
 		p.Stages = append(p.Stages, Stage{Name: "test", Command: []string{"python", "-m", "pytest", "-q", "-p", "no:cacheprovider"}, Env: env})
 		p.Summary += " (pytest)"
 	}

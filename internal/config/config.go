@@ -93,6 +93,77 @@ func LoadSavedKey(workspace, envName string) string {
 	return strings.TrimSpace(keys[strings.TrimSpace(envName)])
 }
 
+// DeleteAuthKey removes a saved secret key from .apw/auth.json if present.
+func DeleteAuthKey(workspace, envName string) error {
+	authPath := filepath.Join(workspace, ".apw", "auth.json")
+	data, err := os.ReadFile(authPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var keys map[string]string
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return fmt.Errorf("read saved credentials: %w", err)
+	}
+	delete(keys, strings.TrimSpace(envName))
+	out, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(authPath, out, 0600)
+}
+
+// DefaultTelegramTokenEnv is the default environment variable and .apw/auth.json key for the Telegram bot token.
+const DefaultTelegramTokenEnv = "APW_TELEGRAM_TOKEN"
+
+// ChannelsConfig holds external messaging channel settings.
+type ChannelsConfig struct {
+	Telegram TelegramConfig `json:"telegram,omitzero"`
+}
+
+// TelegramConfig configures the Telegram bot channel. The raw bot token is stored in .apw/auth.json
+// or read from the environment variable named in TokenEnv (default APW_TELEGRAM_TOKEN), never in apw.json.
+type TelegramConfig struct {
+	Enabled    bool    `json:"enabled,omitempty"`
+	TokenEnv   string  `json:"token_env,omitempty"`
+	AllowUsers []int64 `json:"allow_users,omitempty"`
+}
+
+// EffectiveTokenEnv returns TokenEnv or DefaultTelegramTokenEnv when unset.
+func (t TelegramConfig) EffectiveTokenEnv() string {
+	if env := strings.TrimSpace(t.TokenEnv); env != "" {
+		return env
+	}
+	return DefaultTelegramTokenEnv
+}
+
+// ResolveToken resolves the Telegram bot token from the environment or .apw/auth.json.
+func (t TelegramConfig) ResolveToken(workspace string) string {
+	envName := t.EffectiveTokenEnv()
+	if val := strings.TrimSpace(os.Getenv(envName)); val != "" {
+		return val
+	}
+	root := workspace
+	if root == "" {
+		root = "."
+	}
+	return LoadSavedKey(root, envName)
+}
+
+// MaskSecret returns a redacted preview of a token for safe display in CLI and Desktop UI.
+func MaskSecret(secret string) string {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return ""
+	}
+	if len(secret) <= 8 {
+		return "****"
+	}
+	return secret[:4] + "..." + secret[len(secret)-3:]
+}
+
 // Config holds the top-level configuration for apw.
 type Config struct {
 	Workspace string                    `json:"workspace"`
@@ -120,6 +191,8 @@ type Config struct {
 	Research ResearchConfig `json:"research,omitzero"`
 	// Planning asks several architect models for plans and ranks them.
 	Planning PlanningConfig `json:"planning,omitzero"`
+	// Channels configures external messaging gateways such as Telegram.
+	Channels ChannelsConfig `json:"channels,omitzero"`
 	// Approval is the interactive CLI's default mode for free-text requests: "ask" (default) runs
 	// and verifies, then asks before applying; "auto" applies verified changes without asking;
 	// "plan" only plans; "unverified" patches without running build or test and asks before applying.
@@ -439,6 +512,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Planning.Proposals < 0 || c.Planning.Proposals > 5 {
 		return errors.New("config: planning.proposals must be between 0 and 5")
+	}
+	for _, uid := range c.Channels.Telegram.AllowUsers {
+		if uid <= 0 {
+			return fmt.Errorf("config: channels.telegram.allow_users entry %d must be a positive user ID", uid)
+		}
+	}
+	if c.Channels.Telegram.Enabled && len(c.Channels.Telegram.AllowUsers) == 0 {
+		return errors.New("config: channels.telegram.enabled requires at least one user ID in allow_users")
 	}
 	seenStage := map[string]bool{}
 	for i, s := range c.Verify.Stages {

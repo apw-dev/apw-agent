@@ -1,5 +1,16 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, BookmarkPlus } from "lucide-svelte";
+  import {
+    ChevronDown,
+    ChevronRight,
+    BookmarkPlus,
+    RefreshCw,
+    Check,
+    AlertCircle,
+    Play,
+    Copy,
+    ExternalLink,
+    Globe
+  } from "lucide-svelte";
   import MarkdownView from "./MarkdownView.svelte";
   import type { TaskJob, TaskEvent } from "../lib/api";
   import { parseUnifiedDiff } from "../lib/diff";
@@ -8,6 +19,7 @@
     RESUMABLE_TASK_STATUSES,
     selectedTaskId,
     mapTaskSteps,
+    extractTaskSubagents,
     selectTask,
     applyTaskChanges,
     cancelTaskById,
@@ -16,15 +28,87 @@
   } from "../lib/stores/tasks";
   import { createProceduralSkill, fetchWorkspaceFile } from "../lib/stores/workspace";
   import { rightCollapsed, rightPanelView, selectedDiffFile } from "../lib/stores/settings";
+  import { parseInstructionSkillPills } from "../lib/stores/search";
+  import { openExternalURL } from "../lib/shell";
+  import {
+    terminalScripts,
+    activeWorkspacePorts,
+    runCommandInAPW,
+    openCommandInExternalTerminal,
+    copyTextToClipboard
+  } from "../lib/stores/terminal";
 
   let { job, events = [] }: { job: TaskJob; events?: TaskEvent[] } = $props();
 
   let logExpanded = $state(false);
+  let logFilter = $state<"all" | "steps" | "subagents" | "alerts">("all");
+  let logSearch = $state("");
+  let expandedEventSeqs = $state<Record<number, boolean>>({});
+  let subagentsExpanded = $state(false);
+  let thinkingExpanded = $state(false);
+  let commandsExpanded = $state(false);
+  let allAcceptanceExpanded = $state(false);
   let busy = $state(false);
   let skillNotice = $state("");
+  let copiedCmdKey = $state("");
+  let nowMs = $state(Date.now());
 
+  async function flashTaskCopy(key: string, text: string) {
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      copiedCmdKey = key;
+      setTimeout(() => {
+        if (copiedCmdKey === key) copiedCmdKey = "";
+      }, 1500);
+    }
+  }
+
+  const parsedInstruction = $derived(parseInstructionSkillPills(job.instruction || ""));
+  const subagents = $derived(extractTaskSubagents(job, events));
+  const runningSubagentsCount = $derived(subagents.filter((s) => s.status === "running").length);
   const stepBar = $derived(mapTaskSteps(job, events));
   const isRunning = $derived(ACTIVE_TASK_STATUSES.has(job.status));
+
+  $effect(() => {
+    if (!isRunning) return;
+    nowMs = Date.now();
+    const timer = setInterval(() => {
+      nowMs = Date.now();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
+
+  function formatLiveClock(sec: number): string {
+    const s = Math.max(0, Math.floor(sec));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const rem = s % 60;
+    const mm = String(mins).padStart(2, "0");
+    const ss = String(rem).padStart(2, "0");
+    if (hrs > 0) {
+      return `${hrs}:${mm}:${ss}`;
+    }
+    return `${mm}:${ss}`;
+  }
+
+  const liveElapsedSec = $derived.by((): number => {
+    if (!isRunning) return 0;
+    const startStr = job.created_at || job.updated_at;
+    if (!startStr) return 0;
+    const startMs = new Date(startStr).getTime();
+    if (Number.isNaN(startMs)) return 0;
+    return Math.max(0, Math.floor((nowMs - startMs) / 1000));
+  });
+
+  const liveStageSec = $derived.by((): number => {
+    if (!isRunning) return 0;
+    const lastEvTime = events.length > 0 ? events[events.length - 1]?.timestamp : undefined;
+    const refStr = lastEvTime || job.updated_at || job.created_at;
+    if (!refStr) return liveElapsedSec;
+    const refMs = new Date(refStr).getTime();
+    if (Number.isNaN(refMs)) return liveElapsedSec;
+    return Math.max(0, Math.floor((nowMs - refMs) / 1000));
+  });
   const canApply = $derived(job.status === "ready_to_apply");
   const canResume = $derived(RESUMABLE_TASK_STATUSES.has(job.status));
   const changedFiles = $derived.by(() => {
@@ -43,6 +127,103 @@
   const totalAdded = $derived(fileDiffs.reduce((acc, f) => acc + f.added, 0));
   const totalDeleted = $derived(fileDiffs.reduce((acc, f) => acc + f.deleted, 0));
   const actionErr = $derived($taskActionError[job.id] || "");
+  const rawError = $derived((actionErr || job.error || "").trim());
+  const isInterruptedRestart = $derived(
+    job.status === "interrupted" || rawError === "recovered after service restart"
+  );
+  const unmetAcceptanceItems = $derived.by((): string[] => {
+    const prefix = "acceptance not satisfied:";
+    if (rawError.toLowerCase().startsWith(prefix)) {
+      return rawError
+        .slice(prefix.length)
+        .split(";")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  });
+
+  interface ChecklistItem {
+    id: string;
+    label: string;
+    file?: string;
+    status: "done" | "active" | "failed" | "pending";
+  }
+
+  const checklistItems = $derived.by((): ChecklistItem[] => {
+    const subtasks = job.report?.plan?.subtasks || [];
+    if (subtasks.length === 0) return [];
+    const stepsById = new Map((job.report?.steps || []).map((st) => [st.subtask_id, st]));
+    let activeFound = false;
+    return subtasks.map((st) => {
+      const stepRes = stepsById.get(st.id);
+      let status: ChecklistItem["status"] = "pending";
+      if (stepRes) {
+        status = stepRes.success ? "done" : "failed";
+      } else if (job.status === "succeeded" || job.status === "ready_to_apply" || job.status === "preview_ready") {
+        status = "done";
+      } else if (isRunning && !activeFound) {
+        activeFound = true;
+        status = "active";
+      }
+      return {
+        id: st.id,
+        label: st.description || `${st.action} ${st.target_file || st.id}`,
+        file: st.target_file || undefined,
+        status
+      };
+    });
+  });
+
+  const commandEntries = $derived.by((): Array<{ key: string; label: string; output?: string; passed: boolean }> => {
+    const out: Array<{ key: string; label: string; output?: string; passed: boolean }> = [];
+    const attempts = job.report?.reflex_attempts || [];
+    for (const att of attempts) {
+      const r = att.Result;
+      if (!r) continue;
+      out.push({
+        key: "reflex-" + att.Number,
+        label: r.failed_stage ? `Verification stage: ${r.failed_stage} (round #${att.Number})` : `Verification pipeline (round #${att.Number})`,
+        output: r.raw_output || undefined,
+        passed: r.passed
+      });
+    }
+    if (out.length === 0) {
+      for (const ev of events) {
+        const stg = (ev.stage || "").toLowerCase();
+        if (stg === "baseline" || stg === "verifying" || stg === "verified" || stg === "worktree_ready") {
+          out.push({
+            key: "ev-cmd-" + ev.seq,
+            label: `[${ev.stage}] ${ev.message}`,
+            passed: true
+          });
+        }
+      }
+    }
+    return out;
+  });
+
+  const elapsedText = $derived.by((): string => {
+    const durNs = job.report?.duration;
+    if (typeof durNs === "number" && durNs > 0) {
+      const sec = Math.max(1, Math.round(durNs / 1e9));
+      if (sec < 60) return `${sec}s`;
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}m ${s}s`;
+    }
+    if (job.created_at && job.updated_at) {
+      const diffMs = new Date(job.updated_at).getTime() - new Date(job.created_at).getTime();
+      if (diffMs > 0) {
+        const sec = Math.max(1, Math.round(diffMs / 1000));
+        if (sec < 60) return `${sec}s`;
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return `${m}m ${s}s`;
+      }
+    }
+    return "";
+  });
 
   interface ActivityItem {
     key: string;
@@ -130,6 +311,7 @@
     }
     switch (job.status) {
       case "queued":
+        return "อยู่ในคิวรอประมวลผล (กำลังเตรียมเริ่มงาน)…";
       case "analyzing":
         return "กำลังวิเคราะห์โปรเจกต์และเตรียมสภาพแวดล้อม…";
       case "planning":
@@ -153,11 +335,14 @@
         return "✓ ตรวจสอบผ่านแล้ว · พร้อม Apply";
       case "preview_ready":
         return "✓ สร้าง Preview เสร็จแล้ว";
+      case "interrupted":
+        return "⏸ พักงานชั่วคราว (พร้อมทำต่อ)";
       case "failed":
         return "✗ ไม่สำเร็จ (Failed)";
       case "cancelled":
         return "⊘ ยกเลิกแล้ว";
       case "queued":
+        return "รอคิวทำงาน…";
       case "analyzing":
         return "กำลังวิเคราะห์…";
       case "planning":
@@ -173,11 +358,20 @@
     }
   }
 
+  function scrollFeedToBottom() {
+    if (typeof document === "undefined") return;
+    const feed = document.getElementById("feed");
+    if (feed) {
+      feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
+    }
+  }
+
   async function onApply() {
     if (busy) return;
     busy = true;
     await applyTaskChanges(job.id, "ask");
     busy = false;
+    setTimeout(scrollFeedToBottom, 50);
   }
 
   async function onCancel() {
@@ -192,6 +386,7 @@
     busy = true;
     await resumeTaskById(job.id);
     busy = false;
+    setTimeout(scrollFeedToBottom, 50);
   }
 
   async function onSaveSkill() {
@@ -237,6 +432,141 @@
     }
     openDiffFor(item.file);
   }
+
+  interface FormattedLogEvent {
+    seq: number;
+    stage: string;
+    badgeLabel: string;
+    badgeTone: "plan" | "step" | "agent" | "verify" | "save" | "warn";
+    category: "steps" | "subagents" | "alerts" | "other";
+    summary: string;
+    fullMessage: string;
+    isLong: boolean;
+    timeText: string;
+  }
+
+  function formatEventItem(ev: TaskEvent, idx: number): FormattedLogEvent {
+    const rawStage = (ev.stage || "event").toLowerCase();
+    const rawMsg = (ev.message || "").trim();
+    let badgeLabel = rawStage.toUpperCase();
+    let badgeTone: FormattedLogEvent["badgeTone"] = "step";
+    let category: FormattedLogEvent["category"] = "steps";
+
+    if (rawStage === "planning" || rawStage === "plan_ready" || rawStage.startsWith("research")) {
+      badgeLabel = rawStage === "plan_ready" ? "PLAN READY" : rawStage.startsWith("research") ? "CONTEXT" : "PLAN";
+      badgeTone = "plan";
+      category = rawStage === "research_skipped" ? "alerts" : "steps";
+    } else if (rawStage.startsWith("subagent")) {
+      badgeLabel = rawStage === "subagent_wave" ? "WAVE" : rawStage === "subagent_start" ? "AGENT ▶" : "AGENT ✓";
+      badgeTone = "agent";
+      category = "subagents";
+    } else if (rawStage === "step_start" || rawStage === "step_done") {
+      badgeLabel = rawStage === "step_start" ? "STEP ▶" : "STEP ✓";
+      badgeTone = "step";
+      category = "steps";
+    } else if (rawStage === "verifying" || rawStage === "verified" || rawStage === "baseline") {
+      badgeLabel = rawStage === "baseline" ? "BASELINE" : rawStage === "verified" ? "VERIFIED" : "VERIFY";
+      badgeTone = "verify";
+      category = "steps";
+    } else if (rawStage === "checkpoint_saved" || rawStage.startsWith("worktree")) {
+      badgeLabel = rawStage === "checkpoint_saved" ? "SAVED" : "WORKTREE";
+      badgeTone = "save";
+      category = "other";
+    } else if (rawStage === "patch_retry" || rawStage === "replanning" || rawStage.includes("fail") || rawStage.includes("err")) {
+      badgeLabel = rawStage === "replanning" ? "REPLAN" : "RETRY";
+      badgeTone = "warn";
+      category = "alerts";
+    } else if (rawStage === "applying" || rawStage === "applied") {
+      badgeLabel = "APPLY";
+      badgeTone = "verify";
+      category = "steps";
+    }
+
+    let clean = rawMsg
+      .replace(/^\[SUBAGENT\s*·\s*[^\]]+\]\s*/i, "")
+      .replace(/^\s*\[(read|create|patch|delete|verify)\]\s*/i, (_, verb) => `${verb.toUpperCase()}: `);
+
+    const promptIdx = clean.search(/\b(Workspace:|Codebase Overview:|User Task:|Raw:\s*\{)/);
+    if (promptIdx > 0) {
+      clean = clean.slice(0, promptIdx).trim();
+    }
+    const firstLine = clean.split(/\r?\n/)[0].trim();
+    const summary = firstLine.length > 150 ? firstLine.slice(0, 150) + "…" : firstLine || rawMsg.slice(0, 150);
+    const isLong = rawMsg.length > 160 || rawMsg.includes("\n") || promptIdx > 0;
+
+    let timeText = "";
+    if (ev.timestamp) {
+      const d = new Date(ev.timestamp);
+      if (!Number.isNaN(d.getTime())) {
+        timeText = d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      }
+    }
+
+    return {
+      seq: ev.seq ?? idx + 1,
+      stage: ev.stage,
+      badgeLabel,
+      badgeTone,
+      category,
+      summary,
+      fullMessage: rawMsg,
+      isLong,
+      timeText
+    };
+  }
+
+  const structuredEvents = $derived.by((): FormattedLogEvent[] => {
+    if (events.length > 0) {
+      return events.map((ev, idx) => formatEventItem(ev, idx));
+    }
+    if (job.report?.steps?.length) {
+      return job.report.steps.map((st, idx) => ({
+        seq: idx + 1,
+        stage: st.action,
+        badgeLabel: st.success ? "STEP ✓" : "STEP ✗",
+        badgeTone: st.success ? "step" : "warn",
+        category: st.success ? "steps" : "alerts",
+        summary: `[${st.action}] ${st.target_file || st.subtask_id}: ${st.message}`,
+        fullMessage: `[${st.action}] ${st.target_file || st.subtask_id}: ${st.message}`,
+        isLong: (st.message || "").length > 160,
+        timeText: ""
+      }));
+    }
+    return [];
+  });
+
+  const eventCategoryCounts = $derived.by(() => {
+    let steps = 0;
+    let subagentsCount = 0;
+    let alerts = 0;
+    for (const item of structuredEvents) {
+      if (item.category === "steps") steps++;
+      else if (item.category === "subagents") subagentsCount++;
+      else if (item.category === "alerts") alerts++;
+    }
+    return { all: structuredEvents.length, steps, subagents: subagentsCount, alerts };
+  });
+
+  const filteredLogEvents = $derived.by((): FormattedLogEvent[] => {
+    const q = logSearch.trim().toLowerCase();
+    return structuredEvents.filter((item) => {
+      if (logFilter === "steps" && item.category !== "steps") return false;
+      if (logFilter === "subagents" && item.category !== "subagents") return false;
+      if (logFilter === "alerts" && item.category !== "alerts") return false;
+      if (q) {
+        return (
+          item.summary.toLowerCase().includes(q) ||
+          item.stage.toLowerCase().includes(q) ||
+          item.badgeLabel.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  });
+
+  function toggleEventExpand(seq: number) {
+    expandedEventSeqs = { ...expandedEventSeqs, [seq]: !expandedEventSeqs[seq] };
+  }
 </script>
 
 <div class="task-card" data-testid="task-card" data-task-id={job.id} data-task-status={job.status}>
@@ -253,48 +583,172 @@
         <span class="diff-stat del mono">−{totalDeleted}</span>
       {/if}
       <span class="sep">·</span>
-      <span class="instr">{job.instruction || job.id}</span>
+      {#if parsedInstruction.skills.length > 0}
+        {#each parsedInstruction.skills as sk (sk)}
+          <span class="skill-pill mono" data-testid="task-skill-pill">
+            <span class="skill-icon">&lt;&gt;</span>
+            <span>{sk}</span>
+          </span>
+        {/each}
+      {/if}
+      <span class="instr">{parsedInstruction.cleanText || job.instruction || job.id}</span>
     </div>
-    <span
-      class="status-pill"
-      class:running={isRunning}
-      class:ok={job.status === "succeeded" || job.status === "ready_to_apply" || job.status === "preview_ready"}
-      class:err={job.status === "failed" || job.status === "cancelled"}
-    >
-      {statusLabel(job.status)}
-    </span>
+    <div class="hdr-right">
+      {#if isRunning}
+        <span class="timer-pill running mono" data-testid="task-live-timer" title="เวลาที่ใช้ไปทั้งหมดในงานนี้">
+          ⏱ {formatLiveClock(liveElapsedSec)}
+        </span>
+      {:else if elapsedText}
+        <span class="timer-pill done mono" data-testid="task-elapsed-pill" title="เวลาที่ใช้ทั้งหมด">
+          ⏱ {elapsedText}
+        </span>
+      {/if}
+      <span
+        class="status-pill"
+        class:running={isRunning}
+        class:ok={job.status === "succeeded" || job.status === "ready_to_apply" || job.status === "preview_ready"}
+        class:warn={job.status === "interrupted"}
+        class:err={job.status === "failed" || job.status === "cancelled"}
+      >
+        {statusLabel(job.status)}
+      </span>
+    </div>
   </div>
 
-  <div class="steps" role="list" aria-label="ขั้นตอนของงาน">
-    {#each stepBar.steps as step (step.label)}
-      <i
-        class="step-bar"
-        class:done={step.state === "done"}
-        class:active={step.state === "active"}
-        class:failed={step.state === "failed"}
-        data-step={step.label}
-        data-state={step.state}
-      ></i>
-    {/each}
-  </div>
-  <div class="step-labels">
-    {#each stepBar.steps as step (step.label)}
-      <span class:active={step.state === "active" || step.state === "done"}>{step.label}</span>
-    {/each}
-  </div>
-
-  {#if isRunning}
-    <div class="live-banner">
-      <span class="pulse-dot" aria-hidden="true"></span>
-      <div class="live-text">
-        <b>Agent กำลังทำงานอยู่ในขณะนี้</b>
-        <div class="mono live-sub">{latestLiveMessage}</div>
-      </div>
+  {#if commandEntries.length > 0}
+    <div class="ran-commands-wrap" data-testid="ran-commands-wrap">
+      <button
+        type="button"
+        class="ran-commands-toggle"
+        onclick={() => (commandsExpanded = !commandsExpanded)}
+        data-testid="ran-commands-toggle"
+      >
+        <span>Ran {commandEntries.length} {commandEntries.length === 1 ? "command" : "commands"}</span>
+        {#if commandsExpanded}
+          <ChevronDown size={12} />
+        {:else}
+          <ChevronRight size={12} />
+        {/if}
+      </button>
+      {#if commandsExpanded}
+        <div class="ran-commands-box mono selectable" data-testid="ran-commands-output">
+          {#each commandEntries as cmd (cmd.key)}
+            <div class="cmd-entry">
+              <div class="cmd-hdr-row">
+                <div class="cmd-hdr" class:ok={cmd.passed} class:err={!cmd.passed}>
+                  {cmd.passed ? "✓" : "✗"} {cmd.label}
+                </div>
+                <button
+                  type="button"
+                  class="cmd-copy-btn"
+                  onclick={() => flashTaskCopy("ran-" + cmd.key, cmd.output || cmd.label)}
+                  title="คัดลอกผลลัพธ์คำสั่ง"
+                >
+                  {copiedCmdKey === "ran-" + cmd.key ? "✓ คัดลอกแล้ว" : "คัดลอก"}
+                </button>
+              </div>
+              {#if cmd.output}
+                <pre class="cmd-out">{cmd.output}</pre>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 
   {#if job.report?.plan?.objective}
-    <div class="plan-objective selectable">{job.report.plan.objective}</div>
+    <div class="thinking-block" data-testid="task-thinking-block">
+      <button
+        type="button"
+        class="thinking-toggle"
+        onclick={() => (thinkingExpanded = !thinkingExpanded)}
+      >
+        <span>Thinking..</span>
+        {#if thinkingExpanded}
+          <ChevronDown size={12} />
+        {:else}
+          <ChevronRight size={12} />
+        {/if}
+      </button>
+      <div class="plan-objective selectable" class:collapsed={!thinkingExpanded && !isRunning}>
+        {job.report.plan.objective}
+      </div>
+    </div>
+  {/if}
+
+  {#if subagents.length > 0}
+    <div class="subagents-block" data-testid="task-subagents-block">
+      <button
+        type="button"
+        class="subagents-toggle"
+        onclick={() => (subagentsExpanded = !subagentsExpanded)}
+        data-testid="task-subagents-toggle"
+      >
+        <span class="sub-toggle-icon" class:spin={runningSubagentsCount > 0} class:ok={runningSubagentsCount === 0}>
+          {#if runningSubagentsCount > 0}
+            <RefreshCw size={12} />
+          {:else}
+            <Check size={12} />
+          {/if}
+        </span>
+        <span>
+          {#if runningSubagentsCount > 0}
+            {runningSubagentsCount} {runningSubagentsCount === 1 ? "subagent" : "subagents"} running
+          {:else}
+            {subagents.length} {subagents.length === 1 ? "subagent" : "subagents"} completed
+          {/if}
+        </span>
+        {#if subagentsExpanded}
+          <ChevronDown size={13} />
+        {:else}
+          <ChevronRight size={13} />
+        {/if}
+      </button>
+
+      {#if subagentsExpanded || runningSubagentsCount > 0}
+        <div class="subagents-list">
+          {#each subagents as sub (sub.id)}
+            <button
+              type="button"
+              class="subagent-row"
+              class:clickable={Boolean(sub.target_file)}
+              onclick={async () => {
+                void selectTask(job.id, false);
+                rightCollapsed.set(false);
+                if (sub.target_file) {
+                  const res = await fetchWorkspaceFile(sub.target_file, job.id);
+                  if (res.ok) {
+                    rightPanelView.set("file");
+                    return;
+                  }
+                }
+                rightPanelView.set("cards");
+              }}
+            >
+              <span
+                class="sub-status-icon"
+                class:spin={sub.status === "running"}
+                class:ok={sub.status === "done"}
+                class:err={sub.status === "failed"}
+              >
+                {#if sub.status === "running"}
+                  <RefreshCw size={11} />
+                {:else if sub.status === "failed"}
+                  <AlertCircle size={11} />
+                {:else}
+                  <Check size={11} />
+                {/if}
+              </span>
+              <span class="sub-role">{sub.role}</span>
+              {#if sub.target_file}
+                <span class="sub-target mono">{sub.target_file}</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   {/if}
 
   {#if activityItems.length > 0}
@@ -339,48 +793,231 @@
     </div>
   {/if}
 
-  {#if job.error || actionErr}
-    <div class="error-box selectable" data-testid="task-error">
-      {actionErr || job.error}
-    </div>
-  {/if}
-
-  {#if skillNotice}
-    <div class="skill-notice">{skillNotice}</div>
-  {/if}
-
-  {#if events.length > 0 || job.report?.steps?.length}
+  {#if structuredEvents.length > 0}
     <button type="button" class="log-toggle" onclick={() => (logExpanded = !logExpanded)}>
       {#if logExpanded}
         <ChevronDown size={13} />
       {:else}
         <ChevronRight size={13} />
       {/if}
-      <span>บันทึกเหตุการณ์ละเอียด ({events.length || job.report?.steps?.length || 0} รายการ)</span>
+      <span>บันทึกเหตุการณ์ละเอียด ({structuredEvents.length} รายการ)</span>
     </button>
     {#if logExpanded}
-      <div class="log-box mono selectable">
-        {#each events as ev (ev.seq)}
-          <div>[{ev.stage}] {ev.message}</div>
-        {/each}
-        {#if events.length === 0 && job.report?.steps}
-          {#each job.report.steps as st (st.subtask_id)}
-            <div>{st.success ? "✓" : "✗"} [{st.action}] {st.target_file || st.subtask_id}: {st.message}</div>
-          {/each}
-        {/if}
+      <div class="log-panel" data-testid="task-event-log-panel">
+        <div class="log-toolbar">
+          <div class="log-filters">
+            <button
+              type="button"
+              class="log-filter-pill"
+              class:active={logFilter === "all"}
+              onclick={() => (logFilter = "all")}
+            >
+              ทั้งหมด ({eventCategoryCounts.all})
+            </button>
+            <button
+              type="button"
+              class="log-filter-pill"
+              class:active={logFilter === "steps"}
+              onclick={() => (logFilter = "steps")}
+            >
+              ขั้นตอนหลัก ({eventCategoryCounts.steps})
+            </button>
+            {#if eventCategoryCounts.subagents > 0}
+              <button
+                type="button"
+                class="log-filter-pill"
+                class:active={logFilter === "subagents"}
+                onclick={() => (logFilter = "subagents")}
+              >
+                Subagents ({eventCategoryCounts.subagents})
+              </button>
+            {/if}
+            {#if eventCategoryCounts.alerts > 0}
+              <button
+                type="button"
+                class="log-filter-pill warn"
+                class:active={logFilter === "alerts"}
+                onclick={() => (logFilter = "alerts")}
+              >
+                แจ้งเตือน/แก้ไข ({eventCategoryCounts.alerts})
+              </button>
+            {/if}
+          </div>
+          <input
+            type="search"
+            class="log-search"
+            placeholder="ค้นหาเหตุการณ์ หรือชื่อไฟล์…"
+            bind:value={logSearch}
+          />
+        </div>
+
+        <div class="log-box mono selectable">
+          {#if filteredLogEvents.length === 0}
+            <div class="log-empty">ไม่พบเหตุการณ์ที่ตรงกับตัวกรอง</div>
+          {:else}
+            {#each filteredLogEvents as item (item.seq)}
+              <div class="log-item">
+                <div class="log-row">
+                  <span class="log-seq">#{item.seq}</span>
+                  {#if item.timeText}
+                    <span class="log-time">{item.timeText}</span>
+                  {/if}
+                  <span class="log-badge {item.badgeTone}">{item.badgeLabel}</span>
+                  <span class="log-msg">{item.summary}</span>
+                  {#if item.isLong}
+                    <button
+                      type="button"
+                      class="log-more-btn"
+                      onclick={() => toggleEventExpand(item.seq)}
+                    >
+                      {expandedEventSeqs[item.seq] ? "ย่อ" : "ดูเต็ม"}
+                    </button>
+                  {/if}
+                </div>
+                {#if item.isLong && expandedEventSeqs[item.seq]}
+                  <pre class="log-full-msg">{item.fullMessage}</pre>
+                {/if}
+              </div>
+            {/each}
+          {/if}
+        </div>
       </div>
     {/if}
+  {/if}
+
+  {#if checklistItems.length > 0}
+    <div class="task-checklist-card" data-testid="task-checklist-card">
+      {#each checklistItems as item (item.id)}
+        <div class="chk-row" class:done={item.status === "done"} class:active={item.status === "active"} class:failed={item.status === "failed"}>
+          <span
+            class="chk-icon"
+            class:done={item.status === "done"}
+            class:active={item.status === "active"}
+            class:failed={item.status === "failed"}
+            aria-hidden="true"
+          >
+            {#if item.status === "done"}
+              ✓
+            {:else if item.status === "failed"}
+              ✗
+            {/if}
+          </span>
+          <span class="chk-label selectable">{item.label}</span>
+          {#if item.file}
+            <button
+              type="button"
+              class="chk-file mono"
+              data-file-path={item.file}
+              onclick={() => openDiffFor(item.file)}
+            >
+              {item.file}
+            </button>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  <div class="steps" role="list" aria-label="ขั้นตอนของงาน">
+    {#each stepBar.steps as step (step.label)}
+      <i
+        class="step-bar"
+        class:done={step.state === "done"}
+        class:active={step.state === "active"}
+        class:failed={step.state === "failed"}
+        data-step={step.label}
+        data-state={step.state}
+      ></i>
+    {/each}
+  </div>
+  <div class="step-labels">
+    {#each stepBar.steps as step (step.label)}
+      <span class:active={step.state === "active" || step.state === "done"}>{step.label}</span>
+    {/each}
+  </div>
+
+  {#if isRunning}
+    <div class="live-banner">
+      <span class="pulse-dot" aria-hidden="true"></span>
+      <div class="live-text">
+        <b>Agent กำลังทำงานอยู่ในขณะนี้</b>
+        <div class="mono live-sub">{latestLiveMessage}</div>
+      </div>
+      <div class="live-timer-box mono" data-testid="live-banner-timer">
+        <span class="live-timer-main">⏱ {formatLiveClock(liveElapsedSec)}</span>
+        <span class="live-timer-stage">ขั้นตอนนี้ {formatLiveClock(liveStageSec)}</span>
+      </div>
+    </div>
+    <div class="thinking-status-line mono" data-testid="task-thinking-status">
+      <span class="thinking-dots" aria-hidden="true"></span>
+      <span>
+        {events.length || 1} events · Thinking · ⏱ รวม {formatLiveClock(liveElapsedSec)} (ขั้นตอนนี้ {formatLiveClock(liveStageSec)})
+      </span>
+    </div>
+  {/if}
+
+  {#if job.error || actionErr}
+    {#if isInterruptedRestart && !actionErr}
+      <div class="interrupted-banner selectable" data-testid="task-error">
+        <div class="interrupted-title">⏸ งานนี้ถูกพักชั่วคราวเนื่องจากบริการรีสตาร์ท (Recovered after service restart)</div>
+        <div class="interrupted-desc">
+          โค้ดและขั้นตอนที่ทำสำเร็จก่อนหน้านี้ถูกบันทึกไว้ใน Git Worktree และ Checkpoint เรียบร้อยแล้ว กดปุ่ม <b>ทำต่อ (Resume)</b> ด้านล่างเพื่อทำงานต่อจากจุดเดิมได้ทันที
+        </div>
+      </div>
+    {:else if unmetAcceptanceItems.length > 1}
+      <div class="error-box acceptance-err selectable" data-testid="task-error">
+        <div class="acc-err-hdr">
+          <span>⚠️ เงื่อนไข Acceptance ที่ยังไม่ผ่าน ({unmetAcceptanceItems.length} รายการ):</span>
+          {#if unmetAcceptanceItems.length > 5}
+            <button
+              type="button"
+              class="acc-expand-btn"
+              onclick={() => (allAcceptanceExpanded = !allAcceptanceExpanded)}
+            >
+              {allAcceptanceExpanded ? "ย่อรายการ" : `ดูทั้งหมด (${unmetAcceptanceItems.length})`}
+            </button>
+          {/if}
+        </div>
+        <ul class="acc-err-list">
+          {#each allAcceptanceExpanded ? unmetAcceptanceItems : unmetAcceptanceItems.slice(0, 5) as crit, idx (idx)}
+            <li>{crit}</li>
+          {/each}
+        </ul>
+      </div>
+    {:else}
+      <div class="error-box selectable" data-testid="task-error">
+        {actionErr || job.error}
+      </div>
+    {/if}
+  {/if}
+
+  {#if skillNotice}
+    <div class="skill-notice">{skillNotice}</div>
   {/if}
 
   {#if !isRunning}
     <div
       class="completion-box"
       class:ok={job.status === "succeeded" || job.status === "ready_to_apply" || job.status === "preview_ready"}
+      class:warn={job.status === "interrupted"}
       class:err={job.status === "failed" || job.status === "cancelled"}
     >
       {#if job.report?.summary}
         <div class="summary selectable">
           <MarkdownView text={job.report.summary} taskId={job.id} />
+        </div>
+      {/if}
+
+      {#if elapsedText || changedFiles.length > 0}
+        <div class="completion-meta-bar mono">
+          {#if elapsedText}
+            <span>Elapsed time: {elapsedText}</span>
+          {/if}
+          {#if changedFiles.length > 0}
+            <button type="button" class="changes-summary-link" onclick={() => openDiffFor()}>
+              <span>› {changedFiles.length} {job.report?.applied ? "changes accepted" : "files changed"} (View all)</span>
+            </button>
+          {/if}
         </div>
       {/if}
 
@@ -392,10 +1029,85 @@
         {:else if job.status === "succeeded"}
           <b>✓ Agent ทำงานเสร็จสมบูรณ์แล้ว</b>
           {job.report?.applied ? " (นำการเปลี่ยนแปลงไปใช้ใน Workspace เรียบร้อยแล้ว)" : ""}
+        {:else if job.status === "interrupted"}
+          <b>⏸ งานนี้ถูกพักชั่วคราว (Interrupted):</b> ขั้นตอนที่ทำไปแล้วถูกเก็บไว้ใน Git Worktree เรียบร้อย กด <b>ทำต่อ (Resume)</b> เพื่อให้ Agent ทำงานต่อจากจุดเดิมได้เลย
         {:else if job.status === "failed" || job.status === "cancelled"}
           <b>งานนี้หยุดลงก่อนเสร็จสมบูรณ์:</b> ต้องการสั่งให้ Agent ทำงานต่อจากจุดเดิม (Resume) หรือเปิดดู Diff ก่อนไหม?
         {/if}
       </div>
+
+      {#if $terminalScripts.length > 0 && (job.status === "succeeded" || job.status === "ready_to_apply")}
+        <div class="task-launch-strip" data-testid="task-launch-strip">
+          <div class="launch-strip-hdr">
+            <span class="launch-strip-title">⚡ คำสั่งรันโปรเจกต์ &amp; พอร์ต (กดรันหรือคัดลอกได้ทันที)</span>
+            {#if $activeWorkspacePorts.length > 0}
+              <div class="launch-active-ports">
+                {#each $activeWorkspacePorts as ap (ap.port)}
+                  <button
+                    type="button"
+                    class="launch-port-badge mono"
+                    onclick={() => openExternalURL(ap.url)}
+                    title={`เปิด ${ap.url}`}
+                  >
+                    <Globe size={11} />
+                    <span>กำลังรัน: {ap.url.replace(/^https?:\/\//i, "")}</span>
+                    <ExternalLink size={10} />
+                  </button>
+                {/each}
+              </div>
+            {:else}
+              <span class="launch-idle-note">หมายเหตุ: โหมด Execute รันตรวจสอบแล้วปิดโปรเซสอัตโนมัติ — กดปุ่มด้านล่างเพื่อเปิดเซิร์ฟเวอร์ค้างไว้</span>
+            {/if}
+          </div>
+
+          <div class="launch-cmd-grid">
+            {#each $terminalScripts.slice(0, 4) as sc (sc.id)}
+              <div class="launch-cmd-row mono">
+                <div class="launch-cmd-info">
+                  <code class="launch-cmd-code">{sc.command}</code>
+                  {#if sc.port_conflict && sc.default_port && sc.target_port}
+                    <span
+                      class="launch-conflict-badge"
+                      title={`พอร์ต :${sc.default_port} มีระบบอื่นในเครื่องใช้อยู่แล้ว — APW สลับไปใช้พอร์ตว่าง :${sc.target_port} อัตโนมัติ`}
+                    >
+                      ⚠️ พอร์ต :{sc.default_port} ชนระบบอื่น → สลับไปใช้ :{sc.target_port}
+                    </span>
+                  {:else if sc.target_port}
+                    <span class="launch-hint-url">พอร์ต :{sc.target_port}</span>
+                  {/if}
+                </div>
+                <div class="launch-cmd-btns">
+                  <button
+                    type="button"
+                    class="launch-btn run"
+                    onclick={() => runCommandInAPW(sc.command, sc.hint_url, sc.target_port)}
+                  >
+                    <Play size={10} />
+                    <span>รันใน APW{sc.target_port ? ` (:${sc.target_port})` : ""}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="launch-btn"
+                    onclick={() => openCommandInExternalTerminal(sc.command, sc.target_port)}
+                    title="เปิดรันในหน้าต่าง PowerShell แยก"
+                  >
+                    <ExternalLink size={10} />
+                    <span>เปิด Terminal</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="launch-btn"
+                    onclick={() => flashTaskCopy("lsc-" + sc.id, sc.command)}
+                  >
+                    <Copy size={10} />
+                    <span>{copiedCmdKey === "lsc-" + sc.id ? "✓ คัดลอกแล้ว" : "คัดลอก"}</span>
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       <div class="actions">
         {#if canApply}
@@ -490,6 +1202,29 @@
     white-space: nowrap;
     font-weight: 500;
   }
+  .hdr-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+  .timer-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--panel-subtle);
+    color: var(--muted);
+  }
+  .timer-pill.running {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    background: var(--accent-soft);
+  }
   .status-pill {
     font-weight: 600;
     font-size: 11.5px;
@@ -506,6 +1241,10 @@
   .status-pill.ok {
     color: var(--ok);
     background: var(--ok-soft);
+  }
+  .status-pill.warn {
+    color: var(--warn);
+    background: var(--panel-subtle);
   }
   .status-pill.err {
     color: var(--err);
@@ -551,6 +1290,28 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .live-timer-box {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    flex: none;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+    background: var(--panel);
+  }
+  .live-timer-main {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.2;
+  }
+  .live-timer-stage {
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.2;
+  }
   .steps {
     display: flex;
     gap: 4px;
@@ -584,6 +1345,104 @@
     font-size: 12.5px;
     color: var(--text);
     line-height: 1.55;
+  }
+  .skill-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 5px;
+    border: 1px solid var(--line-strong);
+    background: var(--panel-subtle);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    flex: none;
+  }
+  .skill-icon {
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .subagents-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel-subtle);
+  }
+  .subagents-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 0;
+    align-self: flex-start;
+  }
+  .subagents-toggle:hover {
+    color: var(--text);
+  }
+  .sub-toggle-icon,
+  .sub-status-icon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--muted);
+    flex: none;
+  }
+  .sub-toggle-icon.spin,
+  .sub-status-icon.spin {
+    color: var(--accent);
+    animation: spinSub 1.2s linear infinite;
+  }
+  .sub-toggle-icon.ok,
+  .sub-status-icon.ok {
+    color: var(--ok);
+  }
+  .sub-status-icon.err {
+    color: var(--err);
+  }
+  @keyframes spinSub {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .subagents-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding-left: 4px;
+    border-top: 1px solid var(--line);
+    padding-top: 5px;
+  }
+  .subagent-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    padding: 2px 4px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    color: var(--text);
+    text-align: left;
+  }
+  .subagent-row.clickable:hover {
+    background: var(--hover);
+  }
+  .sub-role {
+    font-weight: 500;
+  }
+  .sub-target {
+    color: var(--faint);
+    font-size: 11px;
   }
   .activity-stream {
     display: flex;
@@ -706,16 +1565,180 @@
     font-size: 11.5px;
     align-self: flex-start;
   }
-  .log-box {
-    padding: 8px;
+  .log-toggle:hover {
+    color: var(--text);
+  }
+  .log-panel {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-subtle);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .log-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .log-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .log-filter-pill {
+    border: 1px solid var(--line);
+    background: var(--panel-subtle);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .log-filter-pill:hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+  }
+  .log-filter-pill.active {
+    background: var(--text);
+    color: var(--panel);
+    border-color: var(--text);
+  }
+  .log-filter-pill.warn:not(.active) {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+  .log-search {
+    border: 1px solid var(--line);
     border-radius: 6px;
     background: var(--panel-subtle);
+    color: var(--text);
+    padding: 3px 8px;
     font-size: 11px;
-    max-height: 160px;
+    min-width: 170px;
+    outline: none;
+  }
+  .log-search:focus {
+    border-color: var(--line-strong);
+  }
+  .log-box {
+    padding: 6px 8px;
+    font-size: 11px;
+    max-height: 280px;
+    resize: vertical;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 2px;
+  }
+  .log-empty {
+    padding: 12px 6px;
+    color: var(--muted);
+    text-align: center;
+    font-size: 11.5px;
+  }
+  .log-item {
+    display: flex;
+    flex-direction: column;
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    padding: 4px 2px;
+  }
+  .log-item:last-child {
+    border-bottom: none;
+  }
+  .log-row {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+    line-height: 1.45;
+  }
+  .log-seq {
+    color: var(--faint);
+    font-size: 10px;
+    min-width: 28px;
+    flex: none;
+  }
+  .log-time {
+    color: var(--faint);
+    font-size: 10px;
+    flex: none;
+  }
+  .log-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.02em;
+    flex: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--muted);
+  }
+  .log-badge.plan {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  }
+  .log-badge.step {
+    color: var(--text);
+    border-color: var(--line-strong);
+  }
+  .log-badge.agent {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+  }
+  .log-badge.verify {
+    color: var(--ok);
+    background: var(--ok-soft);
+    border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+  }
+  .log-badge.warn {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+  .log-badge.save {
+    color: var(--faint);
+    border-color: var(--line);
+  }
+  .log-msg {
+    color: var(--text);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .log-more-btn {
+    flex: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--muted);
+    border-radius: 4px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+  .log-more-btn:hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+  }
+  .log-full-msg {
+    margin: 5px 0 2px 34px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 10.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 180px;
+    overflow-y: auto;
   }
   .actions {
     display: flex;
@@ -747,5 +1770,363 @@
   .btn.ghost {
     margin-left: auto;
     color: var(--muted);
+  }
+  .thinking-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .thinking-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 0;
+    align-self: flex-start;
+  }
+  .thinking-toggle:hover {
+    color: var(--text);
+  }
+  .plan-objective.collapsed {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .ran-commands-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ran-commands-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 0;
+    align-self: flex-start;
+  }
+  .ran-commands-toggle:hover {
+    color: var(--text);
+  }
+  .ran-commands-box {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-subtle);
+    padding: 8px 10px;
+    max-height: 200px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .cmd-hdr {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .cmd-hdr.ok {
+    color: var(--ok);
+  }
+  .cmd-hdr.err {
+    color: var(--err);
+  }
+  .cmd-out {
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--muted);
+    overflow-x: auto;
+    white-space: pre;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .task-checklist-card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel-subtle);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .chk-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .chk-row.done,
+  .chk-row.active {
+    color: var(--text);
+  }
+  .chk-row.failed {
+    color: var(--err);
+  }
+  .chk-icon {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 1.5px solid var(--faint);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9.5px;
+    font-weight: 700;
+    flex: none;
+  }
+  .chk-icon.done {
+    background: var(--text);
+    color: var(--panel);
+    border-color: var(--text);
+  }
+  .chk-icon.active {
+    border-style: dashed;
+    border-color: var(--accent);
+    animation: spinSub 1.4s linear infinite;
+  }
+  .chk-icon.failed {
+    border-color: var(--err);
+    color: var(--err);
+  }
+  .chk-label {
+    flex: 1;
+    min-width: 0;
+  }
+  .chk-file {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--muted);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10.5px;
+    flex: none;
+  }
+  .chk-file:hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+  }
+  .thinking-status-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--muted);
+    padding: 2px 0;
+  }
+  .thinking-dots {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  .interrupted-banner {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--warn);
+    background: var(--panel-subtle);
+    color: var(--text);
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .interrupted-title {
+    font-weight: 600;
+    color: var(--warn);
+  }
+  .interrupted-desc {
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .acc-err-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .acc-expand-btn {
+    border: 1px solid var(--err);
+    background: transparent;
+    color: var(--err);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+  }
+  .acc-err-list {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .completion-meta-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+    padding-top: 4px;
+    border-top: 1px solid var(--line);
+  }
+  .changes-summary-link {
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0;
+  }
+  .changes-summary-link:hover {
+    text-decoration: underline;
+  }
+  .cmd-hdr-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .cmd-copy-btn {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--muted);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+  }
+  .cmd-copy-btn:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .task-launch-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+    background: var(--panel);
+  }
+  .launch-strip-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .launch-strip-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .launch-idle-note {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .launch-active-ports {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .launch-port-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--ok);
+    background: var(--ok-soft);
+    color: var(--ok);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .launch-cmd-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .launch-cmd-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--panel-subtle);
+  }
+  .launch-cmd-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .launch-cmd-code {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .launch-hint-url {
+    border: none;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .launch-conflict-badge {
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .launch-cmd-btns {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .launch-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .launch-btn.run {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .launch-btn:hover {
+    background: var(--hover);
   }
 </style>

@@ -73,7 +73,7 @@ func (a *App) ChooseWorkspace() error {
 		return errNotReady
 	}
 	dir, err := runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
-		Title:            "เลือก workspace ที่มี apw.json",
+		Title:            "เลือกโฟลเดอร์โปรเจกต์ (Workspace)",
 		DefaultDirectory: a.host.Current(),
 	})
 	if err != nil || dir == "" {
@@ -86,6 +86,14 @@ func (a *App) ChooseWorkspace() error {
 // Reopening the workspace that is already open is a no-op so approvals and page state stay intact.
 func (a *App) OpenWorkspace(dir string) error {
 	prev := a.host.Current()
+	a.mu.Lock()
+	last := a.settings.LastWorkspace
+	recent := append([]string(nil), a.settings.Recent...)
+	a.mu.Unlock()
+	candidates := append([]string{prev, last}, recent...)
+	if err := BootstrapWorkspace(dir, candidates...); err != nil {
+		return err
+	}
 	if err := a.host.Open(dir); err != nil {
 		return err
 	}

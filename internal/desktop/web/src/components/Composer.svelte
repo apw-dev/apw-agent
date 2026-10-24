@@ -9,6 +9,7 @@
   } from "../lib/stores/tasks";
   import {
     workspaceStatus,
+    fetchWorkspaceFiles,
     fetchWorkspaceSymbols,
     fetchWorkspaceGraph
   } from "../lib/stores/workspace";
@@ -17,7 +18,8 @@
     settingsModalOpen,
     centerView,
     rightCollapsed,
-    rightPanelView
+    rightPanelView,
+    composerDraftText
   } from "../lib/stores/settings";
   import {
     mentionCandidates,
@@ -25,6 +27,7 @@
     detectActiveToken,
     queryMentionCandidates,
     clearMentionCandidates,
+    parseInstructionSkillPills,
     type MentionCandidate
   } from "../lib/stores/search";
 
@@ -32,6 +35,27 @@
   let textareaEl: HTMLTextAreaElement | undefined = $state();
   let busy = $state(false);
   let submitError = $state("");
+  const activeSkills = $derived(parseInstructionSkillPills(text).skills);
+
+  function removeSkillPill(slug: string) {
+    const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?:@skill:${escaped}|\\[<>[\\s]*${escaped}\\])\\s*`, "gi");
+    text = text.replace(re, "");
+    textareaEl?.focus();
+  }
+
+  function triggerSkillPicker() {
+    const prefix = text && !text.endsWith(" ") ? text + " @skill:" : text + "@skill:";
+    text = prefix;
+    queueMicrotask(() => {
+      if (textareaEl) {
+        textareaEl.focus();
+        textareaEl.setSelectionRange(text.length, text.length);
+        const tok = detectActiveToken(text, text.length);
+        void queryMentionCandidates(tok, handleImmediateAction);
+      }
+    });
+  }
 
   const MODES: Array<{ value: ComposerMode; label: string }> = [
     { value: "execute", label: "Execute" },
@@ -48,6 +72,12 @@
       case "verify":
         void runProjectVerify();
         break;
+      case "files":
+        void fetchWorkspaceFiles().then(() => {
+          rightCollapsed.set(false);
+          rightPanelView.set("files");
+        });
+        break;
       case "symbols":
         void fetchWorkspaceSymbols().then(() => {
           rightCollapsed.set(false);
@@ -63,6 +93,9 @@
       case "autonomy":
         centerView.set("autonomy");
         break;
+      case "board":
+        centerView.set("board");
+        break;
       case "settings":
         settingsModalOpen.set(true);
         break;
@@ -72,8 +105,34 @@
     }
   }
 
+  function adjustTextareaHeight() {
+    if (!textareaEl) return;
+    textareaEl.style.height = "auto";
+    const next = Math.min(260, Math.max(44, textareaEl.scrollHeight));
+    textareaEl.style.height = `${next}px`;
+    textareaEl.style.overflowY = textareaEl.scrollHeight > 260 ? "auto" : "hidden";
+  }
+
+  $effect(() => {
+    void text;
+    adjustTextareaHeight();
+  });
+
+  $effect(() => {
+    const draft = $composerDraftText;
+    if (draft) {
+      text = draft;
+      composerDraftText.set("");
+      queueMicrotask(() => {
+        adjustTextareaHeight();
+        textareaEl?.focus();
+      });
+    }
+  });
+
   function onInput() {
     submitError = "";
+    adjustTextareaHeight();
     const cursor = textareaEl?.selectionStart ?? text.length;
     const tok = detectActiveToken(text, cursor);
     void queryMentionCandidates(tok, handleImmediateAction);
@@ -106,6 +165,10 @@
       handleImmediateAction("verify");
       return;
     }
+    if (val === "/files") {
+      handleImmediateAction("files");
+      return;
+    }
     if (val === "/symbols") {
       handleImmediateAction("symbols");
       return;
@@ -116,6 +179,10 @@
     }
     if (val === "/autonomy") {
       handleImmediateAction("autonomy");
+      return;
+    }
+    if (val === "/board") {
+      handleImmediateAction("board");
       return;
     }
     if (val === "/settings") {
@@ -178,6 +245,26 @@
   <div class="composer">
     <MentionMenu onSelect={applyCandidate} />
 
+    {#if activeSkills.length > 0}
+      <div class="skill-pills-bar" data-testid="composer-skill-pills">
+        {#each activeSkills as sk (sk)}
+          <span class="skill-pill mono" data-testid="composer-skill-pill">
+            <span class="skill-icon">&lt;&gt;</span>
+            <span>{sk}</span>
+            <button
+              type="button"
+              class="remove-skill-btn"
+              onclick={() => removeSkillPill(sk)}
+              aria-label={`ลบ Skill ${sk}`}
+              title={`ลบ Skill ${sk}`}
+            >
+              ×
+            </button>
+          </span>
+        {/each}
+      </div>
+    {/if}
+
     <textarea
       id="task-input"
       bind:this={textareaEl}
@@ -185,7 +272,7 @@
       oninput={onInput}
       onkeydown={onKeyDown}
       rows="2"
-      placeholder="สั่งงาน… ใช้ @ อ้างไฟล์หรือสัญลักษณ์, / สำหรับคำสั่ง (Ctrl+K)"
+      placeholder="สั่งงาน… ใช้ @ อ้างไฟล์/Skill (@skill:), / สำหรับคำสั่ง (Ctrl+K)"
       data-testid="composer-input"
     ></textarea>
 
@@ -201,6 +288,17 @@
           <option value={m.value}>{m.label}</option>
         {/each}
       </select>
+
+      <button
+        type="button"
+        class="chip skill-picker-chip mono"
+        onclick={triggerSkillPicker}
+        title="เลือกแนบ Skill เข้าคำสั่ง (@skill:)"
+        data-testid="skill-picker-btn"
+      >
+        <span class="skill-icon">&lt;&gt;</span>
+        <span>Skills</span>
+      </button>
 
       <button
         type="button"
@@ -230,12 +328,13 @@
 
 <style>
   .composer-wrap {
-    width: calc(100% - 32px);
+    width: 100%;
     max-width: 760px;
+    padding: 0 20px;
     margin: 0 auto 14px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .submit-err {
     padding: 6px 10px;
@@ -258,14 +357,49 @@
   .composer:focus-within {
     border-color: var(--line-strong);
   }
+  .skill-pills-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .skill-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line-strong);
+    background: var(--panel-subtle);
+    color: var(--text);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .skill-icon {
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .remove-skill-btn {
+    border: none;
+    background: transparent;
+    color: var(--faint);
+    padding: 0 2px;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .remove-skill-btn:hover {
+    color: var(--err);
+  }
   textarea {
     width: 100%;
+    min-height: 44px;
+    max-height: 260px;
     border: none;
     background: transparent;
     color: var(--text);
     font: inherit;
     resize: none;
     line-height: 1.55;
+    overflow-y: hidden;
   }
   textarea::placeholder {
     color: var(--faint);

@@ -15,10 +15,25 @@ import (
 	"github.com/apiwat/apw-agent/internal/app"
 	"github.com/apiwat/apw-agent/internal/buildinfo"
 	"github.com/apiwat/apw-agent/internal/channels/telegram"
+	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/retention"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 	"github.com/apiwat/apw-agent/internal/transport"
 )
+
+func resolveTelegramBot(cfg *config.Config, version string) (*telegram.Bot, error) {
+	if os.Getenv("APW_TELEGRAM_TOKEN") != "" && os.Getenv("APW_TELEGRAM_ALLOW") != "" {
+		return telegram.NewFromEnv(version)
+	}
+	if !cfg.Channels.Telegram.Enabled {
+		return nil, nil
+	}
+	token := cfg.Channels.Telegram.ResolveToken(cfg.Workspace)
+	if token == "" {
+		return nil, fmt.Errorf("telegram: channel is enabled in apw.json but bot token (%s) is not configured", cfg.Channels.Telegram.EffectiveTokenEnv())
+	}
+	return telegram.New(token, cfg.Channels.Telegram.AllowUsers, version)
+}
 
 func Run(ctx context.Context, cfgPath, version string) error {
 	cfg, absCfg, err := LoadConfig(cfgPath)
@@ -79,11 +94,9 @@ func Run(ctx context.Context, cfgPath, version string) error {
 			<-botDone
 		}
 	}()
-	if os.Getenv("APW_TELEGRAM_TOKEN") != "" && os.Getenv("APW_TELEGRAM_ALLOW") != "" {
-		bot, e := telegram.NewFromEnv(version)
-		if e != nil {
-			return e
-		}
+	if bot, e := resolveTelegramBot(cfg, version); e != nil {
+		return e
+	} else if bot != nil {
 		bot.Backend = backend
 		bot.Store = backend.Store
 		botDone = make(chan struct{})

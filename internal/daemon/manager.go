@@ -90,17 +90,34 @@ func Connect(ctx context.Context, cfgPath string) (*transport.Client, error) {
 		return nil, err
 	}
 	if st := Status(cfg.Workspace); st.Running {
-		if err := compatibleBuild(st); err != nil {
-			return nil, err
+		staleBin := false
+		if flag.Lookup("test.v") == nil && !st.StartedAt.IsZero() {
+			if bin, bErr := daemonExecutable(); bErr == nil {
+				if fi, sErr := os.Stat(bin); sErr == nil && fi.ModTime().After(st.StartedAt.Add(2*time.Second)) {
+					staleBin = true
+					_ = Stop(cfg.Workspace)
+					for i := 0; i < 30; i++ {
+						time.Sleep(100 * time.Millisecond)
+						if !Status(cfg.Workspace).Running {
+							break
+						}
+					}
+				}
+			}
 		}
-		if !sameConfig(st.ConfigPath, absCfg) {
-			return nil, fmt.Errorf("daemon uses another or older configuration (%s); stop it for workspace %s before starting with %s", st.ConfigPath, cfg.Workspace, absCfg)
+		if !staleBin && Status(cfg.Workspace).Running {
+			if err := compatibleBuild(st); err != nil {
+				return nil, err
+			}
+			if !sameConfig(st.ConfigPath, absCfg) {
+				return nil, fmt.Errorf("daemon uses another or older configuration (%s); stop it for workspace %s before starting with %s", st.ConfigPath, cfg.Workspace, absCfg)
+			}
+			raw, err := readState(cfg.Workspace)
+			if err != nil {
+				return nil, err
+			}
+			return transport.NewClient(raw.Address, raw.Token), nil
 		}
-		raw, err := readState(cfg.Workspace)
-		if err != nil {
-			return nil, err
-		}
-		return transport.NewClient(raw.Address, raw.Token), nil
 	}
 	if flag.Lookup("test.v") != nil {
 		return nil, errors.New("daemon is not running; tests must inject an application backend")

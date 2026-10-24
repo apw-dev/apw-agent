@@ -98,7 +98,7 @@ func (e *Executor) directiveCandidates() []FailoverCandidate {
 }
 
 func (e *Executor) askDirective(ctx context.Context, prompt string) (*patchDirective, error) {
-	prompt += InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + e.ReadContext
+	prompt = "CRITICAL: Do NOT use any tools, shell commands, apply_patch, or file readers. Act purely as an offline JSON generator and output ONLY the requested JSON object.\n" + prompt + InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + e.ReadContext
 	if e.Failover.Models == nil {
 		e.Failover.Models = make(map[string]time.Time)
 	}
@@ -110,77 +110,117 @@ func (e *Executor) askDirective(ctx context.Context, prompt string) (*patchDirec
 		timeout = 90 * time.Second
 	}
 	var failures []error
+	var modelPaused []FailoverCandidate
 	for _, cand := range e.directiveCandidates() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		id, group := candidateID(cand), candidateGroup(cand)
 		now := time.Now()
-		until := e.Failover.Models[id]
-		if e.Failover.Groups[group].After(until) {
-			until = e.Failover.Groups[group]
+		modelUntil := e.Failover.Models[id]
+		groupUntil := e.Failover.Groups[group]
+		until := modelUntil
+		if groupUntil.After(until) {
+			until = groupUntil
 		}
 		if now.Before(until) {
+			if !now.Before(groupUntil) {
+				modelPaused = append(modelPaused, cand)
+			}
 			failures = append(failures, fmt.Errorf("%s paused until %s", cand.Model, until.Format(time.RFC3339)))
 			e.emit(ProgressEvent{Stage: "step_directive_fallback", Message: fmt.Sprintf("Skipping %s (%s): paused until %s", cand.Model, group, until.Format(time.RFC3339))})
 			continue
 		}
-		e.emit(ProgressEvent{Stage: "directive_attempt", Message: fmt.Sprintf("Requesting patch from %s (%s; timeout %v)", cand.Model, cand.Provider.Name(), timeout)})
-		started := time.Now()
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-		resp, err := cand.Provider.Ask(attemptCtx, core.ModelRequest{
-			RequestID: fmt.Sprintf("req-%d", time.Now().UnixNano()), Prompt: prompt, Model: cand.Model,
-		})
-		if attemptCtx.Err() != nil {
-			err = attemptCtx.Err()
+		directive, fatalErr, attemptErr := e.tryDirectiveCandidate(ctx, cand, prompt, timeout)
+		if directive != nil {
+			return directive, nil
 		}
-		cancel()
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+		if fatalErr != nil {
+			return nil, fatalErr
 		}
-		if errors.Is(err, context.Canceled) {
-			return nil, err
+		if attemptErr != nil {
+			failures = append(failures, attemptErr)
 		}
-		parseFailure := false
-		if err == nil {
-			if resp != nil && !resp.Completed {
-				err = errors.New("model returned incomplete response")
+	}
+	// Never let temporary model-level cooldowns deadlock the pool when quota is still available.
+	if len(modelPaused) > 0 {
+		failures = nil
+		for _, cand := range modelPaused {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			id := candidateID(cand)
+			delete(e.Failover.Models, id)
+			directive, fatalErr, attemptErr := e.tryDirectiveCandidate(ctx, cand, prompt, timeout)
+			if directive != nil {
+				return directive, nil
+			}
+			if fatalErr != nil {
+				return nil, fatalErr
+			}
+			if attemptErr != nil {
+				failures = append(failures, attemptErr)
 			}
 		}
-		if err == nil {
-			if resp == nil || strings.TrimSpace(resp.Content) == "" {
-				err = errors.New("model returned empty response")
-			} else {
-				var directive *patchDirective
-				directive, err = parsePatchDirective(resp.Content)
-				if err == nil {
-					e.Failover.Preferred = id
-					return directive, nil
-				}
-				parseFailure = true
-			}
-		}
-		failures = append(failures, fmt.Errorf("%s: %w", cand.Model, err))
-		if !parseFailure && !IsFailoverError(err) {
-			return nil, fmt.Errorf("directive provider %s failed: %w", cand.Model, err)
-		}
-		reason := "invalid directive"
-		if !parseFailure && quotaFailure(err) {
-			until = time.Now().Add(quotaCooldown(err))
-			e.Failover.Groups[group] = until
-			reason = fmt.Sprintf("quota exhausted for %s; paused until %s", group, until.Format(time.RFC3339))
-		} else {
-			e.Failover.Models[id] = time.Now().Add(5 * time.Minute)
-			if !parseFailure {
-				reason = err.Error()
-			}
-		}
-		e.emit(ProgressEvent{Stage: "step_directive_fallback", Duration: time.Since(started), Message: fmt.Sprintf("%s failed after %v: %s; trying next eligible configured provider", cand.Model, time.Since(started).Round(time.Millisecond), reason)})
 	}
 	if len(failures) == 0 {
 		return nil, errors.New("no providers available for directive generation")
 	}
 	return nil, fmt.Errorf("all configured directive candidates unavailable: %w", errors.Join(failures...))
+}
+
+func (e *Executor) tryDirectiveCandidate(ctx context.Context, cand FailoverCandidate, prompt string, timeout time.Duration) (*patchDirective, error, error) {
+	id, group := candidateID(cand), candidateGroup(cand)
+	e.emit(ProgressEvent{Stage: "directive_attempt", Message: fmt.Sprintf("Requesting patch from %s (%s; timeout %v)", cand.Model, cand.Provider.Name(), timeout)})
+	started := time.Now()
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	resp, err := cand.Provider.Ask(attemptCtx, core.ModelRequest{
+		RequestID: fmt.Sprintf("req-%d", time.Now().UnixNano()), Prompt: prompt, Model: cand.Model,
+	})
+	if attemptCtx.Err() != nil {
+		err = attemptCtx.Err()
+	}
+	cancel()
+	if ctx.Err() != nil {
+		return nil, ctx.Err(), nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return nil, err, nil
+	}
+	parseFailure := false
+	if err == nil {
+		if resp != nil && !resp.Completed {
+			err = errors.New("model returned incomplete response")
+		}
+	}
+	if err == nil {
+		if resp == nil || strings.TrimSpace(resp.Content) == "" {
+			err = errors.New("model returned empty response")
+		} else {
+			var directive *patchDirective
+			directive, err = parsePatchDirective(resp.Content)
+			if err == nil {
+				e.Failover.Preferred = id
+				return directive, nil, nil
+			}
+			parseFailure = true
+		}
+	}
+	attemptErr := fmt.Errorf("%s: %w", cand.Model, err)
+	if !parseFailure && !IsFailoverError(err) {
+		return nil, fmt.Errorf("directive provider %s failed: %w", cand.Model, err), nil
+	}
+	reason := "invalid directive"
+	if !parseFailure && quotaFailure(err) {
+		until := time.Now().Add(quotaCooldown(err))
+		e.Failover.Groups[group] = until
+		reason = fmt.Sprintf("quota exhausted for %s; paused until %s", group, until.Format(time.RFC3339))
+	} else if !parseFailure {
+		e.Failover.Models[id] = time.Now().Add(45 * time.Second)
+		reason = err.Error()
+	}
+	e.emit(ProgressEvent{Stage: "step_directive_fallback", Duration: time.Since(started), Message: fmt.Sprintf("%s failed after %v: %s; trying next eligible configured provider", cand.Model, time.Since(started).Round(time.Millisecond), reason)})
+	return nil, nil, attemptErr
 }
 
 // errReviewIncomplete keeps the review error text stable while letting the
@@ -239,13 +279,26 @@ func (e *Executor) withArchitectFailover(ctx context.Context, stage string, atte
 	if len(eligible) == 0 {
 		eligible = candidates
 	}
+	timeout := e.DirectiveTimeout
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
 	var failures []error
 	for i, cand := range eligible {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		e.emit(ProgressEvent{
+			Stage:   stage + "_attempt",
+			Message: fmt.Sprintf("Requesting %s from %s (%s)...", stage, cand.Model, cand.Provider.Name()),
+		})
 		started := time.Now()
-		err := attempt(ctx, cand)
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := attempt(attemptCtx, cand)
+		if attemptCtx.Err() != nil && ctx.Err() == nil {
+			err = attemptCtx.Err()
+		}
+		cancel()
 		if err == nil {
 			return nil
 		}
@@ -260,7 +313,7 @@ func (e *Executor) withArchitectFailover(ctx context.Context, stage string, atte
 		if quotaFailure(err) {
 			e.Failover.Groups[group] = time.Now().Add(quotaCooldown(err))
 		} else {
-			e.Failover.Models[id] = time.Now().Add(5 * time.Minute)
+			e.Failover.Models[id] = time.Now().Add(45 * time.Second)
 		}
 		if i < len(eligible)-1 {
 			e.emit(ProgressEvent{Stage: stage + "_fallback", Duration: time.Since(started), Message: fmt.Sprintf("%s failed after %v: %v; trying next configured architect", cand.Model, time.Since(started).Round(time.Millisecond), err)})

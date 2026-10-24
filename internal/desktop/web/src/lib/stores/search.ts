@@ -21,12 +21,31 @@ export const SLASH_COMMANDS: Array<{ cmd: string; label: string; meta: string; i
   { cmd: "/review ", label: "/review <คำสั่ง>", meta: "อ่านและวิเคราะห์โค้ดโดยไม่รันคำสั่ง" },
   { cmd: "/preview ", label: "/preview <คำสั่ง>", meta: "สร้าง Diff ใน Isolated Worktree" },
   { cmd: "/verify", label: "/verify", meta: "รันตรวจสอบโค้ดด้วย Reflex Pipeline", immediate: "verify" },
+  { cmd: "/files", label: "/files", meta: "เปิดดูโครงสร้างไฟล์ในโปรเจกต์ (Workspace File Tree)", immediate: "files" },
   { cmd: "/symbols", label: "/symbols", meta: "เปิดดู AST Symbols ทั้งโปรเจกต์", immediate: "symbols" },
   { cmd: "/graph", label: "/graph", meta: "เปิดดู Cross-File Call Impact Graph", immediate: "graph" },
+  { cmd: "/board", label: "/board", meta: "เปิดโมดูล Agent Board (Interactive Canvas, Structural Diff & Decision Log)", immediate: "board" },
   { cmd: "/autonomy", label: "/autonomy", meta: "เปิดมุมมอง Autonomy 24/7 & Skills", immediate: "autonomy" },
   { cmd: "/settings", label: "/settings", meta: "ตั้งค่าธีม โมเดล และ Sandbox", immediate: "settings" },
   { cmd: "/new", label: "/new", meta: "เริ่มบทสนทนาใหม่ (Ctrl+N)", immediate: "new" }
 ];
+
+export function parseInstructionSkillPills(raw: string): { skills: string[]; cleanText: string } {
+  const skills: string[] = [];
+  const seen = new Set<string>();
+  const text = (raw || "").replace(/(?:@skill:([A-Za-z0-9_-]+)|\[<>\s*([A-Za-z0-9_-]+)\])/gi, (_m, g1, g2) => {
+    const slug = (g1 || g2 || "").trim();
+    if (slug && !seen.has(slug.toLowerCase())) {
+      seen.add(slug.toLowerCase());
+      skills.push(slug);
+    }
+    return "";
+  });
+  return {
+    skills,
+    cleanText: text.replace(/^\s+/, "").replace(/\s{2,}/g, " ")
+  };
+}
 
 export const mentionCandidates = writable<MentionCandidate[]>([]);
 export const mentionSelectedIndex = writable<number>(0);

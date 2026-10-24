@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -49,6 +50,8 @@ func DefaultCommands() []SlashCommand {
 	return []SlashCommand{
 		{Name: "/model", Usage: "/model", Description: "Select live models for Brain 1 (Reflex) & Brain 2 (Architect) from connected accounts", TakesArgs: false},
 		{Name: "/auth", Usage: "/auth", Description: "Connect & authenticate ChatGPT Sub/API, Claude Sub/API, and AGY CLI", TakesArgs: false},
+		{Name: "/channel", Usage: "/channel [status|set|enable|disable]", Description: "Configure messaging channels (Telegram Bot Token & allowed user IDs)", TakesArgs: false},
+		{Name: "/messaging", Usage: "/messaging [status|set|enable|disable]", Description: "Alias for /channel messaging configuration", TakesArgs: false},
 		{Name: "/review", Usage: "/review <instruction>", Description: "Read source and report findings without repository commands", TakesArgs: true},
 		{Name: "/preview", Usage: "/preview <instruction>", Description: "Prepare an isolated diff without running repository code", TakesArgs: true},
 		{Name: "/tasks", Usage: "/tasks", Description: "List persisted tasks and statuses"},
@@ -1029,6 +1032,368 @@ func promptAndSaveAPIKey(envName, label, cfgPath string, stdin io.Reader, stdout
 	}
 	fmt.Fprintf(stdout, "%s✓ Saved %s to .apw/auth.json (gitignored) and synced %d live models!%s\n", cGreen, envName, total, cReset)
 	return true, nil
+}
+
+// ParseAllowedUserIDs parses a comma- or whitespace-separated list of positive Telegram user IDs.
+func ParseAllowedUserIDs(raw string) ([]int64, error) {
+	var ids []int64
+	seen := make(map[int64]bool)
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	}) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("invalid Telegram user ID %q (must be a positive integer)", part)
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// FormatAllowedUserIDs formats a slice of Telegram user IDs as comma-separated values.
+func FormatAllowedUserIDs(ids []int64) string {
+	if len(ids) == 0 {
+		return "(none)"
+	}
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// RunInteractiveChannelMenu opens the multi-level Messaging & Channel configuration hub (/channel or /messaging).
+func RunInteractiveChannelMenu(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
+	for {
+		cfg, err := config.LoadOrDefault(cfgPath)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		credentialRoot := cfg.Workspace
+		if !filepath.IsAbs(credentialRoot) {
+			credentialRoot = filepath.Join(filepath.Dir(cfgPath), credentialRoot)
+		}
+
+		tg := cfg.Channels.Telegram
+		tokenVal := tg.ResolveToken(credentialRoot)
+		tgDetail := "Disabled · Press Enter to configure Bot Token & Allowed User IDs"
+		if tg.Enabled && tokenVal != "" {
+			tgDetail = fmt.Sprintf("✓ Enabled · Token %s · %d allowed user(s)", config.MaskSecret(tokenVal), len(tg.AllowUsers))
+		} else if tokenVal != "" || len(tg.AllowUsers) > 0 {
+			tokPart := "no token"
+			if tokenVal != "" {
+				tokPart = "token " + config.MaskSecret(tokenVal)
+			}
+			tgDetail = fmt.Sprintf("○ Disabled (%s, %d allowed user(s)) · Press Enter to configure", tokPart, len(tg.AllowUsers))
+		}
+
+		subtitles := []string{
+			fmt.Sprintf("  Select a messaging channel below to drill down and configure its settings (%s):", cfgPath),
+		}
+
+		actionRan := false
+		exitHub := false
+		var subRC int
+
+		items := []selectorItem{
+			{
+				Label:  "1. 💬 Telegram Bot Gateway ->",
+				Detail: tgDetail,
+				Action: func() (bool, error) {
+					actionRan = true
+					subRC = RunInteractiveTelegramMenu(cfgPath, stdin, stdout, stderr)
+					return true, nil
+				},
+			},
+			{
+				Label:  "2. 🌐 Agent Client Protocol (ACP) ->",
+				Detail: "Stdio JSON-RPC 2.0 bridge (`apw acp`) for IDE & multi-agent hubs",
+				Action: func() (bool, error) {
+					actionRan = true
+					fmt.Fprintf(stdout, "\n%sAgent Client Protocol (ACP) Gateway:%s\n", cBold+cCyan, cReset)
+					fmt.Fprintf(stdout, "  Status  : %s✓ Ready (built-in stdio transport)%s\n", cGreen, cReset)
+					fmt.Fprintf(stdout, "  Command : %sapw acp --config %s%s\n\n", cWhite, cfgPath, cReset)
+					return true, nil
+				},
+			},
+			{
+				Label:  "3. ✓ Done / Exit",
+				Detail: "Close Messaging & Channel Hub",
+				Action: func() (bool, error) {
+					actionRan = true
+					exitHub = true
+					return true, nil
+				},
+			},
+		}
+
+		rc := runSingleLineSelector("APW Messaging & Channel Hub (/channel)", subtitles, items, stdout)
+		if rc < 0 {
+			return rc
+		}
+		if subRC != 0 {
+			return subRC
+		}
+		if !actionRan || exitHub {
+			return 0
+		}
+	}
+}
+
+// RunInteractiveTelegramMenu opens the Level-2 Telegram Bot Gateway configuration menu.
+func RunInteractiveTelegramMenu(cfgPath string, stdin io.Reader, stdout, stderr io.Writer) int {
+	for {
+		cfg, err := config.LoadOrDefault(cfgPath)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		credentialRoot := cfg.Workspace
+		if !filepath.IsAbs(credentialRoot) {
+			credentialRoot = filepath.Join(filepath.Dir(cfgPath), credentialRoot)
+		}
+
+		tg := cfg.Channels.Telegram
+		tokenVal := tg.ResolveToken(credentialRoot)
+		tokenStatus := fmt.Sprintf("%sNot configured%s", cGray, cReset)
+		if tokenVal != "" {
+			tokenStatus = fmt.Sprintf("%s✓ %s%s (%s in .apw/auth.json)", cGreen, config.MaskSecret(tokenVal), cReset, tg.EffectiveTokenEnv())
+		}
+		stateLabel := fmt.Sprintf("%s○ Disabled%s", cGray, cReset)
+		if tg.Enabled {
+			stateLabel = fmt.Sprintf("%s✓ Enabled%s", cGreen, cReset)
+		}
+
+		subtitles := []string{
+			fmt.Sprintf("  Telegram Gateway : %s", stateLabel),
+			fmt.Sprintf("  Bot Token        : %s", tokenStatus),
+			fmt.Sprintf("  Allowed User IDs : %s%s%s", cCyan, FormatAllowedUserIDs(tg.AllowUsers), cReset),
+		}
+
+		actionRan := false
+		goBack := false
+
+		items := []selectorItem{
+			{
+				Label:  "1. ⚡ Guided Setup Wizard",
+				Detail: "Step-by-step: 1) Bot Token -> 2) Allowed User IDs -> 3) Enable Gateway",
+				Action: func() (bool, error) {
+					actionRan = true
+					reader := bufio.NewReader(stdin)
+					fmt.Fprintf(stdout, "\n%sStep 1/3 — Telegram Bot Token (@BotFather)%s\n", cBold+cCyan, cReset)
+					if tokenVal != "" {
+						fmt.Fprintf(stdout, "  Current Token: %s (press Enter to keep, or paste a new token)\n", config.MaskSecret(tokenVal))
+					}
+					fmt.Fprint(stdout, "  Bot Token: ")
+					tokLine, _ := reader.ReadString('\n')
+					tokLine = strings.TrimSpace(tokLine)
+					if tokLine != "" {
+						envName := cfg.Channels.Telegram.EffectiveTokenEnv()
+						if err := config.SaveAuthKey(credentialRoot, envName, tokLine); err != nil {
+							return true, err
+						}
+						_ = os.Setenv(envName, tokLine)
+						cfg.Channels.Telegram.TokenEnv = envName
+					}
+
+					fmt.Fprintf(stdout, "\n%sStep 2/3 — Allowed Telegram User IDs%s\n", cBold+cCyan, cReset)
+					fmt.Fprintf(stdout, "  Current Allowed IDs: %s\n", FormatAllowedUserIDs(cfg.Channels.Telegram.AllowUsers))
+					fmt.Fprint(stdout, "  Allowed Telegram User IDs (comma-separated, e.g. 123456789): ")
+					allowLine, _ := reader.ReadString('\n')
+					allowLine = strings.TrimSpace(allowLine)
+					if allowLine != "" {
+						ids, err := ParseAllowedUserIDs(allowLine)
+						if err != nil {
+							fmt.Fprintf(stdout, "%s! %v%s\n\n", cGold, err, cReset)
+							return true, nil
+						}
+						cfg.Channels.Telegram.AllowUsers = ids
+					}
+
+					fmt.Fprintf(stdout, "\n%sStep 3/3 — Enable Gateway%s\n", cBold+cCyan, cReset)
+					if len(cfg.Channels.Telegram.AllowUsers) > 0 && cfg.Channels.Telegram.ResolveToken(credentialRoot) != "" {
+						cfg.Channels.Telegram.Enabled = true
+						if err := cfg.Save(cfgPath); err != nil {
+							return true, err
+						}
+						fmt.Fprintf(stdout, "%s✓ Telegram Bot Gateway configured and enabled in %s!%s\n\n", cGreen, cfgPath, cReset)
+					} else {
+						if err := cfg.Save(cfgPath); err != nil {
+							return true, err
+						}
+						fmt.Fprintf(stdout, "%s! Saved partial settings (both Bot Token and at least 1 User ID are required to enable).%s\n\n", cGold, cReset)
+					}
+					return true, nil
+				},
+			},
+			{
+				Label:  "2. 🔑 Set / Change Bot Token",
+				Detail: "Save APW_TELEGRAM_TOKEN in .apw/auth.json (never written to apw.json)",
+				Action: func() (bool, error) {
+					actionRan = true
+					reader := bufio.NewReader(stdin)
+					fmt.Fprint(stdout, "  Enter Telegram Bot Token (123456:ABC-...): ")
+					tokLine, _ := reader.ReadString('\n')
+					tokLine = strings.TrimSpace(tokLine)
+					if tokLine == "" {
+						fmt.Fprintln(stdout, "  Cancelled (empty token).")
+						return true, nil
+					}
+					envName := cfg.Channels.Telegram.EffectiveTokenEnv()
+					if err := config.SaveAuthKey(credentialRoot, envName, tokLine); err != nil {
+						return true, err
+					}
+					_ = os.Setenv(envName, tokLine)
+					cfg.Channels.Telegram.TokenEnv = envName
+					if len(cfg.Channels.Telegram.AllowUsers) > 0 {
+						cfg.Channels.Telegram.Enabled = true
+					}
+					if err := cfg.Save(cfgPath); err != nil {
+						return true, err
+					}
+					fmt.Fprintf(stdout, "%s✓ Saved %s (%s) to .apw/auth.json%s\n\n", cGreen, envName, config.MaskSecret(tokLine), cReset)
+					return true, nil
+				},
+			},
+			{
+				Label:  "3. 👥 Set Allowed User IDs (Replace)",
+				Detail: "Set comma-separated Telegram numeric user IDs permitted to control APW",
+				Action: func() (bool, error) {
+					actionRan = true
+					reader := bufio.NewReader(stdin)
+					fmt.Fprint(stdout, "  Enter Allowed Telegram User IDs (e.g. 123456789, 987654321): ")
+					allowLine, _ := reader.ReadString('\n')
+					ids, err := ParseAllowedUserIDs(allowLine)
+					if err != nil {
+						fmt.Fprintf(stdout, "%s! %v%s\n\n", cGold, err, cReset)
+						return true, nil
+					}
+					if len(ids) == 0 {
+						fmt.Fprintln(stdout, "  Cancelled (no user IDs entered).")
+						return true, nil
+					}
+					cfg.Channels.Telegram.AllowUsers = ids
+					if cfg.Channels.Telegram.ResolveToken(credentialRoot) != "" {
+						cfg.Channels.Telegram.Enabled = true
+					}
+					if err := cfg.Save(cfgPath); err != nil {
+						return true, err
+					}
+					fmt.Fprintf(stdout, "%s✓ Updated allowed Telegram user IDs: %s%s\n\n", cGreen, FormatAllowedUserIDs(ids), cReset)
+					return true, nil
+				},
+			},
+			{
+				Label:  "4. ➕ Add Allowed User ID",
+				Detail: "Append one or more Telegram user IDs to the existing allowlist",
+				Action: func() (bool, error) {
+					actionRan = true
+					reader := bufio.NewReader(stdin)
+					fmt.Fprint(stdout, "  Enter Telegram User ID(s) to add: ")
+					allowLine, _ := reader.ReadString('\n')
+					ids, err := ParseAllowedUserIDs(allowLine)
+					if err != nil {
+						fmt.Fprintf(stdout, "%s! %v%s\n\n", cGold, err, cReset)
+						return true, nil
+					}
+					if len(ids) == 0 {
+						fmt.Fprintln(stdout, "  Cancelled (no user IDs entered).")
+						return true, nil
+					}
+					combined := append([]int64{}, cfg.Channels.Telegram.AllowUsers...)
+					for _, id := range ids {
+						exists := false
+						for _, cur := range combined {
+							if cur == id {
+								exists = true
+								break
+							}
+						}
+						if !exists {
+							combined = append(combined, id)
+						}
+					}
+					cfg.Channels.Telegram.AllowUsers = combined
+					if cfg.Channels.Telegram.ResolveToken(credentialRoot) != "" {
+						cfg.Channels.Telegram.Enabled = true
+					}
+					if err := cfg.Save(cfgPath); err != nil {
+						return true, err
+					}
+					fmt.Fprintf(stdout, "%s✓ Allowed Telegram user IDs: %s%s\n\n", cGreen, FormatAllowedUserIDs(combined), cReset)
+					return true, nil
+				},
+			},
+			{
+				Label:  "5. 🟢 Toggle Enable / Disable Gateway",
+				Detail: "Switch the Telegram Bot gateway on or off in apwd",
+				Action: func() (bool, error) {
+					actionRan = true
+					if !cfg.Channels.Telegram.Enabled {
+						if len(cfg.Channels.Telegram.AllowUsers) == 0 {
+							fmt.Fprintf(stdout, "%s! Cannot enable: configure at least one Allowed User ID first (Option 1 or 3).%s\n\n", cGold, cReset)
+							return true, nil
+						}
+						if cfg.Channels.Telegram.ResolveToken(credentialRoot) == "" {
+							fmt.Fprintf(stdout, "%s! Cannot enable: configure a Telegram Bot Token first (Option 1 or 2).%s\n\n", cGold, cReset)
+							return true, nil
+						}
+						cfg.Channels.Telegram.Enabled = true
+					} else {
+						cfg.Channels.Telegram.Enabled = false
+					}
+					if err := cfg.Save(cfgPath); err != nil {
+						return true, err
+					}
+					fmt.Fprintf(stdout, "%s✓ Telegram Gateway enabled=%v in %s%s\n\n", cGreen, cfg.Channels.Telegram.Enabled, cfgPath, cReset)
+					return true, nil
+				},
+			},
+			{
+				Label:  "6. 🗑  Clear Stored Bot Token",
+				Detail: "Remove APW_TELEGRAM_TOKEN from .apw/auth.json and disable gateway",
+				Action: func() (bool, error) {
+					actionRan = true
+					envName := cfg.Channels.Telegram.EffectiveTokenEnv()
+					if err := config.DeleteAuthKey(credentialRoot, envName); err != nil {
+						return true, err
+					}
+					_ = os.Unsetenv(envName)
+					cfg.Channels.Telegram.Enabled = false
+					if err := cfg.Save(cfgPath); err != nil {
+						return true, err
+					}
+					fmt.Fprintf(stdout, "%s✓ Cleared %s from .apw/auth.json and disabled Telegram gateway%s\n\n", cGreen, envName, cReset)
+					return true, nil
+				},
+			},
+			{
+				Label:  "7. ← Back to Channel Hub",
+				Detail: "Return to channel selection",
+				Action: func() (bool, error) {
+					actionRan = true
+					goBack = true
+					return true, nil
+				},
+			},
+		}
+
+		rc := runSingleLineSelector("APW Channel Hub > Telegram Bot Gateway", subtitles, items, stdout)
+		if rc < 0 {
+			return rc
+		}
+		if !actionRan || goBack {
+			return 0
+		}
+	}
 }
 
 func isZeroWidthRune(r rune) bool {

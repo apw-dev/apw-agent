@@ -2,6 +2,7 @@
 bin/
 *.exe
 *.exe~
+*.exe.old
 *.dll
 *.so
 *.dylib

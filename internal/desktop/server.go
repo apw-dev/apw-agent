@@ -73,8 +73,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/models", s.handleGetModels)
 	mux.HandleFunc("POST /api/models", s.handleUpdateModels)
+	mux.HandleFunc("GET /api/channels", s.handleGetChannels)
+	mux.HandleFunc("POST /api/channels", s.handleUpdateChannels)
 	mux.HandleFunc("GET /api/symbols", s.handleSymbols)
 	mux.HandleFunc("GET /api/graph", s.handleGraph)
+	mux.HandleFunc("GET /api/board", s.handleGetBoard)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/autonomy", s.handleGetAutonomy)
 	mux.HandleFunc("POST /api/autonomy/governor", s.handleUpdateGovernor)
@@ -82,14 +85,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/autonomy/schedules", s.handleManageSchedules)
 	mux.HandleFunc("POST /api/autonomy/skills", s.handleCreateSkill)
 	mux.HandleFunc("GET /api/file", s.handleFile)
+	mux.HandleFunc("GET /api/files", s.handleFiles)
 	mux.HandleFunc("GET /api/instructions", s.handleInstructions)
 	mux.HandleFunc("POST /api/instructions/init", s.handleInstructionsInit)
 	mux.HandleFunc("POST /api/trust", s.handleTrust)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
+	mux.HandleFunc("POST /api/sessions/{id}/delete", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/approvals", s.handleListApprovals)
 	mux.HandleFunc("POST /api/approvals/{id}/decide", s.handleDecideApproval)
+	mux.HandleFunc("GET /api/terminal", s.handleGetTerminal)
+	mux.HandleFunc("POST /api/terminal/run", s.handleRunTerminal)
+	mux.HandleFunc("POST /api/terminal/stop", s.handleStopTerminal)
 	mux.HandleFunc("POST /api/plan", s.handlePlan)
 	mux.HandleFunc("POST /api/run", s.handleRun)
 	mux.HandleFunc("POST /api/verify", s.handleVerify)
@@ -136,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 				http.Error(w, "local origin required", 403)
 				return
 			}
+			w.Header().Set("Cache-Control", "no-store")
 			staticServer.ServeHTTP(w, r)
 			return
 		}
@@ -528,5 +538,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	// The page holds the API token in <meta name="apw-token">: it loads only same-origin
 	// scripts/fonts/styles and talks only to this server, with inline scripts forbidden.
 	w.Header().Set("Content-Security-Policy", desktopCSP)
-	_, _ = w.Write([]byte(strings.ReplaceAll(string(raw), "__APW_TOKEN__", s.Token)))
+	html := strings.ReplaceAll(string(raw), "__APW_TOKEN__", s.Token)
+	ver := s.Version
+	if len(s.Token) >= 8 {
+		ver = s.Token[:8]
+	}
+	html = strings.ReplaceAll(html, "/assets/app.js", "/assets/app.js?v="+ver)
+	html = strings.ReplaceAll(html, "/assets/index.css", "/assets/index.css?v="+ver)
+	_, _ = w.Write([]byte(html))
 }

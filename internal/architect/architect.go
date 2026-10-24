@@ -148,6 +148,7 @@ func NewArchitect(p provider.Provider) *Architect {
 func BuildPlanningPrompt(task core.Task, codebaseOverview string) string {
 	return fmt.Sprintf(`You are the ARCHITECT in the APW Triad Agent Engine.
 Your mission is to analyze the user task and formulate a structured ExecutionPlan.
+CRITICAL: Do NOT invoke external shell commands, CLI tools, or file readers during this planning query. Rely exclusively on the Codebase Overview provided below, and produce the complete implementation plan for the requested task (never stop at a meta-plan or ask for human confirmation before implementing).
 
 User Task:
 Instruction: %s
@@ -158,7 +159,7 @@ Codebase Overview:
 
 Rules:
 1. Plan minimal, surgical, targeted edits that keep the existing code intact. Avoid rewriting entire files.
-2. Decompose into atomic subtasks (actions: read, patch, create, delete, verify). For read/patch/create/delete, target_file must be a specific relative file path (e.g. "src/components/Button.tsx" or "internal/surgeon/worktree.go"), never a directory or ".".
+2. Decompose into atomic subtasks (actions: read, patch, create, delete, verify). For read/patch/create/delete, target_file must be a specific relative file path (e.g. "src/components/Button.tsx" or "internal/surgeon/worktree.go"), never a directory or ".". Never target protected credential or metadata paths (.git, .apw, .env, .env.local, *.pem, *.key); use .env.example for environment variable templates.
    Follow the project's language, framework and conventions shown in the Project profile and source. Files listed as not included exist; add a read step before patching one.
 3. Explicitly list all affected files and acceptance criteria.
    For EVERY acceptance criterion, including verification and scope restrictions, include a matching entry in checks. Do not leave any criterion without an executable check.
@@ -276,11 +277,11 @@ func ParsePlan(taskID, raw string) (*ExecutionPlan, error) {
 	if plan == nil {
 		return nil, firstErr
 	}
+	normalizeChecks(plan)
 	if err := plan.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid execution plan: %w", err)
 	}
 
-	normalizeChecks(plan)
 	plan.Ranking = nil
 	plan.PlanID = fmt.Sprintf("plan-%d", time.Now().UnixNano())
 	plan.TaskID = taskID
@@ -315,15 +316,159 @@ func (a *Architect) Plan(ctx context.Context, task core.Task, codebaseOverview s
 	return ParsePlan(task.ID, res.Content)
 }
 
+func sanitizeEnvTarget(p string) string {
+	slash := filepath.ToSlash(strings.TrimSpace(p))
+	base := strings.ToLower(filepath.Base(slash))
+	if base == ".env" || base == ".env.local" {
+		dir := filepath.ToSlash(filepath.Dir(slash))
+		if dir == "." || dir == "" {
+			return ".env.example"
+		}
+		return dir + "/.env.example"
+	}
+	return p
+}
+
+// NormalizePlan normalizes subtasks, affected files, and acceptance checks on a plan.
+func NormalizePlan(plan *ExecutionPlan) {
+	if plan != nil {
+		normalizeChecks(plan)
+	}
+}
+
 // normalizeChecks replaces go_symbol checks on Go test files with a verification check of the
-// whole pipeline. Test names are chosen when the tests are written, so asserting a planned name
-// rejects correct work; running the tests is what proves the criterion.
+// whole pipeline and repairs common LLM schema omissions on only_changes checks (such as
+// putting the path in "file"/"value" or omitting "files" when affected_files/subtasks list them).
 func normalizeChecks(plan *ExecutionPlan) {
+	for i := range plan.Subtasks {
+		if plan.Subtasks[i].TargetFile != "" {
+			plan.Subtasks[i].TargetFile = sanitizeEnvTarget(plan.Subtasks[i].TargetFile)
+		}
+	}
+	for i := range plan.AffectedFiles {
+		plan.AffectedFiles[i] = sanitizeEnvTarget(plan.AffectedFiles[i])
+	}
+	var expanded []AcceptanceCheck
+	for _, c := range plan.Checks {
+		if c.Kind != "only_changes" && c.Kind != "browser" && c.Kind != "verification" && strings.Contains(c.File, ",") {
+			for _, part := range strings.Split(c.File, ",") {
+				if p := strings.TrimSpace(part); p != "" {
+					cp := c
+					cp.File = p
+					expanded = append(expanded, cp)
+				}
+			}
+			continue
+		}
+		expanded = append(expanded, c)
+	}
+	positiveChecked := map[string]bool{}
+	for _, c := range expanded {
+		if c.Kind == "contains" || c.Kind == "not_contains" || c.Kind == "go_symbol" || c.Kind == "file_absent" {
+			f := sanitizeEnvTarget(strings.TrimSpace(c.File))
+			if f != "" {
+				positiveChecked[filepath.ToSlash(f)] = true
+			}
+		}
+	}
+	unchangedFiles := map[string]bool{}
+	for _, c := range expanded {
+		if c.Kind == "unchanged" {
+			f := sanitizeEnvTarget(strings.TrimSpace(c.File))
+			norm := filepath.ToSlash(f)
+			if norm != "" && !positiveChecked[norm] {
+				unchangedFiles[norm] = true
+			}
+		}
+	}
 	seen := map[string]bool{}
 	var checks []AcceptanceCheck
-	for _, c := range plan.Checks {
-		if c.Kind == "go_symbol" && strings.HasSuffix(filepath.ToSlash(c.File), "_test.go") {
+	for _, c := range expanded {
+		if c.File != "" && c.Kind != "browser" && c.Kind != "file_absent" {
+			c.File = sanitizeEnvTarget(c.File)
+		}
+		for i := range c.Files {
+			c.Files[i] = sanitizeEnvTarget(c.Files[i])
+		}
+		if c.Kind == "unchanged" && positiveChecked[filepath.ToSlash(strings.TrimSpace(c.File))] {
+			continue
+		}
+		if c.Kind == "go_symbol" && filepath.IsLocal(c.File) && strings.HasSuffix(filepath.ToSlash(c.File), "_test.go") {
 			c = AcceptanceCheck{Criterion: c.Criterion, Kind: "verification", Value: "all"}
+		}
+		if c.Kind == "only_changes" {
+			if len(c.Files) == 0 {
+				if f := strings.TrimSpace(c.File); f != "" {
+					for _, part := range strings.Split(f, ",") {
+						if p := strings.TrimSpace(part); p != "" {
+							c.Files = append(c.Files, p)
+						}
+					}
+					c.File = ""
+				}
+				if len(c.Files) == 0 && strings.TrimSpace(c.Value) != "" {
+					for _, part := range strings.Split(c.Value, ",") {
+						p := strings.TrimSpace(part)
+						if p != "" && !strings.ContainsAny(p, " \t") {
+							c.Files = append(c.Files, p)
+						}
+					}
+				}
+				if len(c.Files) == 0 {
+					for _, af := range plan.AffectedFiles {
+						af = strings.TrimSpace(af)
+						if af != "" && af != "." && af != "./" && af != ".\\" && !unchangedFiles[filepath.ToSlash(af)] {
+							c.Files = append(c.Files, af)
+						}
+					}
+				}
+			}
+			seenFiles := map[string]bool{}
+			for _, existing := range c.Files {
+				seenFiles[filepath.ToSlash(strings.TrimSpace(existing))] = true
+			}
+			for _, st := range plan.Subtasks {
+				if st.Action != ActionCreate && st.Action != ActionPatch && st.Action != ActionDelete {
+					continue
+				}
+				tf := strings.TrimSpace(st.TargetFile)
+				norm := filepath.ToSlash(tf)
+				if tf != "" && tf != "." && tf != "./" && tf != ".\\" && filepath.IsLocal(tf) && !seenFiles[norm] && !unchangedFiles[norm] {
+					seenFiles[norm] = true
+					c.Files = append(c.Files, tf)
+				}
+			}
+			for _, other := range expanded {
+				if other.Kind == "only_changes" || other.Kind == "browser" || other.Kind == "verification" || other.Kind == "file_absent" || other.Kind == "unchanged" {
+					continue
+				}
+				tf := sanitizeEnvTarget(strings.TrimSpace(other.File))
+				norm := filepath.ToSlash(tf)
+				if tf != "" && tf != "." && tf != "./" && tf != ".\\" && filepath.IsLocal(tf) && !seenFiles[norm] && !unchangedFiles[norm] {
+					seenFiles[norm] = true
+					c.Files = append(c.Files, tf)
+				}
+			}
+			if len(c.Files) == 0 {
+				c = AcceptanceCheck{Criterion: c.Criterion, Kind: "verification", Value: "all"}
+			}
+		}
+		if c.Criterion != "" {
+			matched := false
+			for _, crit := range plan.AcceptanceCriteria {
+				if crit == c.Criterion {
+					matched = true
+					break
+				}
+				if strings.EqualFold(strings.TrimSpace(crit), strings.TrimSpace(c.Criterion)) {
+					c.Criterion = crit
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				plan.AcceptanceCriteria = append(plan.AcceptanceCriteria, c.Criterion)
+			}
 		}
 		key := c.Criterion + "\x00" + c.Kind + "\x00" + c.File + "\x00" + c.Value + "\x00" + strings.Join(c.Files, "\x00")
 		if seen[key] {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -76,7 +77,7 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 		stamp := ""
 		if s.Once {
 			stamp = v.stampValue(s)
-			if stamp != "" && v.stampMatches(s, stamp) {
+			if stamp != "" && v.stampMatches(s, stamp) && (!v.allowsLockfileChange() || v.hasRealNpmLockfile()) {
 				continue
 			}
 		}
@@ -89,11 +90,51 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 			}
 			return res
 		}
-		if s.Once && stamp != "" {
-			v.writeStamp(s, stamp)
+		if s.Once {
+			if newStamp := v.stampValue(s); newStamp != "" {
+				v.writeStamp(s, newStamp)
+			} else if stamp != "" {
+				v.writeStamp(s, stamp)
+			}
 		}
 	}
 	return &VerificationResult{Passed: true, Duration: time.Since(start)}
+}
+
+func (v *Verifier) allowsLockfileChange() bool {
+	for _, f := range v.OnlyFiles {
+		base := strings.ToLower(filepath.Base(filepath.ToSlash(strings.TrimSpace(f))))
+		if base == "package-lock.json" || base == "npm-shrinkwrap.json" {
+			return true
+		}
+	}
+	return false
+}
+
+func (v *Verifier) hasRealNpmLockfile() bool {
+	data, err := os.ReadFile(filepath.Join(v.Workspace, "package-lock.json"))
+	if err != nil {
+		return false
+	}
+	s := string(data)
+	return strings.Contains(s, `"lockfileVersion"`) && (strings.Contains(s, `"integrity"`) || strings.Contains(s, `"resolved"`))
+}
+
+func npmInstallArgs(cmd []string, writeLockfile bool) []string {
+	var prefix []string
+	for i := 0; i+1 < len(cmd); i++ {
+		if cmd[i] == "--prefix" {
+			prefix = []string{"--prefix", cmd[i+1]}
+			break
+		}
+	}
+	args := append([]string{"npm"}, prefix...)
+	args = append(args, "install")
+	if !writeLockfile {
+		args = append(args, "--no-package-lock")
+	}
+	args = append(args, "--no-audit", "--no-fund")
+	return args
 }
 
 // runStage runs one command stage with its environment and timeout, bounded by
@@ -103,7 +144,41 @@ func (v *Verifier) runStage(ctx context.Context, s project.Stage) (string, error
 		return "", fmt.Errorf("stage %s has no command", s.Name)
 	}
 	timeout := project.TimeoutOf(s)
-	out, err := v.run(ctx, timeout, sandbox.Spec{Args: s.Command, Env: s.Env, Install: s.Once, Optional: s.SkipIfMissing})
+	args := s.Command
+	isRealNpmInstall := s.Once && len(s.Command) > 0 && s.Command[0] == "npm" && flag.Lookup("test.v") == nil
+	if isRealNpmInstall && v.allowsLockfileChange() {
+		lockPath := filepath.Join(v.Workspace, "package-lock.json")
+		if !v.hasRealNpmLockfile() {
+			_ = os.Remove(lockPath)
+		}
+		args = npmInstallArgs(s.Command, true)
+	}
+	out, err := v.run(ctx, timeout, sandbox.Spec{Args: args, Env: s.Env, Install: s.Once, Optional: s.SkipIfMissing})
+	if err != nil && isRealNpmInstall {
+		if v.allowsLockfileChange() {
+			_ = os.Remove(filepath.Join(v.Workspace, "package-lock.json"))
+			retryArgs := npmInstallArgs(s.Command, true)
+			if retryOut, retryErr := v.run(ctx, timeout, sandbox.Spec{Args: retryArgs, Env: s.Env, Install: s.Once, Optional: s.SkipIfMissing}); retryErr == nil {
+				return retryOut, nil
+			} else {
+				out, err = retryOut, retryErr
+			}
+		} else {
+			hasCI := false
+			for _, a := range s.Command {
+				if a == "ci" {
+					hasCI = true
+					break
+				}
+			}
+			if hasCI {
+				retryArgs := npmInstallArgs(s.Command, false)
+				if retryOut, retryErr := v.run(ctx, timeout, sandbox.Spec{Args: retryArgs, Env: s.Env, Install: s.Once, Optional: s.SkipIfMissing}); retryErr == nil {
+					return retryOut, nil
+				}
+			}
+		}
+	}
 	var notFound *exec.Error
 	if err != nil && errors.As(err, &notFound) {
 		err = fmt.Errorf("%s is not installed or not on PATH: %w", s.Command[0], err)

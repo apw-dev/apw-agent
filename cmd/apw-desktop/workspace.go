@@ -6,15 +6,129 @@ import (
 	"html"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 
 	"github.com/apiwat/apw-agent/internal/buildinfo"
+	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/desktop"
+	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
 var ErrNoConfig = errors.New("folder has no apw.json")
+
+// BootstrapWorkspace ensures dir has a valid apw.json (inheriting providers, roles, and saved
+// credentials from thefirst available fallback workspace) and a Git repository with an initial
+// commit so any project folder selected in APW Desktop works out-of-the-box.
+func BootstrapWorkspace(dir string, fallbackDirs ...string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("not a directory: %s", abs)
+	}
+
+	cfgPath := filepath.Join(abs, "apw.json")
+	if info, err := os.Stat(cfgPath); err != nil || !info.Mode().IsRegular() {
+		var candidates []string
+		candidates = append(candidates, fallbackDirs...)
+		if exe, err := os.Executable(); err == nil {
+			exeDir := filepath.Dir(exe)
+			candidates = append(candidates, exeDir, filepath.Dir(exeDir))
+		}
+		if cwd, err := os.Getwd(); err == nil {
+			candidates = append(candidates, cwd)
+		}
+
+		initialized := false
+		for _, cand := range candidates {
+			cand = strings.TrimSpace(cand)
+			if cand == "" || samePath(cand, abs) {
+				continue
+			}
+			candCfgPath := filepath.Join(cand, "apw.json")
+			tmpl, err := config.Load(candCfgPath)
+			if err != nil {
+				continue
+			}
+			tmpl.Workspace = "."
+			tmpl.Policy.Trusted = true
+			if err := tmpl.Save(cfgPath); err == nil {
+				initialized = true
+				srcAuth := filepath.Join(cand, ".apw", "auth.json")
+				dstAuth := filepath.Join(abs, ".apw", "auth.json")
+				if _, err := os.Stat(dstAuth); errors.Is(err, os.ErrNotExist) {
+					if authBytes, err := os.ReadFile(srcAuth); err == nil {
+						_ = os.MkdirAll(filepath.Dir(dstAuth), 0o700)
+						_ = os.WriteFile(dstAuth, authBytes, 0o600)
+					}
+				}
+				break
+			}
+		}
+
+		if !initialized {
+			cfg, err := config.LoadOrDefault(cfgPath)
+			if err != nil {
+				return err
+			}
+			cfg.Workspace = "."
+			cfg.Policy.Trusted = true
+			if err := cfg.Save(cfgPath); err != nil {
+				return err
+			}
+		}
+	} else if existingCfg, err := config.Load(cfgPath); err == nil {
+		changed := false
+		for i, k := range existingCfg.Failover.Architect {
+			if strings.HasPrefix(k, "claude-sub:") {
+				if _, ok := existingCfg.Providers["agy:claude-sonnet-5-5-high"]; ok {
+					existingCfg.Failover.Architect[i] = "agy:claude-sonnet-5-5-high"
+					changed = true
+				} else if _, ok := existingCfg.Providers["chatgpt-sub:gpt-6-sol"]; ok {
+					existingCfg.Failover.Architect[i] = "chatgpt-sub:gpt-6-sol"
+					changed = true
+				}
+			}
+		}
+		if changed {
+			_ = existingCfg.Save(cfgPath)
+		}
+	}
+
+	ensureWorkspaceGitReady(abs)
+	return nil
+}
+
+func ensureWorkspaceGitReady(abs string) {
+	gitEntry := filepath.Join(abs, ".git")
+	if _, err := os.Stat(gitEntry); errors.Is(err, os.ErrNotExist) {
+		cmd := exec.Command("git", "init")
+		cmd.Dir = abs
+		_ = cmd.Run()
+	}
+	surgeon.EnsureGitExclude(abs, ".apw/")
+	surgeon.EnsureGitExclude(abs, "apw.json")
+	headCmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	headCmd.Dir = abs
+	if err := headCmd.Run(); err != nil {
+		commitCmd := exec.Command("git",
+			"-c", "user.name=APW Agent",
+			"-c", "user.email=apw@local",
+			"-c", "commit.gpgsign=false",
+			"commit", "--allow-empty", "-m", "chore: initialize workspace",
+		)
+		commitCmd.Dir = abs
+		_ = commitCmd.Run()
+	}
+}
 
 type openWorkspace struct {
 	dir     string

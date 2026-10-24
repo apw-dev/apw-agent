@@ -259,3 +259,50 @@ func TestTestFileGoSymbolBecomesVerification(t *testing.T) {
 		t.Fatalf("checks = %+v", plan.Checks)
 	}
 }
+
+func TestOnlyChangesCheckNormalizedFromFileOrAffectedFiles(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		wantFiles []string
+	}{
+		{
+			name: "singular file field",
+			raw: `{"objective":"x","subtasks":[{"id":"1","action":"patch","target_file":"app.py","instruction":"x"}],
+"acceptance_criteria":["scope"],"checks":[{"criterion":"scope","kind":"only_changes","file":"app.py"}]}`,
+			wantFiles: []string{"app.py"},
+		},
+		{
+			name: "fallback to affected_files",
+			raw: `{"objective":"x","affected_files":["backend/main.py","frontend/index.html"],
+"subtasks":[{"id":"1","action":"create","target_file":"backend/main.py","instruction":"x"}],
+"acceptance_criteria":["scope"],"checks":[{"criterion":"scope","kind":"only_changes"}]}`,
+			wantFiles: []string{"backend/main.py", "frontend/index.html"},
+		},
+		{
+			name: "fallback to subtasks target_file",
+			raw: `{"objective":"x",
+"subtasks":[{"id":"1","action":"create","target_file":"backend/main.py","instruction":"x"},{"id":"2","action":"verify"}],
+"acceptance_criteria":["scope"],"checks":[{"criterion":"scope","kind":"only_changes"}]}`,
+			wantFiles: []string{"backend/main.py"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := ParsePlan("task-only-changes", tc.raw)
+			if err != nil {
+				t.Fatalf("ParsePlan(%s) failed: %v", tc.name, err)
+			}
+			if len(plan.Checks) != 1 || len(plan.Checks[0].Files) != len(tc.wantFiles) {
+				t.Fatalf("ParsePlan(%s) checks = %+v, want files %v", tc.name, plan.Checks, tc.wantFiles)
+			}
+			for i, wf := range tc.wantFiles {
+				if plan.Checks[0].Files[i] != wf {
+					t.Fatalf("ParsePlan(%s) files[%d] = %q, want %q", tc.name, i, plan.Checks[0].Files[i], wf)
+				}
+			}
+		})
+	}
+}
+

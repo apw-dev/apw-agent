@@ -135,6 +135,23 @@ func TestServer_Endpoints(t *testing.T) {
 	if len(sessions) != 0 {
 		t.Fatalf("expected no sessions before a task is submitted, got %d", len(sessions))
 	}
+
+	// 6. Agent Board API (/api/board)
+	respBoard, err := get(ts.URL + "/api/board")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer respBoard.Body.Close()
+	if respBoard.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/board status = %d", respBoard.StatusCode)
+	}
+	var boardPayload AgentBoardPayload
+	if err := json.NewDecoder(respBoard.Body).Decode(&boardPayload); err != nil {
+		t.Fatal(err)
+	}
+	if !boardPayload.Architecture.ReadOnlyMode || len(boardPayload.Diagram.SequenceNodes) == 0 || len(boardPayload.StructuralDiff) == 0 || len(boardPayload.DecisionLog) == 0 {
+		t.Fatalf("unexpected board payload: %+v", boardPayload)
+	}
 }
 
 func TestApprovalGatekeeper_Decisions(t *testing.T) {
@@ -399,5 +416,142 @@ func TestInProcessHostTrustedOnlyWhenConfigured(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, evil)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("foreign origin: got %d, want 403", rec.Code)
+	}
+}
+
+func TestServer_ChannelsAPI(t *testing.T) {
+	t.Setenv(config.DefaultTelegramTokenEnv, "")
+	ws := t.TempDir()
+	cfgPath := filepath.Join(ws, "apw.json")
+	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "providers": {"m": {"type": "mock", "model": "APW Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(cfgPath, "0.1.0-test")
+	srv.Backend = &stubBackend{}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	doReq := func(method, body string) (*http.Response, channelsPayload) {
+		t.Helper()
+		var r *http.Request
+		if body == "" {
+			r, _ = http.NewRequest(method, ts.URL+"/api/channels", nil)
+		} else {
+			r, _ = http.NewRequest(method, ts.URL+"/api/channels", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+		}
+		r.Header.Set("Authorization", "Bearer "+srv.Token)
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload channelsPayload
+		if resp.StatusCode == http.StatusOK {
+			if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+				resp.Body.Close()
+				t.Fatal(err)
+			}
+		}
+		resp.Body.Close()
+		return resp, payload
+	}
+
+	// 1. Initial GET returns disabled & unconfigured
+	resp, ch := doReq(http.MethodGet, "")
+	if resp.StatusCode != http.StatusOK || ch.Telegram.Enabled || ch.Telegram.TokenConfigured {
+		t.Fatalf("initial channels = %+v (status %d)", ch, resp.StatusCode)
+	}
+
+	// 2. Enabling without token or allow_users returns 400
+	resp, _ = doReq(http.MethodPost, `{"telegram":{"enabled":true,"allow_users":[123456]}}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when enabling without token, got %d", resp.StatusCode)
+	}
+
+	// 3. Configure token + allow_users + enabled
+	secretTok := "999888777:XYZsecretTokenValue123"
+	resp, ch = doReq(http.MethodPost, `{"telegram":{"enabled":true,"token":"`+secretTok+`","allow_users":[123456,789012]}}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/channels status = %d", resp.StatusCode)
+	}
+	if !ch.Telegram.Enabled || !ch.Telegram.TokenConfigured || ch.Telegram.TokenMasked != config.MaskSecret(secretTok) || len(ch.Telegram.AllowUsers) != 2 {
+		t.Fatalf("unexpected channels payload after save: %+v", ch)
+	}
+
+	// Ensure secret is NOT in apw.json
+	rawCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawCfg), secretTok) {
+		t.Fatal("secret token leaked into apw.json")
+	}
+
+	// 4. Clear token disables channel
+	resp, ch = doReq(http.MethodPost, `{"telegram":{"enabled":false,"clear_token":true}}`)
+	if resp.StatusCode != http.StatusOK || ch.Telegram.Enabled || ch.Telegram.TokenConfigured {
+		t.Fatalf("unexpected channels payload after clear: %+v (status %d)", ch, resp.StatusCode)
+	}
+}
+
+func TestHandleFilesTreeAndSkillViewing(t *testing.T) {
+	ws := t.TempDir()
+	cfgPath := filepath.Join(ws, "apw.json")
+	cfgJSON := `{"workspace": ` + mustQuote(ws) + `, "providers": {"m": {"type": "mock", "model": "APW Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "cmd", "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "cmd", "app", "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, ".apw", "skills", "my-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".apw", "skills", "my-skill", "SKILL.md"), []byte("# My Skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".apw", "auth.json"), []byte(`{"secret":"nope"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".env"), []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(cfgPath, "test")
+	rec := httptest.NewRecorder()
+	srv.handleFiles(rec, httptest.NewRequest(http.MethodGet, "/api/files", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handleFiles = %d: %s", rec.Code, rec.Body.String())
+	}
+	var tree filesTreePayload
+	if err := json.Unmarshal(rec.Body.Bytes(), &tree); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, f := range tree.Files {
+		paths = append(paths, f.Path)
+	}
+	joined := strings.Join(paths, ",")
+	if !strings.Contains(joined, "cmd/app/main.go") || !strings.Contains(joined, ".apw/skills/my-skill/SKILL.md") {
+		t.Fatalf("expected main.go and SKILL.md in file tree, got %v", paths)
+	}
+	if strings.Contains(joined, ".env") || strings.Contains(joined, "auth.json") {
+		t.Fatalf("sensitive files must not appear in file tree: %v", paths)
+	}
+
+	// Viewing .apw/skills/my-skill/SKILL.md is allowed, while .apw/auth.json stays 403.
+	recSkill := httptest.NewRecorder()
+	srv.handleFile(recSkill, httptest.NewRequest(http.MethodGet, "/api/file?path=.apw/skills/my-skill/SKILL.md", nil))
+	if recSkill.Code != http.StatusOK || !strings.Contains(recSkill.Body.String(), "# My Skill") {
+		t.Fatalf("expected SKILL.md to be viewable, got %d: %s", recSkill.Code, recSkill.Body.String())
+	}
+	recAuth := httptest.NewRecorder()
+	srv.handleFile(recAuth, httptest.NewRequest(http.MethodGet, "/api/file?path=.apw/auth.json", nil))
+	if recAuth.Code != http.StatusForbidden {
+		t.Fatalf("expected .apw/auth.json to remain 403, got %d", recAuth.Code)
 	}
 }

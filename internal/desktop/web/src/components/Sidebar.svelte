@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { Plus, Settings, Clock, ChevronDown, FolderGit2 } from "lucide-svelte";
+  import { Plus, Settings, Clock, ChevronDown, FolderGit2, Trash2, LayoutGrid } from "lucide-svelte";
   import WorkspacePopover from "./WorkspacePopover.svelte";
   import { workspaceStatus, autonomyState } from "../lib/stores/workspace";
   import {
     groupedSessions,
     currentSessionId,
     selectSession,
-    createNewConversation
+    createNewConversation,
+    deleteSession
   } from "../lib/stores/sessions";
-  import { runningTasks, tasks, selectedTaskId, selectTask } from "../lib/stores/tasks";
+  import { runningTasks, tasks, selectedTaskId, selectTask, dismissTask } from "../lib/stores/tasks";
   import {
     workspacePopoverOpen,
     settingsModalOpen,
@@ -80,45 +81,96 @@
     {#each $groupedSessions as group (group.label)}
       <div class="grp-title">{group.label}</div>
       {#each group.items as sess (sess.id)}
-        <button
-          type="button"
-          class="nav-item"
+        <div
+          class="nav-row"
           class:active={$currentSessionId === sess.id && $centerView === "thread"}
-          onclick={() => selectSession(sess.id)}
-          data-testid="session-item"
         >
-          <span class="dot ok"></span>
-          <span class="label">{sess.last_instruction || sess.id}</span>
-        </button>
+          <button
+            type="button"
+            class="nav-item"
+            class:active={$currentSessionId === sess.id && $centerView === "thread"}
+            onclick={() => selectSession(sess.id)}
+            data-testid="session-item"
+            title={sess.last_instruction ? `ล่าสุด: ${sess.last_instruction}` : sess.id}
+          >
+            <span class="dot ok"></span>
+            <span class="label">{sess.first_instruction || sess.last_instruction || sess.id}</span>
+            {#if sess.turn_count > 1}
+              <span class="turn-count-badge mono">{sess.turn_count}</span>
+            {/if}
+          </button>
+          <button
+            type="button"
+            class="del-btn"
+            onclick={(e) => {
+              e.stopPropagation();
+              void deleteSession(sess.id);
+            }}
+            title="ลบ Conversation"
+            aria-label={`ลบ Conversation ${sess.last_instruction || sess.id}`}
+            data-testid="delete-session-btn"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       {/each}
     {/each}
 
     {#if $tasks.length > 0}
-    <div class="grp-title" id="task-list">งานล่าสุด</div>
+      <div class="grp-title" id="task-list">งานล่าสุด</div>
       {#each $tasks.slice(0, 12) as job (job.id)}
-        <button
-          type="button"
-          class="nav-item"
-          class:active={$selectedTaskId === job.id}
-          onclick={() => {
-            centerView.set("thread");
-            void selectTask(job.id, true);
-          }}
-          data-testid="task-list-item"
-          title={`${job.id} [${job.status}]`}
+        <div
+          class="nav-row"
+          class:active={$selectedTaskId === job.id && !$currentSessionId && $centerView === "thread"}
         >
-          <span
-            class="dot"
-            class:ok={job.status === "succeeded" || job.status === "ready_to_apply" || job.status === "preview_ready"}
-            class:err={job.status === "failed" || job.status === "cancelled"}
-          ></span>
-          <span class="label">{job.instruction || job.id}</span>
-        </button>
+          <button
+            type="button"
+            class="nav-item"
+            class:active={$selectedTaskId === job.id && !$currentSessionId && $centerView === "thread"}
+            onclick={() => {
+              centerView.set("thread");
+              void selectTask(job.id, true);
+            }}
+            data-testid="task-list-item"
+            title={`${job.id} [${job.status}]`}
+          >
+            <span
+              class="dot"
+              class:ok={job.status === "succeeded" || job.status === "ready_to_apply" || job.status === "preview_ready"}
+              class:err={job.status === "failed" || job.status === "cancelled"}
+            ></span>
+            <span class="label">{job.instruction || job.id}</span>
+          </button>
+          <button
+            type="button"
+            class="del-btn"
+            onclick={(e) => {
+              e.stopPropagation();
+              dismissTask(job.id);
+            }}
+            title="ลบรายการงาน"
+            aria-label={`ลบรายการงาน ${job.instruction || job.id}`}
+            data-testid="delete-task-btn"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       {/each}
     {/if}
   </div>
 
   <div class="footer">
+    <button
+      type="button"
+      class="foot-item"
+      class:active={$centerView === "board"}
+      onclick={() => centerView.set($centerView === "board" ? "thread" : "board")}
+      data-testid="open-agent-board-btn"
+    >
+      <LayoutGrid size={14} />
+      <span>Agent Board</span>
+      <span class="auto-badge board">board</span>
+    </button>
     <button
       type="button"
       class="foot-item"
@@ -245,8 +297,23 @@
     font-weight: 600;
     text-transform: uppercase;
   }
+  .nav-row {
+    display: flex;
+    align-items: center;
+    border-radius: 6px;
+    position: relative;
+    flex: none;
+  }
+  .nav-row:hover {
+    background: var(--hover);
+  }
+  .nav-row.active {
+    background: var(--active);
+  }
   .nav-item {
     width: 100%;
+    flex: none;
+    min-width: 0;
     padding: 5px 8px;
     border-radius: 6px;
     border: none;
@@ -258,6 +325,10 @@
     text-align: left;
     font-size: 12.5px;
   }
+  .nav-row > .nav-item {
+    flex: 1;
+    width: auto;
+  }
   .nav-item:hover {
     background: var(--hover);
   }
@@ -265,11 +336,41 @@
     background: var(--active);
     font-weight: 500;
   }
+  .del-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    padding: 4px 6px;
+    border-radius: 5px;
+    opacity: 0;
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    margin-right: 2px;
+  }
+  .nav-row:hover .del-btn,
+  .nav-row:focus-within .del-btn,
+  .del-btn:focus-visible {
+    opacity: 1;
+  }
+  .del-btn:hover {
+    color: var(--err);
+    background: var(--err-soft);
+  }
   .nav-item .label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
+  }
+  .turn-count-badge {
+    font-size: 10px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    flex: none;
   }
   .dot {
     width: 6px;
@@ -329,5 +430,9 @@
   .auto-badge.on {
     background: var(--ok-soft);
     color: var(--ok);
+  }
+  .auto-badge.board {
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 </style>

@@ -108,7 +108,7 @@ func GetHeadCommit(ctx context.Context, workspace string) (string, error) {
 // .worktrees directory (AllowedPath); current task worktrees live outside the workspace.
 func shouldSkipSync(rel string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
-		if part == "vendor" || part == "node_modules" {
+		if part == "vendor" || part == "node_modules" || part == ".vite" || strings.HasSuffix(part, ".tsbuildinfo") {
 			return true
 		}
 	}

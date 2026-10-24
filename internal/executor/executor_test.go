@@ -284,3 +284,62 @@ func applyPreparedTest(t *testing.T, e *Executor, r *ExecutionReport) {
 		t.Fatal(err)
 	}
 }
+
+func TestExecuteSubtask_PatchMissingFileCreatesAndBarePromptPathPinned(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module example.com/test\n\ngo 1.24\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	specDir := filepath.Join(ws, "docs", "superpowers", "specs")
+	if err := os.MkdirAll(specDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(specDir, "design.md"), []byte("# CrowdSec Spec\nTask 0: setup .gitignore\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctxStr := CodeContextForInstruction(ws, "อ่าน spec เต็มก่อนลงมือ: docs/superpowers/specs/design.md")
+	if !strings.Contains(ctxStr, "# CrowdSec Spec") {
+		t.Fatalf("expected bare path docs/superpowers/specs/design.md to be pinned in context, got:\n%s", ctxStr)
+	}
+
+	planResp := "```json\n" + `{
+		"objective": "Create .gitignore via patch action",
+		"affected_files": [".gitignore"],
+		"subtasks": [
+			{
+				"id": "step-0",
+				"description": "Read missing .gitignore",
+				"action": "read",
+				"target_file": ".gitignore",
+				"instruction": "Check existing .gitignore"
+			},
+			{
+				"id": "step-1",
+				"description": "Add .env to .gitignore",
+				"action": "patch",
+				"target_file": ".gitignore",
+				"instruction": "Ignore .env"
+			}
+		],
+		"acceptance_criteria": [".gitignore exists"],
+		"checks": [{"criterion": ".gitignore exists", "kind": "file_exists", "file": ".gitignore"}]
+	}` + "\n```"
+	createResp := `{"file_content": ".env\n__pycache__/\n"}`
+	mp := mock.New(planResp, createResp)
+	initExecutorRepo(t, ws)
+	ex := New(ws, mp, mp, "mock-arch", "mock-reflex", 1)
+	ex.Trusted = true
+
+	report, err := ex.Execute(context.Background(), "Setup .gitignore", "")
+	if err != nil {
+		t.Fatalf("Execute failed when patching missing .gitignore: %v", err)
+	}
+	if !report.Passed {
+		t.Fatalf("expected report.Passed = true")
+	}
+}
+

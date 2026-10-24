@@ -122,6 +122,9 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	case "auth", "login":
 		return runAuthCmdWithStdin(args[1:], stdin, stdout, stderr)
 
+	case "channel", "channels", "messaging":
+		return runChannelCmdWithStdin(args[1:], stdin, stdout, stderr)
+
 	case "skills":
 		return runSkillsCmd(".", stdout)
 
@@ -726,6 +729,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  symbols <file.go>              Inspect AST code symbols using Surgeon inspector")
 	fmt.Fprintln(w, "  model [status|refresh|set ...] Select live models for Brain 1 (Reflex) & Brain 2 (Architect)")
 	fmt.Fprintln(w, "  auth                           Connect ChatGPT Sub/API, Claude Sub/API, or AGY CLI")
+	fmt.Fprintln(w, "  channel | messaging [cmd]      Configure messaging channels (Telegram Bot Token & allowed user IDs)")
 	fmt.Fprintln(w, "  daemon [status|start|stop]     Manage apwd background agent daemon")
 	fmt.Fprintln(w, "  version                        Show version and architecture info")
 }

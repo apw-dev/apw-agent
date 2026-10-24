@@ -2,10 +2,12 @@
   import { X, ArrowLeft } from "lucide-svelte";
   import ConflictCard from "./cards/ConflictCard.svelte";
   import StatusCard from "./cards/StatusCard.svelte";
+  import SubagentsCard from "./cards/SubagentsCard.svelte";
   import ChangesCard from "./cards/ChangesCard.svelte";
   import VerificationCard from "./cards/VerificationCard.svelte";
   import WorkspaceCard from "./cards/WorkspaceCard.svelte";
   import DiffView from "./DiffView.svelte";
+  import FileTreeView from "./FileTreeView.svelte";
   import MarkdownView from "./MarkdownView.svelte";
   import { parseUnifiedDiff } from "../lib/diff";
   import {
@@ -20,12 +22,17 @@
     rightCollapsed,
     rightPanelView,
     selectedDiffFile,
+    highlightedFileLine,
     toggleRightPanel
   } from "../lib/stores/settings";
   import {
     activeFileView,
+    workspaceFiles,
     workspaceSymbols,
-    workspaceGraph
+    workspaceGraph,
+    fetchWorkspaceFiles,
+    fetchWorkspaceSymbols,
+    fetchWorkspaceGraph
   } from "../lib/stores/workspace";
 
   let busy = $state(false);
@@ -115,6 +122,14 @@
   }
 
   $effect(() => {
+    const targetLn = $highlightedFileLine;
+    if ($rightPanelView === "file" && $activeFileView && fullFileContainer && targetLn) {
+      const lineEl = fullFileContainer.querySelector<HTMLElement>(`[data-line-no="${targetLn}"]`);
+      if (lineEl) {
+        lineEl.scrollIntoView({ block: "center", behavior: "smooth" });
+        return;
+      }
+    }
     if ($rightPanelView === "file" && $activeFileView && fullFileContainer && activeFileDiff) {
       changeCursor = 0;
       const first = fullFileContainer.querySelector<HTMLElement>(".ln.add, .ln.del");
@@ -145,7 +160,9 @@
   <aside class="review-panel" aria-label="พาเนลตรวจสอบและรีวิว" data-testid="review-panel">
     <div class="panel-hdr">
       <span class="title" id="artifact-title">
-        {#if $rightPanelView === "symbols"}
+        {#if $rightPanelView === "files"}
+          Workspace Files ({$workspaceFiles.length})
+        {:else if $rightPanelView === "symbols"}
           AST Symbols ({$workspaceSymbols.length} files)
         {:else if $rightPanelView === "graph"}
           Call Impact Graph ({$workspaceGraph?.calls?.length ?? 0} edges)
@@ -154,7 +171,7 @@
         {:else if $selectedTask}
           Task · {$selectedTask.instruction || $selectedTask.id}
         {:else}
-          Workspace Review
+          Workspace Overview
         {/if}
       </span>
       <button
@@ -168,8 +185,68 @@
       </button>
     </div>
 
+    <div class="nav-tabs" role="tablist" aria-label="มุมมองพาเนลขวา">
+      <button
+        type="button"
+        class="nav-tab"
+        class:active={$rightPanelView === "cards"}
+        onclick={() => rightPanelView.set("cards")}
+        data-testid="tab-overview"
+      >
+        Overview
+      </button>
+      <button
+        type="button"
+        class="nav-tab"
+        class:active={$rightPanelView === "diff"}
+        disabled={!$selectedTask}
+        onclick={() => rightPanelView.set("diff")}
+        data-testid="tab-review"
+      >
+        Review
+      </button>
+      <button
+        type="button"
+        class="nav-tab"
+        class:active={$rightPanelView === "files" || $rightPanelView === "file"}
+        onclick={async () => {
+          await fetchWorkspaceFiles($selectedTask?.id);
+          rightPanelView.set("files");
+        }}
+        data-testid="tab-files"
+      >
+        Files
+      </button>
+      <button
+        type="button"
+        class="nav-tab"
+        class:active={$rightPanelView === "symbols"}
+        onclick={async () => {
+          await fetchWorkspaceSymbols();
+          rightPanelView.set("symbols");
+        }}
+        data-testid="tab-symbols"
+      >
+        Symbols
+      </button>
+      <button
+        type="button"
+        class="nav-tab"
+        class:active={$rightPanelView === "graph"}
+        onclick={async () => {
+          await fetchWorkspaceGraph();
+          rightPanelView.set("graph");
+        }}
+        data-testid="tab-graph"
+      >
+        Graph
+      </button>
+    </div>
+
     {#if $rightPanelView === "diff" && $selectedTask}
       <DiffView job={$selectedTask} />
+    {:else if $rightPanelView === "files"}
+      <FileTreeView />
     {:else if $rightPanelView === "file" && $activeFileView}
       <div class="full-view">
         <div class="sub-bar">
@@ -181,14 +258,17 @@
                 selectedDiffFile.set($activeFileView.path);
                 rightPanelView.set("diff");
               } else {
-                rightPanelView.set("cards");
+                rightPanelView.set("files");
               }
             }}
           >
             <ArrowLeft size={13} />
-            <span>{activeFileDiff ? "กลับหน้า Diff" : "กลับ"}</span>
+            <span>{activeFileDiff ? "กลับหน้า Diff" : "Files"}</span>
           </button>
-          <span class="mono truncate file-title">{$activeFileView.path}</span>
+          <span class="mono truncate file-title">
+            {$activeFileView.path}{#if $highlightedFileLine}:L{$highlightedFileLine}{/if}
+          </span>
+          <span class="ro-pill mono" title="โหมดอ่านและตรวจโค้ดอย่างเดียว (Read-Only)">READ-ONLY</span>
           {#if isMarkdownFile}
             <button type="button" class="jump-btn" onclick={() => (mdPreview = !mdPreview)}>
               {mdPreview ? "ดูโค้ด & Diff" : "Preview Markdown"}
@@ -211,7 +291,13 @@
         {:else}
           <div class="full-file-scroll mono selectable" bind:this={fullFileContainer}>
             {#each annotatedFileLines as ln, idx (idx)}
-              <div class="ln" class:add={ln.kind === "add"} class:del={ln.kind === "del"}>
+              <div
+                class="ln"
+                class:add={ln.kind === "add"}
+                class:del={ln.kind === "del"}
+                class:target-line={$highlightedFileLine !== null && Number(ln.lineNo) === $highlightedFileLine}
+                data-line-no={ln.lineNo}
+              >
                 <span class="g">{ln.lineNo}</span>
                 <span class="m">{ln.kind === "add" ? "+" : ln.kind === "del" ? "−" : " "}</span>
                 <span class="code">{ln.text}</span>
@@ -265,6 +351,7 @@
         <ConflictCard />
         {#if $selectedTask}
           <StatusCard job={$selectedTask} events={$taskEvents[$selectedTask.id] || []} />
+          <SubagentsCard job={$selectedTask} events={$taskEvents[$selectedTask.id] || []} />
           <ChangesCard job={$selectedTask} />
           <VerificationCard job={$selectedTask} />
         {/if}
@@ -349,6 +436,38 @@
     color: var(--text);
     background: var(--hover);
   }
+  .nav-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-subtle);
+    overflow-x: auto;
+  }
+  .nav-tab {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .nav-tab:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--hover);
+  }
+  .nav-tab.active {
+    color: var(--accent);
+    background: var(--accent-soft);
+    font-weight: 600;
+  }
+  .nav-tab:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
   .cards-scroll {
     flex: 1;
     overflow-y: auto;
@@ -376,6 +495,24 @@
   .file-title {
     flex: 1;
     min-width: 0;
+  }
+  .ro-pill {
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid var(--line);
+    flex: none;
+  }
+  .ln.target-line {
+    background: var(--accent-soft);
+    outline: 1px solid var(--accent);
+  }
+  .ln.target-line .g {
+    color: var(--accent);
+    font-weight: 700;
   }
   .back-btn,
   .jump-btn {

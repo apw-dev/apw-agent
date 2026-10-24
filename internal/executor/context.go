@@ -33,6 +33,7 @@ var sourceExts = map[string]bool{
 	".py": true, ".rs": true, ".java": true, ".kt": true, ".kts": true, ".scala": true, ".cs": true, ".fs": true, ".rb": true, ".php": true,
 	".swift": true, ".c": true, ".h": true, ".cc": true, ".cpp": true, ".hpp": true, ".m": true, ".dart": true, ".lua": true,
 	".ex": true, ".exs": true, ".erl": true, ".clj": true, ".sql": true, ".sh": true, ".ps1": true, ".graphql": true, ".proto": true, ".prisma": true,
+	".md": true, ".markdown": true,
 }
 
 // manifestFiles describe the project; they are shown first, in this order.
@@ -294,7 +295,7 @@ func CodeContextForInstruction(root, instruction string) string {
 		if strings.HasSuffix(name, ".min.js") || strings.HasSuffix(name, ".min.css") {
 			return nil
 		}
-		if sourceExts[strings.ToLower(filepath.Ext(name))] {
+		if sourceExts[strings.ToLower(filepath.Ext(name))] || name == "package.json" || name == "tsconfig.json" || name == "go.mod" || name == "cargo.toml" || name == "pyproject.toml" {
 			sources = append(sources, rel)
 		}
 		return nil
@@ -394,21 +395,32 @@ func omittedSymbolSkeleton(omitted []string, graph *surgeon.WorkspaceGraph) stri
 	return sb.String()
 }
 
-var rePromptMention = regexp.MustCompile(`(?:^|\s)@(#?[A-Za-z0-9_./\\-]+(?:#L?\d+(?:-\d+)?)?)`)
+var (
+	rePromptMention  = regexp.MustCompile(`(?:^|\s)@(#?[A-Za-z0-9_./\\-]+(?:#L?\d+(?:-\d+)?)?)`)
+	reBarePathTokens = regexp.MustCompile(`(?:^|[\s` + "`" + `"'(:])([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.[A-Za-z0-9]+)(?:#L?\d+(?:-\d+)?)?`)
+)
 
-// expandPromptMentions resolves @file/path, @file/path#L10-20, and @#SymbolName references in instruction.
+// expandPromptMentions resolves @file/path, @file/path#L10-20, @#SymbolName, and bare relative
+// file paths (e.g. docs/specs/design.md) referenced in instruction.
 func expandPromptMentions(root, instruction string, graph *surgeon.WorkspaceGraph) string {
-	if !strings.Contains(instruction, "@") {
+	if strings.TrimSpace(instruction) == "" {
 		return ""
 	}
-	matches := rePromptMention.FindAllStringSubmatch(instruction, 8)
-	if len(matches) == 0 {
+	var tokens []string
+	if strings.Contains(instruction, "@") {
+		for _, m := range rePromptMention.FindAllStringSubmatch(instruction, 8) {
+			tokens = append(tokens, strings.TrimSpace(m[1]))
+		}
+	}
+	for _, m := range reBarePathTokens.FindAllStringSubmatch(instruction, 8) {
+		tokens = append(tokens, strings.TrimSpace(m[1]))
+	}
+	if len(tokens) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	seen := make(map[string]bool)
-	for _, m := range matches {
-		token := strings.TrimSpace(m[1])
+	for _, token := range tokens {
 		if token == "" || seen[token] {
 			continue
 		}
@@ -433,7 +445,7 @@ func expandPromptMentions(root, instruction string, graph *surgeon.WorkspaceGrap
 			continue
 		}
 		filePart := token
-		startLine, endLine := 1, 200
+		startLine, endLine := 1, 500
 		if hashIdx := strings.Index(token, "#"); hashIdx > 0 {
 			filePart = token[:hashIdx]
 			rangeSpec := strings.TrimPrefix(token[hashIdx+1:], "L")
@@ -459,7 +471,7 @@ func expandPromptMentions(root, instruction string, graph *surgeon.WorkspaceGrap
 		}
 		if startLine <= endLine {
 			chunk := strings.Join(lines[startLine-1:endLine], "\n")
-			fmt.Fprintf(&sb, "\nPinned File @%s (L%d-%d):\n```\n%s\n```\n", filepath.ToSlash(rel), startLine, endLine, headUTF8(chunk, 16*1024))
+			fmt.Fprintf(&sb, "\nPinned File @%s (L%d-%d):\n```\n%s\n```\n", filepath.ToSlash(rel), startLine, endLine, headUTF8(chunk, 32*1024))
 		}
 	}
 	return sb.String()
@@ -550,10 +562,35 @@ func ConfiguredProfile(root string, v config.VerifyConfig) project.Profile {
 	return p
 }
 
+func isLockFile(filePath string) bool {
+	base := strings.ToLower(filepath.Base(filepath.ToSlash(strings.TrimSpace(filePath))))
+	switch base {
+	case "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "go.sum", "cargo.lock", "poetry.lock", "composer.lock":
+		return true
+	default:
+		return false
+	}
+}
+
+func promptSourceSnippet(filePath, content string) string {
+	limit := 48 * 1024
+	if isLockFile(filePath) {
+		limit = 12 * 1024
+	}
+	if len(content) > limit {
+		return headUTF8(content, limit) + "\n[...file truncated for prompt budget...]"
+	}
+	return content
+}
+
 func (e *Executor) rememberRead(path, content string) {
+	limit := maxReadEntry
+	if isLockFile(path) {
+		limit = 4 * 1024
+	}
 	entry := fmt.Sprintf("\nRead %s:\n```\n%s\n```\n", path, content)
-	if len(entry) > maxReadEntry {
-		entry = headUTF8(entry, maxReadEntry) + "\n[read truncated]\n"
+	if len(entry) > limit {
+		entry = headUTF8(entry, limit) + "\n[read truncated]\n"
 	}
 	e.ReadContext += entry
 	if len(e.ReadContext) > maxReadContext {

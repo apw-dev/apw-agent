@@ -74,11 +74,26 @@ func AllowedPath(rel string) error {
 	}
 	for _, p := range strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/") {
 		p = strings.ToLower(p)
-		if p == ".git" || p == ".apw" || p == ".apw-sandbox" || p == ".worktrees" || p == ".env" || strings.HasPrefix(p, ".env.") || strings.HasSuffix(p, ".pem") || strings.HasSuffix(p, ".key") {
+		if p == ".git" || p == ".apw" || p == ".apw-sandbox" || p == ".worktrees" || isProtectedEnvFile(p) || strings.HasSuffix(p, ".pem") || strings.HasSuffix(p, ".key") {
 			return fmt.Errorf("protected workspace path %q", rel)
 		}
 	}
 	return nil
+}
+
+func isProtectedEnvFile(p string) bool {
+	if p == ".env" {
+		return true
+	}
+	if !strings.HasPrefix(p, ".env.") {
+		return false
+	}
+	switch p {
+	case ".env.example", ".env.sample", ".env.template", ".env.dist", ".env.defaults":
+		return false
+	default:
+		return true
+	}
 }
 
 // openSafeRoot rejects links at every component and uses os.Root for the actual I/O.
