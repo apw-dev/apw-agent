@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { render, screen, fireEvent, within } from "@testing-library/svelte";
 import { mapTaskSteps, extractTaskSubagents } from "./lib/stores/tasks";
 import { detectActiveToken, queryMentionCandidates, parseInstructionSkillPills } from "./lib/stores/search";
 import { workspaceFiles } from "./lib/stores/workspace";
@@ -224,9 +224,9 @@ describe("components", () => {
     expect(screen.getByTestId("board-readonly-badge")).toHaveTextContent("READ-ONLY REVIEW");
 
     // 1. Visual Sequence Lifeline SVG & XYFlow Interactive Node Canvas are rendered
-    expect(screen.getByTestId("sequence-lifeline-block")).toBeInTheDocument();
-    expect(screen.getByTestId("sequence-lifeline-svg")).toBeInTheDocument();
-    expect(screen.getByTestId("xyflow-canvas-block")).toBeInTheDocument();
+    const sequence = screen.getByTestId("visual-sequence-diagram");
+    expect(within(sequence).getByRole("img", { name: /Sequence Diagram/ })).toBeInTheDocument();
+    expect(screen.getByTestId("xyflow-canvas-shell")).toBeInTheDocument();
     expect(screen.getByTestId("xyflow-viewport")).toBeInTheDocument();
 
     // Highlight element on Diagram Canvas -> Visual Feedback Loop dock shows up

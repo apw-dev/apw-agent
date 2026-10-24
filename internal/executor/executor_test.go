@@ -342,4 +342,3 @@ func TestExecuteSubtask_PatchMissingFileCreatesAndBarePromptPathPinned(t *testin
 		t.Fatalf("expected report.Passed = true")
 	}
 }
-

@@ -146,4 +146,3 @@ func TestBootstrapWorkspaceInitializesConfigAndGit(t *testing.T) {
 		t.Fatalf("expected .git to be initialized in bootstrapped workspace: %v", err)
 	}
 }
-

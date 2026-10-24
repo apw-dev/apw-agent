@@ -305,4 +305,3 @@ func TestOnlyChangesCheckNormalizedFromFileOrAffectedFiles(t *testing.T) {
 		})
 	}
 }
-

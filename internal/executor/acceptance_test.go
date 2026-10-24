@@ -94,5 +94,3 @@ func TestResumeRepairsUnmetAcceptanceChecksWhenStepsAlreadyCompleted(t *testing.
 		t.Fatalf("expected resume to repair unmet acceptance checks and pass, got report=%+v err=%v", report, err)
 	}
 }
-
-
