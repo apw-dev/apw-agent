@@ -34,6 +34,8 @@ func appConfig(t *testing.T) *config.Config {
 	cfg := &config.Config{Workspace: t.TempDir()}
 	cfg.Budget.TaskTimeoutSec = 120
 	cfg.Budget.MaxRepairs = 1
+	// These tests script every model response; model auditors would consume them.
+	cfg.Planning.Audit = executor.AuditStatic
 	if err := os.WriteFile(filepath.Join(cfg.Workspace, "main.go"), []byte("package main\n\nfunc Greet() string {\n\treturn \"hi\"\n}\n\nfunc main() {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -410,5 +412,17 @@ func TestTaskConfigCacheInvalidatesAndReturnsCopies(t *testing.T) {
 	d, err := s.taskConfig()
 	if err != nil || d.Budget.MaxRepairs != 7 {
 		t.Fatalf("cache not invalidated after file change: %+v %v", d, err)
+	}
+}
+
+func TestConfigurePlanningDefaultsToModelAuditors(t *testing.T) {
+	for raw, want := range map[string]string{"": executor.AuditModel, "static": executor.AuditStatic, "off": executor.AuditOff} {
+		e := executor.New(t.TempDir(), nil, nil, "", "", 1)
+		cfg := &config.Config{}
+		cfg.Planning.Audit = raw
+		configurePlanning(e, cfg)
+		if e.Audit != want {
+			t.Fatalf("planning.audit %q -> %q, want %q", raw, e.Audit, want)
+		}
 	}
 }

@@ -69,7 +69,7 @@ def main(binary_dir, output):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
     helper_started = threading.Event()
     release = threading.Event()
-    counts = {"main": 0, "helper": 0, "planning": 0}
+    counts = {"main": 0, "helper": 0, "planning": 0, "audit": 0}
     block_helper = [True]
 
     class Handler(BaseHTTPRequestHandler):
@@ -82,6 +82,9 @@ def main(binary_dir, output):
                 (root / "review.started").write_text("started")
                 release.wait(60)
                 content = "reviewed"
+            elif prompt.startswith("You are the ") and "Auditor for a code change" in prompt:
+                counts["audit"] += 1
+                content = "- fixture audit: no findings"
             elif "Provide surgical patch for helper.go." in prompt:
                 counts["helper"] += 1
                 if block_helper[0]:

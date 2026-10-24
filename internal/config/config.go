@@ -228,6 +228,10 @@ type PlanningConfig struct {
 	// Lookup offers the Architect read-only grep/glob/read before planning: "auto" (default) when
 	// the code context was truncated, "always", or "off".
 	Lookup string `json:"lookup,omitempty"`
+	// Audit selects the domain auditors that run before planning and review: "model" (default)
+	// asks the reflex model to review each domain's files, "static" only counts AST symbols,
+	// "off" skips them.
+	Audit string `json:"audit,omitempty"`
 }
 
 // VerifyConfig overrides the detected verification pipeline. It is how a project in
@@ -509,6 +513,11 @@ func (c *Config) Validate() error {
 	case "", "auto", "always", "off":
 	default:
 		return fmt.Errorf("config: planning.lookup %q must be auto, always or off", c.Planning.Lookup)
+	}
+	switch c.Planning.Audit {
+	case "", "model", "static", "off":
+	default:
+		return fmt.Errorf("config: planning.audit %q must be model, static or off", c.Planning.Audit)
 	}
 	if c.Planning.Proposals < 0 || c.Planning.Proposals > 5 {
 		return errors.New("config: planning.proposals must be between 0 and 5")

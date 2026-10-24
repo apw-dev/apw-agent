@@ -55,6 +55,7 @@
   },
   "planning": {
     "proposals": 1,
-    "judge": false
+    "judge": false,
+    "audit": "model"
   }
 }

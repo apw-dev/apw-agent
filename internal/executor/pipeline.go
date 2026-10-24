@@ -56,7 +56,7 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 		contextText = hookCtx + "\n" + contextText
 	}
 	if e.Mode != core.ModeVerify {
-		if auditCtx := e.runDomainAuditSubagents(ctx); auditCtx != "" {
+		if auditCtx := e.runDomainAuditSubagents(ctx, instruction); auditCtx != "" {
 			contextText += "\n" + auditCtx
 		}
 	}
@@ -109,7 +109,7 @@ func (e *Executor) review(ctx context.Context, instruction, overview string) (*E
 	if e.Session != nil {
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
-	if auditCtx := e.runDomainAuditSubagents(ctx); auditCtx != "" {
+	if auditCtx := e.runDomainAuditSubagents(ctx, instruction); auditCtx != "" {
 		overview += "\n" + auditCtx
 	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})

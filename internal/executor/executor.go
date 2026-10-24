@@ -134,10 +134,16 @@ type Executor struct {
 	EpisodicContext string
 	// SubagentConcurrency bounds how many parallel Surgeon subagents may synthesize disjoint-file mutations in one wave.
 	SubagentConcurrency int
-	Subagents           []SubagentReport
-	subagentMu          sync.Mutex
-	directiveMu         sync.Mutex
-	progressMu          sync.Mutex
+	// Audit selects the domain auditors that run before planning and review: AuditModel asks a
+	// model to review each domain's files, AuditStatic (the default) only counts AST symbols, and
+	// AuditOff skips them.
+	Audit string
+	// AuditTimeout bounds one model auditor request (default 45s).
+	AuditTimeout time.Duration
+	Subagents    []SubagentReport
+	subagentMu   sync.Mutex
+	directiveMu  sync.Mutex
+	progressMu   sync.Mutex
 }
 
 // Profile detects the project at root, applying any configured verification override.
@@ -313,7 +319,14 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 		return sr, "", nil
 	case architect.ActionCreate:
 		accHints := acceptanceHintsForFile(e.CurrentPlan, st.TargetFile)
-		dir, err := e.askDirective(ctx, fmt.Sprintf("Create file %s.\nInstruction: %s%s\nRespond ONLY with JSON: {\"file_content\":\"...\"}", st.TargetFile, st.Instruction, accHints))
+		existing, shownHash, exists, err := readCreateTarget(surg, base, st.TargetFile)
+		if err != nil {
+			return sr, "", err
+		}
+		if exists {
+			e.rememberRead(st.TargetFile, existing)
+		}
+		dir, err := e.askDirective(ctx, createPrompt(st.TargetFile, st.Instruction, accHints, existing, exists))
 		if err != nil {
 			return sr, "", err
 		}
@@ -326,16 +339,7 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 		if err = ctx.Err(); err != nil {
 			return sr, "", err
 		}
-		before, err := surgeon.StateInRoot(base, st.TargetFile)
-		if err != nil {
-			return sr, "", err
-		}
-		if e.mutation != nil {
-			if err = e.mutation(st.TargetFile, before, surgeon.FileState{Exists: true, Hash: surgeon.CalculateHash(content), Mode: 0644}); err != nil {
-				return sr, "", err
-			}
-		}
-		if err = surgeon.WriteInRoot(base, st.TargetFile, []byte(content), 0644, !before.Exists); err != nil {
+		if err = e.writeCreated(base, st.TargetFile, content, shownHash); err != nil {
 			return sr, "", err
 		}
 		e.rememberRead(st.TargetFile, content)
@@ -403,6 +407,55 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 	sr.Success = true
 	sr.Message = fmt.Sprintf("%s %s", st.Action, st.TargetFile)
 	return sr, st.TargetFile, nil
+}
+
+// readCreateTarget reads a create step's target when it already exists, so the model is shown the
+// file it replaces and the write can be pinned to that content.
+func readCreateTarget(surg *surgeon.Surgeon, base, target string) (content, hash string, exists bool, err error) {
+	content, hash, err = surg.ReadWorkspaceFile(base, target)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return content, hash, true, nil
+}
+
+// createPrompt asks for a file's complete content; for an existing file it includes the current
+// content, which the new content replaces.
+func createPrompt(target, instruction, hints, existing string, exists bool) string {
+	p := fmt.Sprintf("Create file %s.\nInstruction: %s%s\n", target, instruction, hints)
+	if exists {
+		p += "This file already exists. Return its complete new content, keeping everything the instruction does not ask to change.\nCurrent File Content:\n[source]\n" + existing + "\n[/source]\n"
+	}
+	return p + `Respond ONLY with JSON: {"file_content":"..."}`
+}
+
+// writeCreated writes a create step's content. A file that exists is replaced only when its
+// content is still what the model was shown (shownHash, from readCreateTarget); a file that
+// appeared, changed or vanished since then is refused.
+func (e *Executor) writeCreated(base, target, content, shownHash string) error {
+	before, err := surgeon.StateInRoot(base, target)
+	if err != nil {
+		return err
+	}
+	switch {
+	case before.Exists && shownHash == "":
+		return fmt.Errorf("create %s: the file appeared after it was checked: %w", target, surgeon.ErrContentDrift)
+	case before.Exists && before.Hash != shownHash, !before.Exists && shownHash != "":
+		return fmt.Errorf("create %s: %w", target, surgeon.ErrContentDrift)
+	}
+	mode := os.FileMode(0644)
+	if before.Exists {
+		mode = before.Mode
+	}
+	if e.mutation != nil {
+		if err := e.mutation(target, before, surgeon.FileState{Exists: true, Hash: surgeon.CalculateHash(content), Mode: mode}); err != nil {
+			return err
+		}
+	}
+	return surgeon.WriteInRoot(base, target, []byte(content), mode, !before.Exists)
 }
 
 func (e *Executor) repairWithReflex(ctx context.Context, base string, surg *surgeon.Surgeon, diagnostics string, files *[]string) error {

@@ -71,6 +71,10 @@ func configurePlanning(e *executor.Executor, cfg *config.Config) {
 	e.Proposals = cfg.Planning.Proposals
 	e.JudgeProposals = cfg.Planning.Judge
 	e.Lookup = cfg.Planning.Lookup
+	e.Audit = cfg.Planning.Audit
+	if e.Audit == "" {
+		e.Audit = executor.AuditModel
+	}
 	if e.SubagentConcurrency == 0 {
 		e.SubagentConcurrency = executor.DefaultSubagentConcurrency
 	}

@@ -114,7 +114,7 @@ func TestParallelAuditorSubagentWaves(t *testing.T) {
 		stages = append(stages, ev.Stage)
 	}
 
-	auditOut := e.runDomainAuditSubagents(context.Background())
+	auditOut := e.runDomainAuditSubagents(context.Background(), "")
 	if !strings.Contains(auditOut, "Backend Codebase Auditor") || !strings.Contains(auditOut, "Frontend Codebase Auditor") {
 		t.Fatalf("expected both Backend and Frontend Codebase Auditors in summary, got:\n%s", auditOut)
 	}
