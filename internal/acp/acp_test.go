@@ -297,3 +297,29 @@ func textOf(us []map[string]any) string {
 	}
 	return b.String()
 }
+
+// writeFunc observes each line the server writes, before the write returns.
+type writeFunc func([]byte) (int, error)
+
+func (f writeFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestPromptResponseFollowsSessionRelease(t *testing.T) {
+	sess := &session{id: "s1", api: &fakeAPI{}, mode: "plan"}
+	s := &Server{sessions: map[string]*session{"s1": sess}}
+	busyAtReply := false
+	s.out = writeFunc(func(p []byte) (int, error) {
+		if strings.Contains(string(p), `"stopReason"`) {
+			sess.mu.Lock()
+			busyAtReply = sess.cancel != nil
+			sess.mu.Unlock()
+		}
+		return len(p), nil
+	})
+	id := json.RawMessage(`3`)
+	params, _ := json.Marshal(map[string]any{"sessionId": "s1", "prompt": []any{map[string]any{"type": "text", "text": "z"}}})
+	s.prompt(context.Background(), message{ID: &id, Params: params})
+	// A client may send its next prompt as soon as it reads the response.
+	if busyAtReply {
+		t.Fatal("prompt response was written while the session still counted as running")
+	}
+}

@@ -383,16 +383,16 @@ func (s *Server) prompt(ctx context.Context, msg message) {
 	sess.cancel = cancel
 	mode := sess.mode
 	sess.mu.Unlock()
-	defer func() {
-		cancel()
-		sess.mu.Lock()
-		sess.cancel = nil
-		sess.mu.Unlock()
-	}()
 	stop := s.runTurn(turnCtx, sess, mode, text)
 	if turnCtx.Err() != nil && ctx.Err() == nil {
 		stop = "cancelled"
 	}
+	// Release the session before replying: a client may send its next prompt as soon as it
+	// reads this response.
+	cancel()
+	sess.mu.Lock()
+	sess.cancel = nil
+	sess.mu.Unlock()
 	s.reply(msg.ID, map[string]any{"stopReason": stop})
 }
 
