@@ -413,9 +413,23 @@ func (e *Executor) auditPrompt(role, instruction string, files []string) string 
 	return b.String()
 }
 
+// firstLine returns the first finding of an auditor's answer: its first bullet, skipping a
+// preamble such as "Here is the audit report:", or else its first non-empty line.
 func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return clip(strings.TrimSpace(strings.TrimLeft(line, "-*• ")), 200)
+	first := ""
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if first == "" {
+			first = line
+		}
+		if strings.HasPrefix(line, "-") || strings.HasPrefix(line, "*") || strings.HasPrefix(line, "•") {
+			return clip(strings.TrimSpace(strings.TrimLeft(line, "-*• ")), 200)
+		}
+	}
+	return clip(first, 200)
 }
 
 func createWaveTier(normPath string) int {

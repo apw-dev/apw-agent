@@ -115,3 +115,15 @@ func TestStaticAndOffAuditorsMakeNoModelRequests(t *testing.T) {
 		t.Fatalf("static/off auditors asked the model %d times", len(prov.prompts))
 	}
 }
+
+func TestFirstLineSkipsPreamble(t *testing.T) {
+	for in, want := range map[string]string{
+		"Here is the codebase audit report:\n\n- calc.go: add Sub\n- keep Add": "calc.go: add Sub",
+		"* only bullet":        "only bullet",
+		"plain answer\nsecond": "plain answer",
+	} {
+		if got := firstLine(in); got != want {
+			t.Fatalf("firstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
