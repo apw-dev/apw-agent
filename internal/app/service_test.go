@@ -441,7 +441,7 @@ func TestPlaceholderModelIsRefusedWithGuidance(t *testing.T) {
 	}
 	defer s.Close()
 	_, err = s.Submit(context.Background(), "local", Request{RequestID: "r1", Instruction: "x", Mode: core.ModeReview})
-	if !errors.Is(err, ErrNoModelConnected) || !strings.Contains(err.Error(), "architect and reflex") || !strings.Contains(err.Error(), "agy") {
+	if !errors.Is(err, ErrNoModelConnected) || !strings.Contains(err.Error(), "architect and reflex roles use") || !strings.Contains(err.Error(), "agy") {
 		t.Fatalf("submit err = %v", err)
 	}
 	if _, err := s.Plan(context.Background(), "local", "x"); !errors.Is(err, ErrNoModelConnected) {

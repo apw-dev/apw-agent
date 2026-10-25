@@ -33,7 +33,11 @@ func noModelError(cfg *config.Config) error {
 		}
 	}
 	sort.Strings(found)
-	msg := fmt.Sprintf("the %s role uses the built-in placeholder %q, which cannot plan or edit code.", strings.Join(roles, " and "), config.BuiltinProvider)
+	subject := "the " + roles[0] + " role uses"
+	if len(roles) > 1 {
+		subject = "the " + strings.Join(roles, " and ") + " roles use"
+	}
+	msg := fmt.Sprintf("%s the built-in placeholder %q, which cannot plan or edit code.", subject, config.BuiltinProvider)
 	if len(found) > 0 {
 		more := ""
 		if len(found) > 4 {
