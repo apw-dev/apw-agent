@@ -290,6 +290,7 @@ func runShellConfig(configPath string, stdin io.Reader, stdout, stderr io.Writer
 		case "channel", "channels", "messaging":
 			_ = runChannelCmdWithStdin(withConfig(args), stdin, stdout, stderr)
 		case "desktop", "ui":
+			_, _ = desktop.DiscoverProviders(configPath)
 			url, err := desktop.NewServer(configPath, version).StartAndOpen(ctx, "127.0.0.1:0", true)
 			if err != nil {
 				fmt.Fprintln(stderr, err)

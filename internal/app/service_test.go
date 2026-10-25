@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -424,5 +425,35 @@ func TestConfigurePlanningDefaultsToModelAuditors(t *testing.T) {
 		if e.Audit != want {
 			t.Fatalf("planning.audit %q -> %q, want %q", raw, e.Audit, want)
 		}
+	}
+}
+
+func TestPlaceholderModelIsRefusedWithGuidance(t *testing.T) {
+	cfg := appConfig(t)
+	cfg.Providers = map[string]config.ProviderConfig{config.BuiltinProvider: {Type: config.ProviderMock, Model: "APW Engine"}}
+	cfg.Roles.Architect, cfg.Roles.Reflex = config.BuiltinProvider, config.BuiltinProvider
+	s, err := Open(context.Background(), cfg, reviewFactory(&testProvider{ask: func(context.Context, core.ModelRequest) (*core.ModelResponse, error) {
+		t.Error("placeholder role reached a model")
+		return nil, errors.New("unreachable")
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_, err = s.Submit(context.Background(), "local", Request{RequestID: "r1", Instruction: "x", Mode: core.ModeReview})
+	if !errors.Is(err, ErrNoModelConnected) || !strings.Contains(err.Error(), "architect and reflex") || !strings.Contains(err.Error(), "agy") {
+		t.Fatalf("submit err = %v", err)
+	}
+	if _, err := s.Plan(context.Background(), "local", "x"); !errors.Is(err, ErrNoModelConnected) {
+		t.Fatalf("plan err = %v", err)
+	}
+	// Discovered models are listed so the user can pick one.
+	cfg.Providers["agy:gemini-3.8-flash-high"] = config.ProviderConfig{Type: config.ProviderAGY, Model: "gemini-3.8-flash-high"}
+	if err := noModelError(cfg); err == nil || !strings.Contains(err.Error(), "Connected models found: agy:gemini-3.8-flash-high") {
+		t.Fatalf("guidance = %v", err)
+	}
+	cfg.Roles.Architect, cfg.Roles.Reflex = "agy:gemini-3.8-flash-high", "agy:gemini-3.8-flash-high"
+	if err := noModelError(cfg); err != nil {
+		t.Fatalf("connected roles refused: %v", err)
 	}
 }

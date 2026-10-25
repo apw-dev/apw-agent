@@ -297,6 +297,22 @@ func Load(path string) (*Config, error) {
 }
 
 // LoadOrDefault loads the config at path, or returns a sensible auto-configured default if the file does not exist.
+// BuiltinProvider is the placeholder provider a default configuration uses when no model is
+// connected. It is a mock and cannot plan or edit code.
+const BuiltinProvider = "apw-builtin"
+
+// PlaceholderRoles names the roles ("architect", "reflex") that still use the built-in
+// placeholder provider.
+func (c *Config) PlaceholderRoles() []string {
+	var roles []string
+	for _, r := range []struct{ name, key string }{{"architect", c.Roles.Architect}, {"reflex", c.Roles.Reflex}} {
+		if p, ok := c.Providers[r.key]; r.key == BuiltinProvider && (!ok || p.Type == ProviderMock) {
+			roles = append(roles, r.name)
+		}
+	}
+	return roles
+}
+
 func LoadOrDefault(path string) (*Config, error) {
 	if _, err := os.Stat(path); err == nil {
 		return Load(path)
@@ -327,7 +343,7 @@ func LoadOrDefault(path string) (*Config, error) {
 				Model:      "qwen2.5-coder:7b",
 				TimeoutSec: 120,
 			},
-			"apw-builtin": {
+			BuiltinProvider: {
 				Type:       ProviderMock,
 				Model:      "APW Engine",
 				TimeoutSec: 30,
@@ -338,8 +354,8 @@ func LoadOrDefault(path string) (*Config, error) {
 		cfg.Roles.Architect = "claude-sonnet"
 		cfg.Roles.Reflex = "claude-haiku"
 	} else {
-		cfg.Roles.Architect = "apw-builtin"
-		cfg.Roles.Reflex = "apw-builtin"
+		cfg.Roles.Architect = BuiltinProvider
+		cfg.Roles.Reflex = BuiltinProvider
 	}
 	cfg.applyDefaults()
 	cfg.bindProviders(path)

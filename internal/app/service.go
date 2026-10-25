@@ -210,6 +210,9 @@ func (s *Service) Submit(ctx context.Context, owner string, r Request) (*store.J
 	if (r.Mode == core.ModeExecute || r.Mode == core.ModeVerify) && !cfg.Policy.Trusted {
 		return nil, errors.New("workspace is not trusted for build/test; use review/preview or apw trust")
 	}
+	if err := noModelError(cfg); err != nil {
+		return nil, err
+	}
 	j, _, err := s.Store.CreateJob(ctx, store.Job{Task: core.Task{ID: NewID(), Workspace: s.Config.Workspace, Instruction: r.Instruction, Mode: string(r.Mode)}, Owner: owner, RequestID: r.RequestID, SessionID: r.SessionID})
 	if err == nil {
 		s.signal()
@@ -544,6 +547,9 @@ func (s *Service) Plan(ctx context.Context, owner, instruction string) (*archite
 	}
 	cfg, err := s.taskConfig()
 	if err != nil {
+		return nil, err
+	}
+	if err := noModelError(cfg); err != nil {
 		return nil, err
 	}
 	e, closeProvider, err := s.factory(readOnlyConfig(cfg))

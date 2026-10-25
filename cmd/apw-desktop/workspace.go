@@ -19,6 +19,10 @@ import (
 
 var ErrNoConfig = errors.New("folder has no apw.json")
 
+// discoverProviders adds connected-account models while a role still uses the built-in
+// placeholder (desktop.DiscoverProviders); tests replace it so they never run account CLIs.
+var discoverProviders = desktop.DiscoverProviders
+
 // BootstrapWorkspace ensures dir has a valid apw.json (inheriting providers, roles, and saved
 // credentials from thefirst available fallback workspace) and a Git repository with an initial
 // commit so any project folder selected in APW Desktop works out-of-the-box.
@@ -194,6 +198,9 @@ func (h *WorkspaceHost) Open(dir string) error {
 	if cur := h.Current(); cur != "" && samePath(cur, abs) {
 		return nil
 	}
+	// First launch on a machine (or a workspace without a model): offer the models of connected
+	// accounts in Settings. A failed discovery leaves the placeholder, which tasks then refuse.
+	_, _ = discoverProviders(cfg)
 	srv := desktop.NewServer(cfg, buildinfo.Version)
 	srv.InProcessHost = desktop.WailsHost
 	h.current.Store(&openWorkspace{dir: abs, handler: srv.Handler()})

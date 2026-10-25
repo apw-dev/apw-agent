@@ -64,6 +64,10 @@ func (s *Service) StepAutonomy(ctx context.Context) bool {
 	if err != nil || gov.Paused || gov.TasksLastHour >= gov.MaxTasksPerHour {
 		return false
 	}
+	// Without a real model every dispatched task would fail and trip the circuit breaker.
+	if cfg, err := s.taskConfig(); err != nil || noModelError(cfg) != nil {
+		return false
+	}
 
 	// 1. Check due recurring schedules first
 	if sch, err := s.Store.ClaimDueSchedule(ctx, time.Now()); err == nil && sch != nil {

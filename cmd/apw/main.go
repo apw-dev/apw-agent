@@ -428,6 +428,11 @@ func runDesktopApp(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if added, err := desktop.DiscoverProviders(*cfgPath); err != nil {
+		fmt.Fprintf(stderr, "Model discovery: %v\n", err)
+	} else if len(added) > 0 {
+		fmt.Fprintf(stdout, "Added %d models from connected accounts; choose the architect and reflex models in Settings.\n", len(added))
+	}
 	srv := desktop.NewServer(*cfgPath, version)
 	url, err := srv.StartAndOpen(ctx, *addr, !*noOpen)
 	if err != nil {

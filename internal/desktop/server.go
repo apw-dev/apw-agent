@@ -435,6 +435,8 @@ func writeSubmitError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 	case strings.Contains(err.Error(), "not trusted"):
 		writeError(w, http.StatusConflict, "untrusted", err.Error())
+	case strings.Contains(err.Error(), app.ErrNoModelConnected.Error()):
+		writeError(w, http.StatusConflict, "no_model", err.Error())
 	default:
 		writeError(w, http.StatusBadRequest, "rejected", err.Error())
 	}

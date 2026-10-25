@@ -13,6 +13,11 @@ import (
 	"github.com/apiwat/apw-agent/internal/desktop"
 )
 
+func init() {
+	// Never run account CLIs (agy, claude, codex) from tests.
+	discoverProviders = func(string) ([]string, error) { return nil, nil }
+}
+
 func inProcessGet(t *testing.T, h http.Handler, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "http://"+desktop.WailsHost+target, nil)
