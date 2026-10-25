@@ -97,6 +97,24 @@ func (e *Executor) directiveCandidates() []FailoverCandidate {
 	return result
 }
 
+// scaledTimeout lengthens the per-candidate directive timeout (default 90s) with the request size:
+// a large file or context takes longer to read and to answer. Each 16 KiB beyond the first adds
+// 30 seconds, up to 5 minutes; a configured timeout above that cap is kept as is.
+func scaledTimeout(base time.Duration, promptBytes int) time.Duration {
+	if base <= 0 {
+		base = 90 * time.Second
+	}
+	const step, extra, limit = 16 * 1024, 30 * time.Second, 5 * time.Minute
+	if base >= limit || promptBytes <= step {
+		return base
+	}
+	scaled := base + time.Duration((promptBytes-1)/step)*extra
+	if scaled > limit {
+		scaled = limit
+	}
+	return scaled
+}
+
 // askDirective asks for a patch directive. While the task's delegation budget lasts, the model may
 // answer once with a delegation request instead; the subagents' findings are then added to the
 // prompt and the directive is requested again without the offer.
@@ -132,10 +150,7 @@ func (e *Executor) askDirectiveOnce(ctx context.Context, prompt string) (*patchD
 	if e.Failover.Groups == nil {
 		e.Failover.Groups = make(map[string]time.Time)
 	}
-	timeout := e.DirectiveTimeout
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
+	timeout := scaledTimeout(e.DirectiveTimeout, len(prompt))
 	var failures []error
 	var modelPaused []FailoverCandidate
 	for _, cand := range e.directiveCandidates() {

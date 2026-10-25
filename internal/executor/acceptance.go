@@ -449,7 +449,7 @@ func (e *Executor) repairUnmetAcceptance(
 			}
 		} else if readErr == nil {
 			snippet := promptSourceSnippet(targetFile, content)
-			prompt := fmt.Sprintf("Update file %s so that every acceptance check on this file passes while preserving its behavior.\nPlan Objective: %s\nInstruction: %s%s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", targetFile, plan.Objective, subInstruction, reqBlock, snippet)
+			prompt := fmt.Sprintf("Update file %s so that every acceptance check on this file passes while preserving its behavior.\nPlan Objective: %s\nInstruction: %s%s\nCurrent File Content:\n[source]\n%s\n[/source]\n%s", targetFile, plan.Objective, subInstruction, reqBlock, snippet, patchFormat)
 			if _, pErr := e.patchWithRetry(ctx, base, surg, targetFile, hash, false, prompt); pErr == nil {
 				e.Pending = nil
 				appendModifiedFile(modified, targetFile)

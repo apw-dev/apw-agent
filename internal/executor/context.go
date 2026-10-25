@@ -626,3 +626,16 @@ func tailUTF8(s string, n int) string {
 	}
 	return s[start:]
 }
+
+// rememberNote adds a titled block, such as verification results, to the read context that
+// later steps see.
+func (e *Executor) rememberNote(title, text string) {
+	entry := fmt.Sprintf("\n%s:\n```\n%s\n```\n", title, text)
+	if len(entry) > maxReadEntry {
+		entry = headUTF8(entry, maxReadEntry) + "\n[note truncated]\n"
+	}
+	e.ReadContext += entry
+	if len(e.ReadContext) > maxReadContext {
+		e.ReadContext = tailUTF8(e.ReadContext, maxReadContext)
+	}
+}

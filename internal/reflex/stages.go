@@ -37,6 +37,7 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 		msg := "no verification pipeline for " + p.Summary + "; add verify.stages to apw.json to tell APW how to check this project"
 		return &VerificationResult{FailedStage: "verify", Diagnostics: []Diagnostic{{Stage: "verify", Message: msg, RawError: msg}}, RawOutput: msg, Duration: time.Since(start)}
 	}
+	var passLog strings.Builder
 	for _, s := range p.Stages {
 		if err := ctx.Err(); err != nil {
 			return failed(s.Name, "", err, start)
@@ -90,6 +91,7 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 			}
 			return res
 		}
+		appendStageLog(&passLog, s.Name, out)
 		if s.Once {
 			if newStamp := v.stampValue(s); newStamp != "" {
 				v.writeStamp(s, newStamp)
@@ -98,7 +100,21 @@ func (v *Verifier) verifyStages(ctx context.Context, p project.Profile) *Verific
 			}
 		}
 	}
-	return &VerificationResult{Passed: true, Duration: time.Since(start)}
+	return &VerificationResult{Passed: true, RawOutput: passLog.String(), Duration: time.Since(start)}
+}
+
+// stageLogTail bounds how much of a passing stage's output is kept.
+const stageLogTail = 1500
+
+// appendStageLog records the tail of a passing stage's output (test counts, build summaries),
+// so a passing result still says what ran.
+func appendStageLog(b *strings.Builder, stage, out string) {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		fmt.Fprintf(b, "[%s passed]\n", stage)
+		return
+	}
+	fmt.Fprintf(b, "[%s passed]\n%s\n", stage, tailOutput(out, stageLogTail))
 }
 
 func (v *Verifier) allowsLockfileChange() bool {

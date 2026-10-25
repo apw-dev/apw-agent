@@ -209,13 +209,59 @@ type patchDirective struct {
 	NewContent  string `json:"new_content"`
 	FileContent string `json:"file_content,omitempty"`
 	TargetFile  string `json:"target_file,omitempty"`
+	// Edits are several separate replacements in one file, applied in order; each old_content must
+	// occur exactly once in the file as it is after the previous edits.
+	Edits []patchEdit `json:"edits,omitempty"`
 	// Delegate asks for read-only subagents instead of an edit (see delegateOffer).
 	Delegate []delegateRequest `json:"delegate,omitempty"`
 }
 
+type patchEdit struct {
+	OldContent string `json:"old_content"`
+	NewContent string `json:"new_content"`
+}
+
+// maxPatchEdits bounds the replacements one directive may make.
+const maxPatchEdits = 24
+
+// applyEdits applies a directive's edits to content in order, with the Surgeon's matching rules
+// (exactly one match, CRLF files matched with LF text). On failure it returns the rejected
+// old_content and a Surgeon error the patch model can act on.
+func applyEdits(content string, edits []patchEdit) (string, string, error) {
+	if len(edits) > maxPatchEdits {
+		return "", "", fmt.Errorf("%d edits exceed the limit of %d: %w", len(edits), maxPatchEdits, surgeon.ErrMultipleMatches)
+	}
+	for i, ed := range edits {
+		old, repl := ed.OldContent, ed.NewContent
+		if old == "" {
+			return "", old, fmt.Errorf("edit %d: %w", i+1, surgeon.ErrEmptyTarget)
+		}
+		n := strings.Count(content, old)
+		if n == 0 && strings.Contains(content, "\r\n") {
+			old, repl = toCRLF(old), toCRLF(repl)
+			n = strings.Count(content, old)
+		}
+		switch {
+		case n == 0:
+			return "", ed.OldContent, fmt.Errorf("edit %d: %w", i+1, surgeon.ErrTargetNotFound)
+		case n > 1:
+			return "", ed.OldContent, fmt.Errorf("edit %d: %w", i+1, surgeon.ErrMultipleMatches)
+		}
+		content = strings.Replace(content, old, repl, 1)
+	}
+	return content, "", nil
+}
+
+func toCRLF(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
+}
+
+// patchFormat is the response format offered to patch requests.
+const patchFormat = `Respond ONLY with JSON: {"old_content":"...","new_content":"..."}, or for several separate changes in this file {"edits":[{"old_content":"...","new_content":"..."}]} (applied in order; each old_content must occur exactly once). Change only what the instruction needs; do not repeat unchanged text.`
+
 // delegationOnly reports a directive that asks for subagents and carries no edit.
 func (d *patchDirective) delegationOnly() bool {
-	return len(d.Delegate) > 0 && d.OldContent == "" && d.NewContent == "" && d.FileContent == ""
+	return len(d.Delegate) > 0 && d.OldContent == "" && d.NewContent == "" && d.FileContent == "" && len(d.Edits) == 0
 }
 
 func (e *Executor) formatPartialReportSummary(instruction string, plan *architect.ExecutionPlan, steps []StepReport, lastStep, totalSteps int, taskErr error) string {
@@ -395,7 +441,7 @@ func (e *Executor) executeSubtask(ctx context.Context, base string, surg *surgeo
 			return sr, "", err
 		}
 		e.rememberRead(st.TargetFile, content)
-		prompt := fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s%s\nCurrent File Content:\n[source]\n%s\n[/source]\nRespond ONLY with JSON: {\"old_content\":\"...\",\"new_content\":\"...\"}", st.TargetFile, st.Instruction, accHints, promptSourceSnippet(st.TargetFile, content))
+		prompt := fmt.Sprintf("Provide surgical patch for %s.\nInstruction: %s%s\nCurrent File Content:\n[source]\n%s\n[/source]\n%s", st.TargetFile, st.Instruction, accHints, promptSourceSnippet(st.TargetFile, content), patchFormat)
 		if _, err = e.patchWithRetry(ctx, base, surg, st.TargetFile, hash, false, prompt); err != nil {
 			return sr, "", err
 		}
@@ -495,7 +541,7 @@ func (e *Executor) repairWithReflex(ctx context.Context, base string, surg *surg
 		content, _, _ = surg.ReadWorkspaceFile(base, target)
 	}
 	extraContext := buildDiagnosticContext(base, surg, target, diagFiles, *files)
-	prompt := fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}", diagnostics, target, promptSourceSnippet(target, content), extraContext)
+	prompt := fmt.Sprintf("Fix verification failure with a minimal patch.\n%s\nCurrent file %s:\n%s%s\nRespond ONLY with JSON: {\"target_file\":\"...\",\"old_content\":\"...\",\"new_content\":\"...\"}, or for several separate changes in that file {\"target_file\":\"...\",\"edits\":[{\"old_content\":\"...\",\"new_content\":\"...\"}]}", diagnostics, target, promptSourceSnippet(target, content), extraContext)
 	patched, err := e.patchWithRetry(ctx, base, surg, target, "", true, prompt)
 	if err == nil {
 		appendModifiedFile(files, patched)
@@ -559,12 +605,22 @@ func (e *Executor) patchWithRetry(ctx context.Context, base string, surg *surgeo
 		if attempt == 1 && shownHash != "" && file == target {
 			hash = shownHash
 		}
-		_, err = surg.PatchWorkspaceFile(base, file, surgeon.PatchOperation{BaseHash: hash, OldContent: dir.OldContent, NewContent: dir.NewContent}, func(before, after surgeon.FileState) error {
-			if e.mutation != nil {
-				return e.mutation(file, before, after)
-			}
-			return nil
-		})
+		oldContent, newContent, rejected := dir.OldContent, dir.NewContent, dir.OldContent
+		if len(dir.Edits) > 0 {
+			// The edits become one replacement of the whole file, so the hash check and the
+			// mutation record still cover a single write.
+			var combined string
+			combined, rejected, err = applyEdits(current, dir.Edits)
+			oldContent, newContent = current, combined
+		}
+		if err == nil {
+			_, err = surg.PatchWorkspaceFile(base, file, surgeon.PatchOperation{BaseHash: hash, OldContent: oldContent, NewContent: newContent}, func(before, after surgeon.FileState) error {
+				if e.mutation != nil {
+					return e.mutation(file, before, after)
+				}
+				return nil
+			})
+		}
 		if err == nil {
 			return file, nil
 		}
@@ -572,7 +628,7 @@ func (e *Executor) patchWithRetry(ctx context.Context, base string, surg *surgeo
 			return "", err
 		}
 		e.emit(ProgressEvent{Stage: "patch_retry", Message: fmt.Sprintf("%s: %v; asking for the patch again (%d/%d)", file, err, attempt+1, patchMatchAttempts)})
-		feedback = patchFeedback(err, file, dir.OldContent, current)
+		feedback = patchFeedback(err, file, rejected, current)
 	}
 }
 

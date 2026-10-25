@@ -161,6 +161,7 @@ Rules:
 1. Plan minimal, surgical, targeted edits that keep the existing code intact. Avoid rewriting entire files.
 2. Decompose into atomic subtasks (actions: read, patch, create, delete, verify). For read/patch/create/delete, target_file must be a specific relative file path (e.g. "src/components/Button.tsx" or "internal/surgeon/worktree.go"), never a directory or ".". Never target protected credential or metadata paths (.git, .apw, .env, .env.local, *.pem, *.key); use .env.example for environment variable templates.
    Follow the project's language, framework and conventions shown in the Project profile and source. Files listed as not included exist; add a read step before patching one.
+   The whole verification pipeline always runs after the last step, so a plan needs no verify subtask for that. Add one verify subtask (not one per stage) only before a later step that must use real results, such as a document reporting test counts; it runs the full pipeline at that point and its output is shown to the later steps. Prefer several small patches over one patch that rewrites a long file.
 3. Explicitly list all affected files and acceptance criteria.
    For EVERY acceptance criterion, including verification and scope restrictions, include a matching entry in checks. Do not leave any criterion without an executable check.
    Supported check kinds:

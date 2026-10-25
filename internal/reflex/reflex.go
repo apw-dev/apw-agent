@@ -304,10 +304,16 @@ func (v *Verifier) verify(ctx context.Context) *VerificationResult {
 	if err != nil {
 		return failed("test", out, err, start)
 	}
+	var passLog strings.Builder
+	for _, stage := range []string{"fmt", "vet", "build"} {
+		appendStageLog(&passLog, stage, "")
+	}
+	appendStageLog(&passLog, "test", out)
 
 	return &VerificationResult{
-		Passed:   true,
-		Duration: time.Since(start),
+		Passed:    true,
+		RawOutput: passLog.String(),
+		Duration:  time.Since(start),
 	}
 }
 

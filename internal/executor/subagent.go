@@ -516,9 +516,7 @@ func (e *Executor) askCandidatesSafe(ctx context.Context, kind, fullPrompt strin
 	e.directiveMu.Lock()
 	candidates := e.directiveCandidates()
 	e.directiveMu.Unlock()
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
+	timeout = scaledTimeout(timeout, len(fullPrompt))
 
 	var failures []error
 	for _, cand := range candidates {

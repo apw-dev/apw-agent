@@ -258,6 +258,41 @@ func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.Executio
 			continue
 		}
 		st := plan.Subtasks[i]
+		if st.Action == architect.ActionVerify && e.Mode == core.ModeExecute && laterEdits(plan.Subtasks, i) {
+			// Later steps may use the results (for example to report them), so verification runs
+			// now instead of only after the last step. It never repairs here and never fails the
+			// step: the final verification still decides.
+			end := i
+			for end+1 < len(plan.Subtasks) && plan.Subtasks[end+1].Action == architect.ActionVerify {
+				end++
+			}
+			e.emit(ProgressEvent{Stage: "verifying", StepIndex: i + 1, TotalSteps: len(plan.Subtasks), Message: "Running verification now; later steps use its results"})
+			verifier := reflex.NewReflexEngineForProfile(wt.Path, 0, e.Profile(wt.Path)).Verifier
+			verifier.Sandbox = e.Sandbox
+			verifier.OnlyFiles = modified
+			res := verifier.Verify(ctx)
+			if err := ctx.Err(); err != nil {
+				return report, errors.Join(err, save())
+			}
+			outcome := "passed"
+			if !res.Passed {
+				outcome = "failed at stage " + res.FailedStage
+			}
+			e.rememberNote(fmt.Sprintf("Verification run before step %d (%s)", end+2, outcome), midPlanVerificationText(res))
+			for j := i; j <= end; j++ {
+				vs := plan.Subtasks[j]
+				sr := StepReport{SubtaskID: vs.ID, Action: vs.Action, TargetFile: vs.TargetFile, Success: true, Message: "verification ran: " + outcome + " (results passed to later steps; the final verification still decides)"}
+				report.Steps = append(report.Steps, sr)
+				e.emit(ProgressEvent{Stage: "step_done", StepIndex: j + 1, TotalSteps: len(plan.Subtasks), Step: &sr, Message: sr.Message})
+				completed = j + 1
+			}
+			e.Pending = nil
+			if err := save(); err != nil {
+				return report, err
+			}
+			i = end
+			continue
+		}
 		e.emit(ProgressEvent{Stage: "step_start", StepIndex: i + 1, TotalSteps: len(plan.Subtasks), Message: fmt.Sprintf("[%s] %s — %s", st.Action, st.ID, st.TargetFile)})
 		sr, path, err := e.executeSubtask(ctx, wt.Path, surg, st)
 		if err != nil {
@@ -521,4 +556,23 @@ func plannedTargetFiles(plan *architect.ExecutionPlan) []string {
 		}
 	}
 	return out
+}
+
+// laterEdits reports whether a subtask after index i creates, patches or deletes a file.
+func laterEdits(subtasks []architect.Subtask, i int) bool {
+	for _, st := range subtasks[i+1:] {
+		switch st.Action {
+		case architect.ActionPatch, architect.ActionCreate, architect.ActionDelete:
+			return true
+		}
+	}
+	return false
+}
+
+// midPlanVerificationText summarizes a verification run for the steps that follow it.
+func midPlanVerificationText(res *reflex.VerificationResult) string {
+	if res.Passed {
+		return fmt.Sprintf("All stages passed in %v.\n%s", res.Duration.Round(time.Millisecond), tailUTF8(res.RawOutput, 6*1024))
+	}
+	return tailUTF8(reflex.FormatDiagnostics(res), 6*1024)
 }
