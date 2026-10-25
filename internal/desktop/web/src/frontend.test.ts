@@ -250,3 +250,27 @@ describe("components", () => {
     expect(telemetryToggle.checked).toBe(true);
   });
 });
+
+describe("run console dock", () => {
+  it("shows no command bar until a response starts a command, then only the console", async () => {
+    const { terminalDockOpen, terminalSessions, terminalScripts } = await import("./lib/stores/terminal");
+    const { default: RunConsoleDock } = await import("./components/RunConsoleDock.svelte");
+    const { tick } = await import("svelte");
+    terminalScripts.set([
+      { id: "dev", label: "dev", command: "npm run dev", target_port: 5173 } as any
+    ]);
+    terminalSessions.set([]);
+    terminalDockOpen.set(false);
+    const { unmount } = render(RunConsoleDock);
+    // Project commands belong to each response's launch block, not to a bar above the composer.
+    expect(screen.queryByTestId("apw-run-dock")).toBeNull();
+    expect(screen.queryByText("npm run dev")).toBeNull();
+
+    terminalDockOpen.set(true);
+    await tick();
+    expect(screen.getByTestId("apw-console-drawer")).toBeInTheDocument();
+    expect(screen.queryByText("คำสั่งของโปรเจกต์:")).toBeNull();
+    unmount();
+    terminalDockOpen.set(false);
+  });
+});

@@ -13,9 +13,7 @@
     Trash2
   } from "lucide-svelte";
   import {
-    terminalScripts,
     terminalSessions,
-    activeWorkspacePorts,
     selectedTerminalSessionId,
     terminalDockOpen,
     terminalError,
@@ -41,24 +39,6 @@
       $terminalSessions[$terminalSessions.length - 1] ||
       null
   );
-
-  // ONLY show URLs/ports that belong to running processes started in THIS workspace
-  const liveUrls = $derived.by(() => {
-    const map = new Map<string, { url: string; label: string }>();
-    for (const s of runningSessions) {
-      for (const u of s.urls || []) {
-        map.set(u, { url: u, label: s.command });
-      }
-    }
-    for (const p of $activeWorkspacePorts) {
-      if (!map.has(p.url)) {
-        map.set(p.url, { url: p.url, label: p.source || `Port ${p.port}` });
-      }
-    }
-    return Array.from(map.values());
-  });
-
-  const primaryScripts = $derived($terminalScripts.slice(0, 5));
 
   function parsedCustomPort(): number | undefined {
     const n = parseInt(customPortInput.trim(), 10);
@@ -117,17 +97,21 @@
   });
 </script>
 
-<section class="apw-run-dock" aria-label="APW Command & Port Radar" data-testid="apw-run-dock">
-  <div class="radar-strip">
+<!-- Project commands live in each response's launch block (TaskCard). This dock only shows the
+     console for commands started there, and a reopen control while something is still running. -->
+{#if $terminalDockOpen || runningSessions.length > 0}
+<section class="apw-run-dock" aria-label="APW Console" data-testid="apw-run-dock">
+  <div class="console-head">
     <button
       type="button"
       class="dock-toggle-btn"
       class:active={$terminalDockOpen || runningSessions.length > 0}
       onclick={() => terminalDockOpen.update((v) => !v)}
       data-testid="toggle-run-dock-btn"
+      aria-expanded={$terminalDockOpen}
     >
       <Terminal size={13} />
-      <span class="dock-title">รันคำสั่ง &amp; พอร์ต</span>
+      <span class="dock-title">Console</span>
       {#if runningSessions.length > 0}
         <span class="running-pill mono">
           <span class="pulse-dot"></span>
@@ -140,101 +124,6 @@
         <ChevronUp size={13} />
       {/if}
     </button>
-
-    {#if liveUrls.length > 0}
-      <div class="live-ports-group" aria-label="URL และ Port ของโปรเจกต์นี้ที่กำลังรันอยู่">
-        {#each liveUrls as item (item.url)}
-          <div class="port-capsule">
-            <button
-              type="button"
-              class="port-open-btn mono"
-              onclick={() => openExternalURL(item.url)}
-              title={`คลิกเพื่อเปิด ${item.url} (${item.label})`}
-              data-testid="open-live-url-btn"
-            >
-              <span class="port-live-dot"></span>
-              <Globe size={11} />
-              <span>{shortUrlLabel(item.url)}</span>
-              <ExternalLink size={10} />
-            </button>
-            <button
-              type="button"
-              class="port-copy-btn"
-              onclick={() => flashCopied("url-" + item.url, item.url)}
-              title={`คัดลอก ${item.url}`}
-              aria-label={`คัดลอก ${item.url}`}
-            >
-              {#if copiedKey === "url-" + item.url}
-                <Check size={11} />
-              {:else}
-                <Copy size={11} />
-              {/if}
-            </button>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <span class="no-port-hint mono" title="ยังไม่ได้สั่งรันเซิร์ฟเวอร์ของโปรเจกต์นี้">
-        พอร์ตโปรเจกต์นี้: ยังไม่รัน
-      </span>
-    {/if}
-
-    {#if primaryScripts.length > 0}
-      <div class="quick-scripts-inline">
-        {#each primaryScripts as sc (sc.id)}
-          {@const overridePort = parsedCustomPort() || sc.target_port}
-          {@const isRunning = runningSessions.some((s) => s.command.startsWith(sc.command))}
-          <div class="script-capsule" class:running={isRunning} class:conflict={sc.port_conflict}>
-            <button
-              type="button"
-              class="script-run-btn mono"
-              onclick={() =>
-                runCommandInAPW(
-                  sc.command,
-                  overridePort ? `http://localhost:${overridePort}` : sc.hint_url,
-                  overridePort
-                )}
-              title={sc.port_conflict
-                ? `พอร์ตเดิม :${sc.default_port} มีระบบอื่นใช้อยู่ — จะสลับไปรันที่พอร์ตว่าง :${overridePort} อัตโนมัติ (${sc.command})`
-                : `รันใน APW: ${sc.command}${overridePort ? ` (พอร์ต :${overridePort})` : ""}`}
-              data-testid={`quick-run-${sc.label}`}
-            >
-              <Play size={10} />
-              <span>{sc.label}</span>
-              {#if sc.port_conflict && sc.default_port && overridePort}
-                <span class="conflict-port-tag" title={`พอร์ต :${sc.default_port} ชนกับระบบอื่น สลับไป :${overridePort}`}>
-                  ⚠️:{sc.default_port}→:{overridePort}
-                </span>
-              {:else if overridePort}
-                <span class="hint-port">:{overridePort}</span>
-              {/if}
-            </button>
-            <button
-              type="button"
-              class="script-icon-btn"
-              onclick={() => flashCopied("sc-" + sc.id, sc.command)}
-              title={`คัดลอกคำสั่ง: ${sc.command}`}
-              aria-label={`คัดลอกคำสั่ง ${sc.command}`}
-            >
-              {#if copiedKey === "sc-" + sc.id}
-                <Check size={10} />
-              {:else}
-                <Copy size={10} />
-              {/if}
-            </button>
-            <button
-              type="button"
-              class="script-icon-btn"
-              onclick={() => openCommandInExternalTerminal(sc.command, overridePort)}
-              title={`เปิดรันในหน้าต่าง Terminal แยก (พอร์ต :${overridePort || "auto"}): ${sc.command}`}
-              aria-label={`เปิด Terminal แยก ${sc.command}`}
-            >
-              <ExternalLink size={10} />
-            </button>
-          </div>
-        {/each}
-      </div>
-    {/if}
   </div>
 
   {#if $terminalDockOpen}
@@ -304,52 +193,6 @@
           {/if}
         </button>
       </div>
-
-      {#if $terminalScripts.length > 0}
-        <div class="scripts-matrix">
-          <span class="matrix-lbl">คำสั่งของโปรเจกต์:</span>
-          {#each $terminalScripts as sc (sc.id)}
-            {@const overridePort = parsedCustomPort() || sc.target_port}
-            <div class="matrix-item mono">
-              <span class="matrix-cmd">{sc.command}</span>
-              {#if sc.port_conflict && sc.default_port && overridePort}
-                <span class="matrix-conflict-badge" title={`พอร์ต :${sc.default_port} มีระบบอื่นใช้อยู่ จึงสลับไปพอร์ตว่าง :${overridePort} อัตโนมัติ`}>
-                  ⚠️ :{sc.default_port} ชนระบบอื่น → ใช้ :{overridePort}
-                </span>
-              {:else if overridePort}
-                <span class="matrix-url-pill">พอร์ต :{overridePort}</span>
-              {/if}
-              <button
-                type="button"
-                class="matrix-btn run"
-                onclick={() =>
-                  runCommandInAPW(
-                    sc.command,
-                    overridePort ? `http://localhost:${overridePort}` : sc.hint_url,
-                    overridePort
-                  )}
-              >
-                ▶ รัน {overridePort ? `(:${overridePort})` : ""}
-              </button>
-              <button
-                type="button"
-                class="matrix-btn"
-                onclick={() => openCommandInExternalTerminal(sc.command, overridePort)}
-                title="เปิดรันในหน้าต่าง PowerShell แยก"
-              >
-                ↗ Terminal
-              </button>
-              <button
-                type="button"
-                class="matrix-btn"
-                onclick={() => flashCopied("mat-" + sc.id, sc.command)}
-              >
-                {copiedKey === "mat-" + sc.id ? "✓ คัดลอกแล้ว" : "คัดลอก"}
-              </button>
-            </div>
-          {/each}
-        </div>
-      {/if}
 
       {#if $terminalSessions.length > 0}
         <div class="session-tabs-bar">
@@ -478,6 +321,7 @@
     </div>
   {/if}
 </section>
+{/if}
 
 <style>
   .apw-run-dock {
@@ -490,11 +334,10 @@
     gap: 10px;
   }
 
-  .radar-strip {
+  .console-head {
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: wrap;
     padding: 6px 10px;
     border-radius: 10px;
     border: 1px solid var(--line);
@@ -535,128 +378,6 @@
     font-weight: 600;
   }
   .pulse-dot,
-  .port-live-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--ok);
-    box-shadow: 0 0 0 2px var(--ok-soft);
-  }
-
-  .live-ports-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  .port-capsule {
-    display: inline-flex;
-    align-items: center;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line));
-    background: color-mix(in srgb, var(--ok-soft) 55%, var(--panel));
-    overflow: hidden;
-  }
-  .port-open-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 8px;
-    border: none;
-    background: transparent;
-    color: var(--ok);
-    font-size: 11px;
-    font-weight: 600;
-  }
-  .port-open-btn:hover {
-    background: var(--hover);
-  }
-  .port-copy-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 3px 6px;
-    border: none;
-    border-left: 1px solid color-mix(in srgb, var(--ok) 30%, var(--line));
-    background: transparent;
-    color: var(--muted);
-  }
-  .port-copy-btn:hover {
-    color: var(--text);
-    background: var(--hover);
-  }
-
-  .no-port-hint {
-    font-size: 11px;
-    color: var(--faint);
-    padding: 2px 6px;
-  }
-
-  .quick-scripts-inline {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-left: auto;
-  }
-
-  .script-capsule {
-    display: inline-flex;
-    align-items: center;
-    border-radius: 7px;
-    border: 1px solid var(--line);
-    background: var(--panel-subtle);
-    overflow: hidden;
-  }
-  .script-capsule.running {
-    border-color: var(--ok);
-  }
-  .script-capsule.conflict {
-    border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
-  }
-  .script-run-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 7px;
-    border: none;
-    background: transparent;
-    color: var(--text);
-    font-size: 11px;
-    font-weight: 500;
-  }
-  .script-run-btn:hover {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-  .hint-port {
-    font-size: 10px;
-    color: var(--accent);
-    opacity: 0.9;
-  }
-  .conflict-port-tag {
-    font-size: 10px;
-    padding: 0 4px;
-    border-radius: 4px;
-    background: var(--warn-soft);
-    color: var(--warn);
-    font-weight: 600;
-  }
-  .script-icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 3px 5px;
-    border: none;
-    border-left: 1px solid var(--line);
-    background: transparent;
-    color: var(--muted);
-  }
-  .script-icon-btn:hover {
-    background: var(--hover);
-    color: var(--text);
-  }
 
   .console-drawer {
     border-radius: 10px;
@@ -742,65 +463,6 @@
   }
   .cmd-act-btn:disabled {
     opacity: 0.5;
-  }
-
-  .scripts-matrix {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    padding: 4px 2px;
-  }
-  .matrix-lbl {
-    font-size: 11px;
-    color: var(--muted);
-    font-weight: 600;
-  }
-  .matrix-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 6px;
-    border-radius: 6px;
-    border: 1px solid var(--line);
-    background: var(--panel-subtle);
-    font-size: 11px;
-  }
-  .matrix-cmd {
-    color: var(--text);
-    font-weight: 500;
-  }
-  .matrix-url-pill {
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-size: 10.5px;
-  }
-  .matrix-conflict-badge {
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--warn-soft);
-    color: var(--warn);
-    font-size: 10.5px;
-    font-weight: 600;
-  }
-  .matrix-btn {
-    border: 1px solid var(--line);
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: var(--panel);
-    color: var(--muted);
-    font-size: 10.5px;
-  }
-  .matrix-btn.run {
-    color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-    font-weight: 600;
-  }
-  .matrix-btn:hover {
-    background: var(--hover);
-    color: var(--text);
   }
 
   .session-tabs-bar {
