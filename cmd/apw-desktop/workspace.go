@@ -23,7 +23,7 @@ var ErrNoConfig = errors.New("folder has no apw.json")
 // placeholder (desktop.DiscoverProviders); tests replace it so they never run account CLIs.
 var discoverProviders = desktop.DiscoverProviders
 
-// BootstrapWorkspace ensures dir has a valid apw.json (inheriting providers, roles, and saved
+// BootstrapWorkspace ensures dir has a valid, untrusted apw.json (inheriting providers, roles, and saved
 // credentials from thefirst available fallback workspace) and a Git repository with an initial
 // commit so any project folder selected in APW Desktop works out-of-the-box.
 func BootstrapWorkspace(dir string, fallbackDirs ...string) error {
@@ -63,7 +63,9 @@ func BootstrapWorkspace(dir string, fallbackDirs ...string) error {
 				continue
 			}
 			tmpl.Workspace = "."
-			tmpl.Policy.Trusted = true
+			// Trust is per folder: a new workspace runs no build or test commands until the
+			// user trusts it in the workspace popover, even when the template folder is trusted.
+			tmpl.Policy.Trusted = false
 			if err := tmpl.Save(cfgPath); err == nil {
 				initialized = true
 				srcAuth := filepath.Join(cand, ".apw", "auth.json")
@@ -84,7 +86,7 @@ func BootstrapWorkspace(dir string, fallbackDirs ...string) error {
 				return err
 			}
 			cfg.Workspace = "."
-			cfg.Policy.Trusted = true
+			cfg.Policy.Trusted = false
 			if err := cfg.Save(cfgPath); err != nil {
 				return err
 			}

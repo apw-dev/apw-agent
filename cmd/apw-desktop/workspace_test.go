@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/desktop"
 )
 
@@ -149,5 +150,37 @@ func TestBootstrapWorkspaceInitializesConfigAndGit(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(targetDir, ".git")); err != nil {
 		t.Fatalf("expected .git to be initialized in bootstrapped workspace: %v", err)
+	}
+}
+
+func TestBootstrapWorkspaceDoesNotTrustNewFolders(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	tmplDir := t.TempDir()
+	trusted := `{"workspace": ".", "policy": {"trusted": true}, "providers": {"m": {"type": "mock", "model": "APW Engine"}}, "roles": {"architect": "m", "reflex": "m"}}`
+	if err := os.WriteFile(filepath.Join(tmplDir, "apw.json"), []byte(trusted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fromTemplate, fromDefault := t.TempDir(), t.TempDir()
+	if err := BootstrapWorkspace(fromTemplate, tmplDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapWorkspace(fromDefault); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{fromTemplate, fromDefault} {
+		cfg, err := config.Load(filepath.Join(dir, "apw.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Policy.Trusted {
+			t.Fatalf("%s was trusted without the user's consent", dir)
+		}
+	}
+	// A workspace the user already trusted keeps its trust when it is opened again.
+	if err := BootstrapWorkspace(tmplDir); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := config.Load(filepath.Join(tmplDir, "apw.json")); err != nil || !cfg.Policy.Trusted {
+		t.Fatalf("existing trust lost: %+v %v", cfg, err)
 	}
 }
