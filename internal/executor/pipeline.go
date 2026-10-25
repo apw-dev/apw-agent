@@ -195,6 +195,8 @@ func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionRep
 func (e *Executor) runPreparedPlan(ctx context.Context, plan *architect.ExecutionPlan, wt *surgeon.Worktree, completed int, files []string, instruction string) (*ExecutionReport, error) {
 	start := time.Now()
 	e.CurrentPlan = plan
+	e.workRoot = wt.Path
+	defer func() { e.workRoot = "" }()
 	modified := append([]string{}, files...)
 	report := &ExecutionReport{TaskID: plan.TaskID, Plan: plan, Mode: e.Mode, WorktreePath: wt.Path, Baseline: e.VerificationBaseline, Steps: append([]StepReport{}, e.RecoveredSteps...), Subagents: e.snapshotSubagents(), Research: e.ResearchSources}
 	save := func() error {

@@ -140,10 +140,20 @@ type Executor struct {
 	Audit string
 	// AuditTimeout bounds one model auditor request (default 45s).
 	AuditTimeout time.Duration
-	Subagents    []SubagentReport
-	subagentMu   sync.Mutex
-	directiveMu  sync.Mutex
-	progressMu   sync.Mutex
+	// DelegateBudget bounds the read-only subagents the planner and steps may delegate to in one
+	// task: 0 uses DefaultDelegateBudget, a negative value disables delegation.
+	DelegateBudget int
+	// DelegateTimeout bounds one subagent model request (default 60s).
+	DelegateTimeout time.Duration
+	delegateMu      sync.Mutex
+	delegatesUsed   int
+	delegateSeq     int
+	// workRoot is the running plan's worktree, where delegated subagents read.
+	workRoot    string
+	Subagents   []SubagentReport
+	subagentMu  sync.Mutex
+	directiveMu sync.Mutex
+	progressMu  sync.Mutex
 }
 
 // Profile detects the project at root, applying any configured verification override.
@@ -199,6 +209,13 @@ type patchDirective struct {
 	NewContent  string `json:"new_content"`
 	FileContent string `json:"file_content,omitempty"`
 	TargetFile  string `json:"target_file,omitempty"`
+	// Delegate asks for read-only subagents instead of an edit (see delegateOffer).
+	Delegate []delegateRequest `json:"delegate,omitempty"`
+}
+
+// delegationOnly reports a directive that asks for subagents and carries no edit.
+func (d *patchDirective) delegationOnly() bool {
+	return len(d.Delegate) > 0 && d.OldContent == "" && d.NewContent == "" && d.FileContent == ""
 }
 
 func (e *Executor) formatPartialReportSummary(instruction string, plan *architect.ExecutionPlan, steps []StepReport, lastStep, totalSteps int, taskErr error) string {

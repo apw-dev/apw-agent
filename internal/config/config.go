@@ -232,6 +232,9 @@ type PlanningConfig struct {
 	// asks the reflex model to review each domain's files, "static" only counts AST symbols,
 	// "off" skips them.
 	Audit string `json:"audit,omitempty"`
+	// Delegates bounds the read-only subagents the planner and patch steps may start in one task:
+	// 0 (default) allows 4, -1 disables delegation.
+	Delegates int `json:"delegates,omitempty"`
 }
 
 // VerifyConfig overrides the detected verification pipeline. It is how a project in
@@ -534,6 +537,9 @@ func (c *Config) Validate() error {
 	case "", "model", "static", "off":
 	default:
 		return fmt.Errorf("config: planning.audit %q must be model, static or off", c.Planning.Audit)
+	}
+	if c.Planning.Delegates < -1 || c.Planning.Delegates > 12 {
+		return errors.New("config: planning.delegates must be between -1 (off) and 12")
 	}
 	if c.Planning.Proposals < 0 || c.Planning.Proposals > 5 {
 		return errors.New("config: planning.proposals must be between 0 and 5")

@@ -97,7 +97,34 @@ func (e *Executor) directiveCandidates() []FailoverCandidate {
 	return result
 }
 
+// askDirective asks for a patch directive. While the task's delegation budget lasts, the model may
+// answer once with a delegation request instead; the subagents' findings are then added to the
+// prompt and the directive is requested again without the offer.
 func (e *Executor) askDirective(ctx context.Context, prompt string) (*patchDirective, error) {
+	offer := e.delegateOffer()
+	dir, err := e.askDirectiveOnce(ctx, prompt+offer)
+	if err != nil || len(dir.Delegate) == 0 {
+		return dir, err
+	}
+	if !dir.delegationOnly() {
+		dir.Delegate = nil // an edit was given as well; use it
+		return dir, nil
+	}
+	if offer == "" {
+		return nil, errDelegationUnavailable
+	}
+	findings := e.runDelegates(ctx, e.delegateRoot(), "Step", dir.Delegate)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	dir, err = e.askDirectiveOnce(ctx, prompt+findings+"\nDelegation is no longer available for this request; respond now with the requested JSON directive.\n")
+	if err == nil && dir.delegationOnly() {
+		return nil, errDelegationUnavailable
+	}
+	return dir, err
+}
+
+func (e *Executor) askDirectiveOnce(ctx context.Context, prompt string) (*patchDirective, error) {
 	prompt = "CRITICAL: Do NOT use any tools, shell commands, apply_patch, or file readers. Act purely as an offline JSON generator and output ONLY the requested JSON object.\n" + prompt + InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + e.ReadContext
 	if e.Failover.Models == nil {
 		e.Failover.Models = make(map[string]time.Time)

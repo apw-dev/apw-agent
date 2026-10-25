@@ -376,7 +376,11 @@ func (e *Executor) runSymbol(root string, graph *surgeon.WorkspaceGraph, query s
 // codeLookup runs the requested read-only searches against the source workspace and formats the
 // results for the planning prompt. It returns the text and one label per query for reports.
 func (e *Executor) codeLookup(ctx context.Context, grep []grepQuery, globs []string, reads []readRange, symbols ...string) (string, []string) {
-	root := e.Workspace
+	return e.codeLookupIn(ctx, e.Workspace, grep, globs, reads, symbols...)
+}
+
+// codeLookupIn is codeLookup against root (the source workspace or a task's worktree).
+func (e *Executor) codeLookupIn(ctx context.Context, root string, grep []grepQuery, globs []string, reads []readRange, symbols ...string) (string, []string) {
 	var files []string
 	if len(grep) > 0 || len(globs) > 0 {
 		files = lookupFiles(ctx, root)

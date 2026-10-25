@@ -19,13 +19,15 @@ import (
 // contextRequest is the Architect's pre-planning request: documentation (research) and read-only
 // code lookups (grep, glob, read, symbol), with optional multi-hop continuation ("continue": true).
 type contextRequest struct {
-	Fetch    []string    `json:"fetch"`
-	Search   []string    `json:"search"`
-	Grep     []grepQuery `json:"grep"`
-	Glob     []string    `json:"glob"`
-	Read     []readRange `json:"read"`
-	Symbol   []string    `json:"symbol"`
-	Continue bool        `json:"continue,omitempty"`
+	Fetch  []string    `json:"fetch"`
+	Search []string    `json:"search"`
+	Grep   []grepQuery `json:"grep"`
+	Glob   []string    `json:"glob"`
+	Read   []readRange `json:"read"`
+	Symbol []string    `json:"symbol"`
+	// Delegate starts read-only subagents that investigate a question in their own context.
+	Delegate []delegateRequest `json:"delegate"`
+	Continue bool              `json:"continue,omitempty"`
 }
 
 // lookupWanted reports whether the Architect gets code lookup: planning.lookup "always", or "auto"
@@ -50,6 +52,10 @@ func (e *Executor) gatherPrompt(instruction, overview string, lookup bool) strin
 	if lookup {
 		abilities = append(abilities, `Code lookup (read-only searches of the source workspace): "grep": [{"pattern":"RE2 regular expression","glob":"optional, e.g. src/**/*.ts","context":2,"mode":"content|files_with_matches|count"}], "glob": ["src/**/*.test.ts"], "symbol": ["FuncOrTypeName"], "read": [{"file":"relative/path","start":1,"end":120}], "continue": false (set true only if you need another lookup hop after seeing these results). Use it to see files or symbols the code context below omits or truncates.`)
 		keys = append(keys, `"grep":[]`, `"glob":[]`, `"symbol":[]`, `"read":[]`)
+		if left := e.delegatesLeft(); left > 0 {
+			abilities = append(abilities, fmt.Sprintf(`Delegation (read-only subagents, each in its own context, run several lookups and return only a summary; use it for questions that need more than one search, such as tracing a call path or finding every place a behaviour is implemented): "delegate": [{"role":"short role","goal":"one specific question"}] (at most %d; they do not count toward the item limit).`, min(left, delegateMaxPerRequest)))
+			keys = append(keys, `"delegate":[]`)
+		}
 	}
 	if e.Research != nil {
 		abilities = append(abilities, e.Research.PromptRules())
@@ -133,6 +139,12 @@ func (e *Executor) gatherContext(ctx context.Context, task core.Task, overview s
 			}
 			out.WriteString(text)
 			didWork = didWork || len(labels) > 0
+		}
+		if lookup && len(req.Delegate) > 0 {
+			if findings := e.runDelegates(ctx, e.Workspace, "Architect", req.Delegate); findings != "" {
+				out.WriteString(findings)
+				didWork = true
+			}
 		}
 		if e.Research != nil && len(req.Fetch)+len(req.Search) > 0 {
 			sources := e.Research.Run(ctx, research.Request{Fetch: req.Fetch, Search: req.Search})

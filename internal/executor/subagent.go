@@ -488,6 +488,9 @@ func (e *Executor) askDirectiveSafe(ctx context.Context, prompt, readSnapshot st
 	var dir *patchDirective
 	err := e.askCandidatesSafe(ctx, "subagent directive", fullPrompt, e.DirectiveTimeout, func(content string) error {
 		parsed, err := parsePatchDirective(content)
+		if err == nil && parsed.delegationOnly() {
+			return errDelegationUnavailable // parallel waves offer no delegation
+		}
 		dir = parsed
 		return err
 	})
