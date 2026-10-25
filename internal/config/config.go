@@ -235,6 +235,9 @@ type PlanningConfig struct {
 	// Delegates bounds the read-only subagents the planner and patch steps may start in one task:
 	// 0 (default) allows 4, -1 disables delegation.
 	Delegates int `json:"delegates,omitempty"`
+	// Route answers a plain question (one with a question word and no request to change anything)
+	// from the source in one read-only call instead of planning edits: "auto" (default) or "off".
+	Route string `json:"route,omitempty"`
 }
 
 // VerifyConfig overrides the detected verification pipeline. It is how a project in
@@ -537,6 +540,11 @@ func (c *Config) Validate() error {
 	case "", "model", "static", "off":
 	default:
 		return fmt.Errorf("config: planning.audit %q must be model, static or off", c.Planning.Audit)
+	}
+	switch c.Planning.Route {
+	case "", "auto", "off":
+	default:
+		return fmt.Errorf("config: planning.route %q must be auto or off", c.Planning.Route)
 	}
 	if c.Planning.Delegates < -1 || c.Planning.Delegates > 12 {
 		return errors.New("config: planning.delegates must be between -1 (off) and 12")

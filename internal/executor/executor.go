@@ -63,6 +63,8 @@ type ExecutionReport struct {
 	Research       []research.Source          `json:"research,omitempty"`
 	// Unverified is set for unverified-mode tasks: no repository command checked the change.
 	Unverified bool `json:"unverified,omitempty"`
+	// Answered is set when a question was answered from the source instead of planning a change.
+	Answered bool `json:"answered,omitempty"`
 	// Warnings are non-blocking findings for the reviewer, such as tests that may only mirror the
 	// implementation.
 	Warnings []string `json:"warnings,omitempty"`
@@ -138,6 +140,9 @@ type Executor struct {
 	// model to review each domain's files, AuditStatic (the default) only counts AST symbols, and
 	// AuditOff skips them.
 	Audit string
+	// Route answers plain questions directly when RouteAuto (see isQuestion); the zero value and
+	// RouteOff keep the requested mode.
+	Route string
 	// AuditTimeout bounds one model auditor request (default 45s).
 	AuditTimeout time.Duration
 	// DelegateBudget bounds the read-only subagents the planner and steps may delegate to in one

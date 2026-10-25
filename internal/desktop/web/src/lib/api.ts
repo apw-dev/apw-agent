@@ -133,6 +133,8 @@ export interface TaskReport {
   mode?: string;
   passed?: boolean;
   unverified?: boolean;
+  /** Set when a question was answered from the source instead of planning a change. */
+  answered?: boolean;
   summary?: string;
   diff?: string;
   modified_files?: string[];

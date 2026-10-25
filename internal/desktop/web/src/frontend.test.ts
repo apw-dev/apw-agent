@@ -274,3 +274,20 @@ describe("run console dock", () => {
     terminalDockOpen.set(false);
   });
 });
+
+describe("answered questions", () => {
+  it("shows an answer without the change pipeline", () => {
+    const answered: TaskJob = {
+      id: "task-answer",
+      instruction: "CROWDSEC_BOUNCER_KEY ได้มายังไง",
+      mode: "execute",
+      status: "succeeded",
+      report: { mode: "review", passed: true, answered: true, summary: "รัน `cscli bouncers add web-ui` แล้วคัดลอก key" } as any
+    };
+    const { container, unmount } = render(TaskCard, { props: { job: answered, events: [] } });
+    expect(screen.getByText("ตอบคำถาม")).toBeInTheDocument();
+    expect(container.querySelector(".step-bar")).toBeNull();
+    expect(screen.queryByTestId("apply-task-btn")).not.toBeInTheDocument();
+    unmount();
+  });
+});

@@ -37,6 +37,7 @@ func appConfig(t *testing.T) *config.Config {
 	cfg.Budget.MaxRepairs = 1
 	// These tests script every model response; model auditors would consume them.
 	cfg.Planning.Audit = executor.AuditStatic
+	cfg.Planning.Route = executor.RouteOff
 	if err := os.WriteFile(filepath.Join(cfg.Workspace, "main.go"), []byte("package main\n\nfunc Greet() string {\n\treturn \"hi\"\n}\n\nfunc main() {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}

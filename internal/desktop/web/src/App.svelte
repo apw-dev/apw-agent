@@ -131,15 +131,34 @@
     }
   }
 
+  // Side panels resize freely; they only keep a small minimum and leave the center pane room.
+  const LEFT_MIN = 160;
+  const RIGHT_MIN = 240;
+  const CENTER_MIN = 320;
+  const RESIZERS = 12;
+
+  function clampLeft(w: number): number {
+    const right = $rightCollapsed ? 0 : $rightWidth;
+    return Math.round(Math.max(LEFT_MIN, Math.min(w, window.innerWidth - right - CENTER_MIN - RESIZERS)));
+  }
+
+  function clampRight(w: number): number {
+    const left = $leftCollapsed ? 0 : $leftWidth;
+    return Math.round(Math.max(RIGHT_MIN, Math.min(w, window.innerWidth - left - CENTER_MIN - RESIZERS)));
+  }
+
   function onPointerMove(e: PointerEvent) {
     if (!resizingSide) return;
     if (resizingSide === "left") {
-      const next = Math.max(180, Math.min(380, e.clientX));
-      leftWidth.set(next);
+      leftWidth.set(clampLeft(e.clientX));
     } else if (resizingSide === "right") {
-      const next = Math.max(280, Math.min(580, window.innerWidth - e.clientX));
-      rightWidth.set(next);
+      rightWidth.set(clampRight(window.innerWidth - e.clientX));
     }
+  }
+
+  function onWindowResize() {
+    leftWidth.set(clampLeft($leftWidth));
+    rightWidth.set(clampRight($rightWidth));
   }
 
   function onPointerUp() {
@@ -153,9 +172,9 @@
     e.preventDefault();
     const delta = e.key === "ArrowRight" ? 16 : -16;
     if (side === "left") {
-      leftWidth.update((w) => Math.max(180, Math.min(380, w + delta)));
+      leftWidth.update((w) => clampLeft(w + delta));
     } else {
-      rightWidth.update((w) => Math.max(280, Math.min(580, w - delta)));
+      rightWidth.update((w) => clampRight(w - delta));
     }
     persistUIPreferences();
   }
@@ -167,6 +186,7 @@
   oncontextmenu={onGlobalContextMenu}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
+  onresize={onWindowResize}
   ondragover={(e) => {
     if (inDesktopShell()) e.preventDefault();
   }}

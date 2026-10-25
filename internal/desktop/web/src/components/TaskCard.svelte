@@ -575,7 +575,7 @@
       {#if isRunning}
         <span class="pulse-dot" aria-hidden="true"></span>
       {/if}
-      <span class="mode-label">{(job.mode || "execute").toUpperCase()}</span>
+      <span class="mode-label">{job.report?.answered ? "ตอบคำถาม" : (job.mode || "execute").toUpperCase()}</span>
       <span class="sep">·</span>
       <span>{changedFiles.length} ไฟล์</span>
       {#if totalAdded > 0 || totalDeleted > 0}
@@ -918,6 +918,7 @@
     </div>
   {/if}
 
+  {#if !job.report?.answered}
   <div class="steps" role="list" aria-label="ขั้นตอนของงาน">
     {#each stepBar.steps as step (step.label)}
       <i
@@ -935,6 +936,7 @@
       <span class:active={step.state === "active" || step.state === "done"}>{step.label}</span>
     {/each}
   </div>
+  {/if}
 
   {#if isRunning}
     <div class="live-banner">

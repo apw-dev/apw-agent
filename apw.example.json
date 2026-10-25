@@ -57,6 +57,7 @@
     "proposals": 1,
     "judge": false,
     "audit": "model",
-    "delegates": 4
+    "delegates": 4,
+    "route": "auto"
   }
 }

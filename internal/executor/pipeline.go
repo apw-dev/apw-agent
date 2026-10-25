@@ -26,7 +26,11 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 		e.TaskID = fmt.Sprintf("task-%d", time.Now().UnixNano())
 	}
 	if e.Mode == core.ModeReview {
-		return e.review(ctx, instruction, overview)
+		return e.review(ctx, instruction, overview, false)
+	}
+	if e.Route == RouteAuto && e.Mode != core.ModeVerify && isQuestion(instruction) {
+		e.emit(ProgressEvent{Stage: "routed", Message: "This is a question: answering from the source without planning or editing files"})
+		return e.review(ctx, instruction, overview, true)
 	}
 	if (e.Mode == core.ModeExecute || e.Mode == core.ModeVerify) && !e.Trusted {
 		return nil, errors.New("workspace is not trusted for build/test; use preview or explicitly trust this workspace")
@@ -102,18 +106,26 @@ func (e *Executor) Execute(ctx context.Context, instruction, overview string) (*
 	return e.runPreparedPlan(ctx, plan, wt, 0, nil, instruction)
 }
 
-func (e *Executor) review(ctx context.Context, instruction, overview string) (*ExecutionReport, error) {
+// review answers from the source in one read-only request: a review, or (answer) a direct answer
+// to a question, which skips the domain auditors to keep the request to one model call.
+func (e *Executor) review(ctx context.Context, instruction, overview string, answer bool) (*ExecutionReport, error) {
 	if len(e.architectCandidates()) == 0 {
 		return nil, errors.New("review provider is not configured")
 	}
 	if e.Session != nil {
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
-	if auditCtx := e.runDomainAuditSubagents(ctx, instruction); auditCtx != "" {
-		overview += "\n" + auditCtx
+	if !answer {
+		if auditCtx := e.runDomainAuditSubagents(ctx, instruction); auditCtx != "" {
+			overview += "\n" + auditCtx
+		}
 	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})
-	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + overview + "\n" + ProjectOverviewForTask(e.Workspace, instruction, e.Profile(e.Workspace))
+	source := overview + "\n" + ProjectOverviewForTask(e.Workspace, instruction, e.Profile(e.Workspace))
+	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + source
+	if answer {
+		prompt = answerPrompt(instruction, source)
+	}
 	var summary string
 	err := e.withArchitectFailover(ctx, "review", func(ctx context.Context, c FailoverCandidate) error {
 		response, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: e.TaskID, Model: c.Model, Prompt: prompt})
@@ -132,7 +144,7 @@ func (e *Executor) review(ctx context.Context, instruction, overview string) (*E
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutionReport{TaskID: e.TaskID, Mode: core.ModeReview, Passed: true, Summary: summary, Subagents: e.snapshotSubagents()}, nil
+	return &ExecutionReport{TaskID: e.TaskID, Mode: core.ModeReview, Passed: true, Answered: answer, Summary: summary, Subagents: e.snapshotSubagents()}, nil
 }
 
 func (e *Executor) Resume(ctx context.Context, cp PlanCheckpoint) (*ExecutionReport, error) {

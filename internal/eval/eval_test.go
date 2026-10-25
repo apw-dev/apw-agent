@@ -67,6 +67,7 @@ func TestRunClassifiesOutcomes(t *testing.T) {
 	base.Roles.Architect, base.Roles.Reflex = "m", "m"
 	base.Budget.MaxRepairs, base.Budget.TaskTimeoutSec = 1, 600
 	base.Planning.Audit = "static" // responses are scripted; model auditors would consume them
+	base.Planning.Route = "off"
 	run := func(factory func(*config.Config) (*executor.Executor, func(), error)) Result {
 		t.Helper()
 		report, err := Run(context.Background(), tasks, Options{Base: base, Factory: factory})

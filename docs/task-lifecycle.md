@@ -21,6 +21,8 @@ apw desktop
 | `apw verify .` | fmt/vet/build/test in a snapshot worktree; no model repair | No source patch |
 | `apw apply <task-id>` | No model call or repository tests | Applies the verified set after conflict checks |
 
+**Questions are answered, not implemented.** With `"planning": {"route": "auto"}` (default), a preview, run or unverified request that is a plain question (a question word or `?`, in English or Thai, and no request to change anything such as add, fix, create, แก้, เพิ่ม, สร้าง) is answered from the source in one read-only model call: no plan, auditors, worktree, edits or verification, and the task report is marked `answered`. Anything that asks for a change, or is not clearly a question, keeps the requested mode. `"route": "off"` disables this.
+
 ### Interactive approval modes
 
 The interactive shell (`apw`) decides what a free-text request does by its mode; `/mode <name>` or shift+tab changes it, and `apw.json` `"approval"` sets the default:
