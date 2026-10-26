@@ -45,13 +45,14 @@ Section "APW Desktop & Core CLI (required)" SecCore
 SectionEnd
 
 Section /o "Add to User PATH (optional)" SecPath
-    ReadRegStr $0 HKCU "Environment" "Path"
-    StrCmp $0 "" 0 +3
-        WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin"
-        Goto path_done
-    WriteRegExpandStr HKCU "Environment" "Path" "$0;$INSTDIR\bin"
+    ; Never read or write PATH with NSIS string functions: they stop at 1024 characters and
+    ; return "" for a longer PATH, which would replace the whole user PATH. apw.exe edits the
+    ; registry value in full, keeps its type, and changes nothing when it cannot read it.
+    nsExec::ExecToLog '"$INSTDIR\bin\apw.exe" path add "$INSTDIR\bin"'
+    Pop $0
+    StrCmp $0 "0" path_done
+        MessageBox MB_ICONEXCLAMATION|MB_OK "APW could not add $INSTDIR\bin to your PATH (exit $0). Your PATH was not changed; add the folder yourself if you need the CLI in a terminal."
 path_done:
-    SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -61,6 +62,10 @@ SectionEnd
 
 Section "Uninstall"
     !insertmacro wails.setShellContext
+
+    ; Remove only this folder from the user PATH (a no-op when it was never added).
+    nsExec::ExecToLog '"$INSTDIR\bin\apw.exe" path remove "$INSTDIR\bin"'
+    Pop $0
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}"
     Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
