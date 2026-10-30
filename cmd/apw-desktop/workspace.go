@@ -8,12 +8,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/apiwat/apw-agent/internal/buildinfo"
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/desktop"
+	"github.com/apiwat/apw-agent/internal/process"
+	"github.com/apiwat/apw-agent/internal/session"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
@@ -118,12 +123,14 @@ func ensureWorkspaceGitReady(abs string) {
 	if _, err := os.Stat(gitEntry); errors.Is(err, os.ErrNotExist) {
 		cmd := exec.Command("git", "init")
 		cmd.Dir = abs
+		process.HideWindow(cmd)
 		_ = cmd.Run()
 	}
 	surgeon.EnsureGitExclude(abs, ".apw/")
 	surgeon.EnsureGitExclude(abs, "apw.json")
 	headCmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
 	headCmd.Dir = abs
+	process.HideWindow(headCmd)
 	if err := headCmd.Run(); err != nil {
 		commitCmd := exec.Command("git",
 			"-c", "user.name=APW Agent",
@@ -132,6 +139,7 @@ func ensureWorkspaceGitReady(abs string) {
 			"commit", "--allow-empty", "-m", "chore: initialize workspace",
 		)
 		commitCmd.Dir = abs
+		process.HideWindow(commitCmd)
 		_ = commitCmd.Run()
 	}
 }
@@ -143,10 +151,14 @@ type openWorkspace struct {
 
 // WorkspaceHost is the Wails AssetServer handler. Until a workspace is open it serves the
 // chooser page; afterwards it delegates to that workspace's desktop.Server. Safe for
-// concurrent use: Open swaps the whole workspace atomically.
+// concurrent use: Open retains opened workspace servers in memory so multiple projects
+// can run tasks concurrently and switch instantaneously.
 type WorkspaceHost struct {
 	current atomic.Pointer[openWorkspace]
 	notice  atomic.Pointer[string]
+	mu      sync.Mutex
+	token   string
+	servers map[string]*openWorkspace
 }
 
 // SetNotice sets the message the chooser shows when no ?error= is given, e.g. why the last
@@ -161,7 +173,11 @@ func (h *WorkspaceHost) TakeNotice() string {
 	return ""
 }
 
-func NewWorkspaceHost() *WorkspaceHost { return &WorkspaceHost{} }
+func NewWorkspaceHost() *WorkspaceHost {
+	return &WorkspaceHost{
+		servers: make(map[string]*openWorkspace),
+	}
+}
 
 func (h *WorkspaceHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ws := h.current.Load(); ws != nil {
@@ -184,8 +200,9 @@ func (h *WorkspaceHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Open switches to the workspace in dir. dir must contain a regular apw.json; on failure the
-// currently open workspace (if any) keeps serving. Reopening the directory that is already
-// open is a no-op so its desktop.Server (token and approval state) is preserved.
+// currently open workspace (if any) keeps serving. Previously opened workspaces are cached in
+// h.servers so switching between project folders keeps their desktop.Server and background
+// tasks alive concurrently.
 func (h *WorkspaceHost) Open(dir string) error {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -200,12 +217,32 @@ func (h *WorkspaceHost) Open(dir string) error {
 	if cur := h.Current(); cur != "" && samePath(cur, abs) {
 		return nil
 	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.servers == nil {
+		h.servers = make(map[string]*openWorkspace)
+	}
+	for _, existing := range h.servers {
+		if samePath(existing.dir, abs) {
+			h.current.Store(existing)
+			return nil
+		}
+	}
+
 	// First launch on a machine (or a workspace without a model): offer the models of connected
 	// accounts in Settings. A failed discovery leaves the placeholder, which tasks then refuse.
 	_, _ = discoverProviders(cfg)
 	srv := desktop.NewServer(cfg, buildinfo.Version)
+	if h.token == "" {
+		h.token = srv.Token
+	} else {
+		srv.Token = h.token
+	}
 	srv.InProcessHost = desktop.WailsHost
-	h.current.Store(&openWorkspace{dir: abs, handler: srv.Handler()})
+	ws := &openWorkspace{dir: abs, handler: srv.Handler()}
+	h.servers[strings.ToLower(filepath.Clean(abs))] = ws
+	h.current.Store(ws)
 	return nil
 }
 
@@ -215,6 +252,160 @@ func (h *WorkspaceHost) Current() string {
 		return ws.dir
 	}
 	return ""
+}
+
+// Remove drops dir from the cached workspace servers and clears current if it matched dir.
+func (h *WorkspaceHost) Remove(dir string) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for k, ws := range h.servers {
+		if samePath(ws.dir, abs) {
+			delete(h.servers, k)
+		}
+	}
+	if ws := h.current.Load(); ws != nil && samePath(ws.dir, abs) {
+		h.current.Store(nil)
+	}
+}
+
+// ProjectSessionItem summarizes one conversation inside a project folder for the Sidebar Projects tree.
+type ProjectSessionItem struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	UpdatedAt time.Time `json:"updated_at"`
+	TurnCount int       `json:"turn_count"`
+	Running   bool      `json:"running,omitempty"`
+}
+
+// ProjectFolderView summarizes a project workspace folder and its conversations for the Sidebar Projects tree.
+type ProjectFolderView struct {
+	Path     string               `json:"path"`
+	Name     string               `json:"name"`
+	Active   bool                 `json:"active"`
+	Running  bool                 `json:"running,omitempty"`
+	Sessions []ProjectSessionItem `json:"sessions"`
+}
+
+// ListProjectFolders builds the multi-project tree (like Antigravity's Projects sidebar) across
+// the active workspace and recent project folders.
+func ListProjectFolders(current string, recent []string) []ProjectFolderView {
+	var dirs []string
+	addDir := func(d string) {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			return
+		}
+		abs, err := filepath.Abs(d)
+		if err != nil {
+			return
+		}
+		for _, seen := range dirs {
+			if samePath(seen, abs) {
+				return
+			}
+		}
+		if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
+			dirs = append(dirs, abs)
+		}
+	}
+	addDir(current)
+	for _, r := range recent {
+		addDir(r)
+	}
+
+	out := make([]ProjectFolderView, 0, len(dirs))
+	for _, dir := range dirs {
+		name := filepath.Base(dir)
+		if name == "" || name == "." {
+			name = dir
+		}
+		sessions := listFolderSessions(dir)
+		folderRunning := false
+		for _, s := range sessions {
+			if s.Running {
+				folderRunning = true
+				break
+			}
+		}
+		out = append(out, ProjectFolderView{
+			Path:     dir,
+			Name:     name,
+			Active:   current != "" && samePath(current, dir),
+			Running:  folderRunning,
+			Sessions: sessions,
+		})
+	}
+	// Keep project folders in a stable alphabetical order so switching between folders
+	// never causes them to jump or swap positions in the Sidebar Projects tree.
+	sort.Slice(out, func(i, j int) bool {
+		ni, nj := strings.ToLower(out[i].Name), strings.ToLower(out[j].Name)
+		if ni != nj {
+			return ni < nj
+		}
+		return strings.ToLower(out[i].Path) < strings.ToLower(out[j].Path)
+	})
+	return out
+}
+
+func listFolderSessions(workspaceDir string) []ProjectSessionItem {
+	entries, err := os.ReadDir(filepath.Join(workspaceDir, ".apw", "sessions"))
+	if err != nil {
+		return []ProjectSessionItem{}
+	}
+	items := []ProjectSessionItem{}
+	seen := make(map[string]bool)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		sess, err := session.Load(workspaceDir, strings.TrimSuffix(e.Name(), ".json"))
+		if err != nil || sess.Owner != "local" || sess.Conversation == "" {
+			continue
+		}
+		convID := sess.Conversation
+		if seen[convID] {
+			continue
+		}
+		seen[convID] = true
+		title := ""
+		isRunning := false
+		if n := len(sess.History); n > 0 {
+			for _, turn := range sess.History {
+				cand := strings.TrimSpace(turn.Instruction)
+				if cand != "" && cand != "." {
+					title = cand
+					break
+				}
+			}
+			lastTurn := sess.History[n-1]
+			if lastTurn.TaskID != "" && !lastTurn.Success && lastTurn.Error == "" && lastTurn.Summary == "" {
+				if time.Since(sess.UpdatedAt) < 2*time.Hour {
+					isRunning = true
+				}
+			}
+		}
+		if title == "" {
+			title = convID
+		}
+		items = append(items, ProjectSessionItem{
+			ID:        convID,
+			Title:     title,
+			UpdatedAt: sess.UpdatedAt,
+			TurnCount: len(sess.History),
+			Running:   isRunning,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	if len(items) > 25 {
+		items = items[:25]
+	}
+	return items
 }
 
 const chooserHTML = `<!DOCTYPE html>

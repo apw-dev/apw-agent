@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import { tNow } from "../i18n";
 import {
   getAPI,
   postAPI,
@@ -15,6 +16,15 @@ import {
 } from "../api";
 
 export const workspaceStatus = writable<StatusPayload | null>(null);
+export const activeProjectPath = writable<string>("");
+
+export function setActiveProjectPath(path: string) {
+  const clean = (path || "").trim();
+  if (clean && clean !== "__current__") {
+    activeProjectPath.set(clean);
+    workspaceStatus.update((cur) => (cur ? { ...cur, workspace: clean } : cur));
+  }
+}
 export const agentBoardState = writable<AgentBoardPayload | null>(null);
 export const connectionState = writable<"connecting" | "connected" | "error">("connecting");
 export const connectionError = writable<string>("");
@@ -33,17 +43,21 @@ export async function loadStatus(): Promise<StatusPayload | null> {
   const res = await getAPI<StatusPayload>("/api/status");
   if (!res.ok || !res.data) {
     connectionState.update((cur) => (cur === "connected" ? "error" : "connecting"));
-    connectionError.set(res.message || "กำลังเชื่อมต่อกับบริการ APW...");
+    connectionError.set(res.message || tNow("Connecting to APW service...", "กำลังเชื่อมต่อกับบริการ APW..."));
     return null;
   }
   workspaceStatus.set(res.data);
+  if (res.data.workspace) {
+    activeProjectPath.set(res.data.workspace);
+  }
   connectionState.set("connected");
   connectionError.set("");
   return res.data;
 }
 
-export async function loadModels(): Promise<ModelsPayload | null> {
-  const res = await getAPI<ModelsPayload>("/api/models");
+export async function loadModels(forceRefresh = false): Promise<ModelsPayload | null> {
+  const url = forceRefresh ? "/api/models?refresh=1" : "/api/models";
+  const res = await getAPI<ModelsPayload>(url);
   if (res.ok && res.data) {
     modelsState.set(res.data);
     return res.data;
@@ -54,6 +68,8 @@ export async function loadModels(): Promise<ModelsPayload | null> {
 export async function saveModelsConfig(patch: {
   architect?: string;
   reflex?: string;
+  architect_fallbacks?: string[];
+  reflex_fallbacks?: string[];
   approval?: string;
   sandbox_mode?: string;
 }): Promise<{ ok: boolean; message: string }> {

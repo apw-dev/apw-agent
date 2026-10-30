@@ -20,6 +20,7 @@
     fetchWorkspaceFile
   } from "../lib/stores/workspace";
   import { rightPanelView } from "../lib/stores/settings";
+  import { t } from "../lib/i18n";
 
   let filterText = $state("");
   let loading = $state(false);
@@ -157,8 +158,8 @@
       <input
         type="text"
         bind:value={filterText}
-        placeholder="ค้นหาไฟล์ใน Workspace…"
-        aria-label="ค้นหาไฟล์ใน Workspace"
+        placeholder={$t("Filter files in Workspace…", "ค้นหาไฟล์ใน Workspace…")}
+        aria-label={$t("Filter files in Workspace", "ค้นหาไฟล์ใน Workspace")}
         data-testid="file-tree-filter"
       />
     </div>
@@ -167,8 +168,8 @@
       class="icon-btn"
       onclick={refreshFiles}
       disabled={loading}
-      title="รีเฟรชรายการไฟล์"
-      aria-label="รีเฟรชรายการไฟล์"
+      title={$t("Refresh file list", "รีเฟรชรายการไฟล์")}
+      aria-label={$t("Refresh file list", "รีเฟรชรายการไฟล์")}
     >
       <RefreshCw size={12} />
     </button>
@@ -182,9 +183,9 @@
 
   <div class="tree-scroll" role="tree" aria-label="Workspace File Tree">
     {#if loading && $workspaceFiles.length === 0}
-      <div class="empty">กำลังโหลดโครงสร้างไฟล์…</div>
+      <div class="empty">{$t("Loading file tree…", "กำลังโหลดโครงสร้างไฟล์…")}</div>
     {:else if treeRows.length === 0}
-      <div class="empty">ไม่พบไฟล์ที่ตรงกับคำค้นหา</div>
+      <div class="empty">{$t("No files match your filter", "ไม่พบไฟล์ที่ตรงกับคำค้นหา")}</div>
     {:else}
       {#each treeRows as row (row.kind + ":" + row.path)}
         {#if row.kind === "dir"}

@@ -64,9 +64,6 @@ func (e *Executor) ConfigureFailover(cfg *config.Config) (func(), error) {
 		return nil, err
 	}
 	e.DirectiveTimeout = time.Duration(cfg.Failover.DirectiveTimeoutSec) * time.Second
-	if e.DirectiveTimeout <= 0 {
-		e.DirectiveTimeout = 90 * time.Second
-	}
 	return closeExtras, nil
 }
 

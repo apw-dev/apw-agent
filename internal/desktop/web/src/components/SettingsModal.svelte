@@ -4,8 +4,10 @@
     settingsModalOpen,
     themeMode,
     updateTheme,
+    updateLanguage,
     type ThemeMode
   } from "../lib/stores/settings";
+  import { locale, t, tNow, type AppLocale } from "../lib/i18n";
   import {
     modelsState,
     channelsState,
@@ -20,6 +22,8 @@
   let activeTab = $state<"general" | "models" | "messaging" | "workspace">("general");
   let architect = $state("");
   let reflex = $state("");
+  let architectFallback = $state("");
+  let reflexFallback = $state("");
   let approval = $state("ask");
   let sandboxMode = $state("off");
 
@@ -39,6 +43,8 @@
         if (m) {
           architect = m.architect;
           reflex = m.reflex;
+          architectFallback = m.architect_fallbacks?.[0] || "";
+          reflexFallback = m.reflex_fallbacks?.[0] || "";
           approval = m.approval || "ask";
           sandboxMode = m.sandbox_mode || "off";
         }
@@ -70,7 +76,10 @@
         return {
           ok: false,
           ids: [],
-          error: `Telegram User ID ไม่ถูกต้อง: "${part}" (ต้องเป็นตัวเลขจำนวนเต็มบวก)`
+          error: tNow(
+            `Invalid Telegram User ID: "${part}" (must be a positive integer)`,
+            `Telegram User ID ไม่ถูกต้อง: "${part}" (ต้องเป็นตัวเลขจำนวนเต็มบวก)`
+          )
         };
       }
       const n = Number(part);
@@ -78,7 +87,7 @@
         return {
           ok: false,
           ids: [],
-          error: `Telegram User ID ไม่ถูกต้อง: "${part}"`
+          error: tNow(`Invalid Telegram User ID: "${part}"`, `Telegram User ID ไม่ถูกต้อง: "${part}"`)
         };
       }
       if (!ids.includes(n)) {
@@ -86,6 +95,29 @@
       }
     }
     return { ok: true, ids, error: "" };
+  }
+
+  async function onRefreshModels() {
+    if (busy) return;
+    busy = true;
+    errorMsg = "";
+    savedMsg = "";
+    const m = await loadModels(true);
+    if (m) {
+      architect = m.architect;
+      reflex = m.reflex;
+      architectFallback = m.architect_fallbacks?.[0] || "";
+      reflexFallback = m.reflex_fallbacks?.[0] || "";
+      approval = m.approval || "ask";
+      sandboxMode = m.sandbox_mode || "off";
+      savedMsg = tNow(
+        `Synced latest models (${m.providers.length} providers)`,
+        `ซิงค์รายการโมเดลล่าสุดเรียบร้อยแล้ว (${m.providers.length} รายการ)`
+      );
+    } else {
+      errorMsg = tNow("Failed to sync model list", "ไม่สามารถซิงค์รายการโมเดลได้");
+    }
+    busy = false;
   }
 
   async function onSaveModels() {
@@ -96,13 +128,15 @@
     const res = await saveModelsConfig({
       architect,
       reflex,
+      architect_fallbacks: architectFallback ? [architectFallback] : [],
+      reflex_fallbacks: reflexFallback ? [reflexFallback] : [],
       approval,
       sandbox_mode: sandboxMode
     });
     if (!res.ok) {
       errorMsg = res.message;
     } else {
-      savedMsg = "บันทึกการตั้งค่าเรียบร้อยแล้ว";
+      savedMsg = tNow("Settings saved successfully", "บันทึกการตั้งค่าเรียบร้อยแล้ว");
     }
     busy = false;
   }
@@ -129,7 +163,7 @@
     } else {
       telegramToken = "";
       telegramAllowRaw = parsed.ids.join(", ");
-      savedMsg = "บันทึกการตั้งค่า Messaging เรียบร้อยแล้ว";
+      savedMsg = tNow("Messaging settings saved successfully", "บันทึกการตั้งค่า Messaging เรียบร้อยแล้ว");
     }
     busy = false;
   }
@@ -150,7 +184,10 @@
     } else {
       telegramEnabled = false;
       telegramToken = "";
-      savedMsg = "ลบ Telegram Bot Token ออกจาก .apw/auth.json เรียบร้อยแล้ว";
+      savedMsg = tNow(
+        "Cleared Telegram Bot Token from .apw/auth.json",
+        "ลบ Telegram Bot Token ออกจาก .apw/auth.json เรียบร้อยแล้ว"
+      );
     }
     busy = false;
   }
@@ -166,15 +203,19 @@
   async function onThemeSelect(mode: ThemeMode) {
     await updateTheme(mode);
   }
+
+  function onLanguageSelect(lang: AppLocale) {
+    updateLanguage(lang);
+  }
 </script>
 
 {#if $settingsModalOpen}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="backdrop" onclick={() => settingsModalOpen.set(false)}></div>
-  <div class="modal" id="settings-dialog" role="dialog" aria-label="ตั้งค่า APW Desktop">
+  <div class="modal" id="settings-dialog" role="dialog" aria-label={$t("APW Desktop Settings", "ตั้งค่า APW Desktop")}>
     <div class="hdr">
-      <h3>การตั้งค่า (Settings)</h3>
+      <h3>{$t("Settings", "การตั้งค่า (Settings)")}</h3>
       <button type="button" class="close-btn" onclick={() => settingsModalOpen.set(false)}>
         <X size={15} />
       </button>
@@ -188,7 +229,7 @@
         onclick={() => switchTab("general")}
         data-testid="settings-tab-general"
       >
-        General
+        {$t("General", "ทั่วไป (General)")}
       </button>
       <button
         type="button"
@@ -197,7 +238,7 @@
         onclick={() => switchTab("models")}
         data-testid="settings-tab-models"
       >
-        Models
+        {$t("Models", "โมเดล (Models)")}
       </button>
       <button
         type="button"
@@ -206,7 +247,7 @@
         onclick={() => switchTab("messaging")}
         data-testid="settings-tab-messaging"
       >
-        Messaging
+        {$t("Messaging", "การแจ้งเตือน (Messaging)")}
       </button>
       <button
         type="button"
@@ -215,19 +256,39 @@
         onclick={() => switchTab("workspace")}
         data-testid="settings-tab-workspace"
       >
-        Workspace & Sandbox
+        {$t("Workspace & Sandbox", "โปรเจกต์ & Sandbox")}
       </button>
     </div>
 
     <div class="content">
       {#if activeTab === "general"}
         <div class="field">
-          <div class="lbl">ธีมสีหน้าต่าง (Theme)</div>
+          <div class="lbl">{$t("Interface Language (ภาษา)", "ภาษาของระบบ (Language)")}</div>
           <div class="theme-group">
             {#each [
-              { id: "system", label: "ตามระบบ (System)" },
-              { id: "light", label: "สว่าง (Light)" },
-              { id: "dark", label: "มืด (Dark)" }
+              { id: "en", label: "English (International)" },
+              { id: "th", label: "ภาษาไทย (Thai)" }
+            ] as opt (opt.id)}
+              <button
+                type="button"
+                class="theme-btn"
+                class:active={$locale === opt.id}
+                onclick={() => onLanguageSelect(opt.id as AppLocale)}
+                data-testid={`lang-${opt.id}-btn`}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="lbl">{$t("Appearance Theme", "ธีมสีหน้าต่าง (Theme)")}</div>
+          <div class="theme-group">
+            {#each [
+              { id: "system", label: $t("System", "ตามระบบ (System)") },
+              { id: "light", label: $t("Light", "สว่าง (Light)") },
+              { id: "dark", label: $t("Dark", "มืด (Dark)") }
             ] as opt (opt.id)}
               <button
                 type="button"
@@ -243,8 +304,31 @@
         </div>
       {:else if activeTab === "models"}
         <div class="field">
-          <label for="sel-architect">Brain 2 (Architect / Deep Planner)</label>
+          <div class="lbl-row">
+            <label for="sel-architect">Brain 2 (Architect / Deep Planner)</label>
+            <button
+              type="button"
+              class="btn"
+              onclick={onRefreshModels}
+              disabled={busy}
+              data-testid="refresh-models-btn"
+            >
+              {$t("Sync Latest Models (agy / CLI)", "ซิงค์โมเดลล่าสุด (agy / CLI)")}
+            </button>
+          </div>
           <select id="sel-architect" bind:value={architect} class="mono">
+            {#each $modelsState?.providers || [] as p (p.key)}
+              <option value={p.key}>{p.key}: {p.model} ({p.type})</option>
+            {/each}
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="sel-architect-fallback">
+            {$t("Brain 2 Standby / Fallback Layer #1", "Brain 2 Standby / Fallback Layer #1 (โมเดลสำรอง Architect)")}
+          </label>
+          <select id="sel-architect-fallback" bind:value={architectFallback} class="mono">
+            <option value="">{$t("(No fallback model)", "(ไม่ตั้งค่าโมเดลสำรอง)")}</option>
             {#each $modelsState?.providers || [] as p (p.key)}
               <option value={p.key}>{p.key}: {p.model} ({p.type})</option>
             {/each}
@@ -261,10 +345,22 @@
         </div>
 
         <div class="field">
-          <label for="sel-approval">นโยบายการ Apply เริ่มต้น (Approval)</label>
+          <label for="sel-reflex-fallback">
+            {$t("Brain 1 Standby / Fallback Layer #1", "Brain 1 Standby / Fallback Layer #1 (โมเดลสำรอง Reflex)")}
+          </label>
+          <select id="sel-reflex-fallback" bind:value={reflexFallback} class="mono">
+            <option value="">{$t("(No fallback model)", "(ไม่ตั้งค่าโมเดลสำรอง)")}</option>
+            {#each $modelsState?.providers || [] as p (p.key)}
+              <option value={p.key}>{p.key}: {p.model} ({p.type})</option>
+            {/each}
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="sel-approval">{$t("Default Apply Policy (Approval)", "นโยบายการ Apply เริ่มต้น (Approval)")}</label>
           <select id="sel-approval" bind:value={approval}>
-            <option value="ask">ask: ถามก่อน Apply ลง Workspace</option>
-            <option value="auto">auto: Apply อัตโนมัติหลัง Verify ผ่าน</option>
+            <option value="ask">{$t("ask: Confirm before applying to Workspace", "ask: ถามก่อน Apply ลง Workspace")}</option>
+            <option value="auto">{$t("auto: Apply automatically after verification", "auto: Apply อัตโนมัติหลัง Verify ผ่าน")}</option>
           </select>
         </div>
       {:else if activeTab === "messaging"}
@@ -276,7 +372,7 @@
               bind:checked={telegramEnabled}
               data-testid="telegram-enabled-checkbox"
             />
-            <span>เปิดใช้งาน Telegram Bot Gateway (apwd)</span>
+            <span>{$t("Enable Telegram Bot Gateway (apwd)", "เปิดใช้งาน Telegram Bot Gateway (apwd)")}</span>
           </label>
         </div>
 
@@ -293,7 +389,7 @@
                   disabled={busy}
                   data-testid="clear-telegram-token-btn"
                 >
-                  ล้าง Token
+                  {$t("Clear Token", "ล้าง Token")}
                 </button>
               </div>
             {/if}
@@ -303,50 +399,56 @@
             type="password"
             class="mono text-inp"
             placeholder={$channelsState?.telegram.token_configured
-              ? "เว้นว่างไว้เพื่อใช้ Token เดิม หรือกรอกใหม่เพื่อเปลี่ยน"
+              ? $t("Leave blank to keep existing token, or enter a new one", "เว้นว่างไว้เพื่อใช้ Token เดิม หรือกรอกใหม่เพื่อเปลี่ยน")
               : "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"}
             bind:value={telegramToken}
             data-testid="telegram-token-input"
           />
           <div class="hint">
-            รับ Bot Token จาก @BotFather บน Telegram ระบบจะบันทึกไว้ใน .apw/auth.json เท่านั้น (ไม่เขียนลง apw.json)
+            {$t(
+              "Get a Bot Token from @BotFather on Telegram. Stored exclusively in .apw/auth.json (never written to apw.json).",
+              "รับ Bot Token จาก @BotFather บน Telegram ระบบจะบันทึกไว้ใน .apw/auth.json เท่านั้น (ไม่เขียนลง apw.json)"
+            )}
           </div>
         </div>
 
         <div class="field">
-          <label for="inp-telegram-allow">Allowed Telegram User IDs (คั่นด้วยลูกน้ำ)</label>
+          <label for="inp-telegram-allow">{$t("Allowed Telegram User IDs (comma-separated)", "Allowed Telegram User IDs (คั่นด้วยลูกน้ำ)")}</label>
           <input
             id="inp-telegram-allow"
             type="text"
             class="mono text-inp"
-            placeholder="เช่น 123456789, 987654321"
+            placeholder={$t("e.g. 123456789, 987654321", "เช่น 123456789, 987654321")}
             bind:value={telegramAllowRaw}
             data-testid="telegram-allow-input"
           />
           <div class="hint">
-            ระบุหมายเลข Telegram User ID ที่ได้รับอนุญาตให้สั่งงาน APW (ต้องมีอย่างน้อย 1 ID เมื่อเปิดใช้งาน)
+            {$t(
+              "Specify Telegram User IDs authorized to control APW (at least 1 ID required when enabled).",
+              "ระบุหมายเลข Telegram User ID ที่ได้รับอนุญาตให้สั่งงาน APW (ต้องมีอย่างน้อย 1 ID เมื่อเปิดใช้งาน)"
+            )}
           </div>
         </div>
       {:else}
         <div class="field">
-          <label for="sel-sandbox">โหมดแยกตัวกระบวนการ (Sandbox Mode)</label>
+          <label for="sel-sandbox">{$t("Process Isolation (Sandbox Mode)", "โหมดแยกตัวกระบวนการ (Sandbox Mode)")}</label>
           <select id="sel-sandbox" bind:value={sandboxMode}>
-            <option value="off">off: รันใน Git Worktree มาตรฐาน</option>
+            <option value="off">{$t("off: Standard Git Worktree", "off: รันใน Git Worktree มาตรฐาน")}</option>
             <option value="restricted">restricted: Windows Job Object Restricted</option>
             <option value="docker">docker: Container Isolation</option>
           </select>
         </div>
 
         <div class="field">
-          <div class="lbl">สถานะความเชื่อถือของโปรเจกต์ (Workspace Trust)</div>
+          <div class="lbl">{$t("Workspace Trust", "สถานะความเชื่อถือของโปรเจกต์ (Workspace Trust)")}</div>
           <button
             type="button"
             class="trust-toggle"
             onclick={() => toggleWorkspaceTrust(!$workspaceStatus?.trusted)}
           >
             {$workspaceStatus?.trusted
-              ? "✓ Trusted: คลิกเพื่อยกเลิกสิทธิ์รัน build/test"
-              : "⚠ Untrusted: คลิกเพื่ออนุญาตรัน build/test"}
+              ? $t("✓ Trusted: Click to revoke build/test permissions", "✓ Trusted: คลิกเพื่อยกเลิกสิทธิ์รัน build/test")
+              : $t("⚠ Untrusted: Click to allow build/test execution", "⚠ Untrusted: คลิกเพื่ออนุญาตรัน build/test")}
           </button>
         </div>
       {/if}
@@ -360,7 +462,7 @@
     </div>
 
     <div class="ftr">
-      <button type="button" class="btn" onclick={() => settingsModalOpen.set(false)}>ปิด</button>
+      <button type="button" class="btn" onclick={() => settingsModalOpen.set(false)}>{$t("Close", "ปิด")}</button>
       {#if activeTab !== "general"}
         <button
           type="button"
@@ -369,7 +471,7 @@
           disabled={busy}
           data-testid="save-settings-btn"
         >
-          บันทึก
+          {$t("Save", "บันทึก")}
         </button>
       {/if}
     </div>

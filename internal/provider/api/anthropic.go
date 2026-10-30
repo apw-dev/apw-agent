@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	defaultEndpoint   = "https://api.anthropic.com"
-	anthropicVersion  = "2023-06-01"
-	defaultMaxTokens  = 8192
-	defaultMaxRetries = 3
-	defaultBaseDelay  = 200 * time.Millisecond
+	defaultEndpoint      = "https://api.anthropic.com"
+	anthropicVersion     = "2023-06-01"
+	defaultMaxTokens     = 16384
+	defaultMaxRetries    = 3
+	defaultBaseDelay     = 200 * time.Millisecond
+	cacheBreakpointBytes = 4096
 )
 
 // ErrUnauthorized is returned when the API rejects credentials (HTTP 401 or 403).
@@ -52,9 +53,9 @@ func New(cfg config.ProviderConfig) (*Provider, error) {
 		endpoint = defaultEndpoint
 	}
 
-	timeout := time.Duration(cfg.TimeoutSec) * time.Second
-	if timeout <= 0 {
-		timeout = 120 * time.Second
+	var timeout time.Duration
+	if cfg.TimeoutSec > 0 && cfg.TimeoutSec != 60 && cfg.TimeoutSec != 120 && cfg.TimeoutSec != 180 {
+		timeout = time.Duration(cfg.TimeoutSec) * time.Second
 	}
 
 	return &Provider{
@@ -73,15 +74,38 @@ func (p *Provider) Name() string {
 	return "api"
 }
 
+type cacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
+type textBlock struct {
+	Type         string        `json:"type"`
+	Text         string        `json:"text"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+type thinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+}
+
+type outputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
 type messagesRequest struct {
-	Model     string       `json:"model"`
-	MaxTokens int          `json:"max_tokens"`
-	Messages  []apiMessage `json:"messages"`
+	Model        string          `json:"model"`
+	MaxTokens    int             `json:"max_tokens"`
+	System       []textBlock     `json:"system,omitempty"`
+	Messages     []apiMessage    `json:"messages"`
+	Thinking     *thinkingConfig `json:"thinking,omitempty"`
+	OutputConfig *outputConfig   `json:"output_config,omitempty"`
 }
 
 type apiMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
 type messagesResponse struct {
@@ -97,8 +121,122 @@ type contentBlock struct {
 }
 
 type apiUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+}
+
+func makeCacheControl(opts map[string]string) *cacheControl {
+	if opts != nil && opts["cache"] == "off" {
+		return nil
+	}
+	cc := &cacheControl{Type: "ephemeral"}
+	if opts != nil {
+		if ttl := strings.TrimSpace(opts["cache_ttl"]); ttl == "5m" || ttl == "1h" {
+			cc.TTL = ttl
+		}
+	}
+	return cc
+}
+
+func splitCachePrefix(req core.ModelRequest) (string, string) {
+	if req.CachePrefix != "" && req.Prompt == "" {
+		return "", ""
+	}
+	if req.CachePrefix != "" && req.Prompt != "" {
+		if strings.HasPrefix(req.Prompt, req.CachePrefix) {
+			rest := strings.TrimPrefix(req.Prompt[len(req.CachePrefix):], "\n")
+			if rest != "" {
+				return req.CachePrefix, rest
+			}
+			return "", ""
+		}
+		return req.CachePrefix, req.Prompt
+	}
+	return "", ""
+}
+
+func buildMessagesRequest(model string, req core.ModelRequest) messagesRequest {
+	maxTokens := defaultMaxTokens
+	if req.Options != nil {
+		if mt, err := strconv.Atoi(strings.TrimSpace(req.Options["max_tokens"])); err == nil && mt > 0 {
+			maxTokens = mt
+		}
+	}
+
+	out := messagesRequest{
+		Model:     model,
+		MaxTokens: maxTokens,
+	}
+
+	cc := makeCacheControl(req.Options)
+
+	if sys := strings.TrimSpace(req.System); sys != "" {
+		sb := textBlock{Type: "text", Text: sys}
+		if len(sys) >= 1024 && cc != nil {
+			sb.CacheControl = cc
+		}
+		out.System = []textBlock{sb}
+	}
+
+	prefix, rest := splitCachePrefix(req)
+	switch {
+	case prefix != "" && rest != "":
+		var prefixCC *cacheControl
+		if len(prefix) >= 1024 {
+			prefixCC = cc
+		}
+		out.Messages = []apiMessage{
+			{
+				Role: "user",
+				Content: []textBlock{
+					{Type: "text", Text: prefix, CacheControl: prefixCC},
+					{Type: "text", Text: rest},
+				},
+			},
+		}
+	default:
+		full := req.EffectivePrompt()
+		if len(full) >= cacheBreakpointBytes && cc != nil {
+			out.Messages = []apiMessage{
+				{
+					Role: "user",
+					Content: []textBlock{
+						{Type: "text", Text: full, CacheControl: cc},
+					},
+				},
+			}
+		} else {
+			out.Messages = []apiMessage{
+				{
+					Role:    "user",
+					Content: full,
+				},
+			}
+		}
+	}
+
+	if req.Options != nil {
+		if effort := strings.TrimSpace(req.Options["effort"]); effort != "" {
+			out.OutputConfig = &outputConfig{Effort: effort}
+		}
+		switch th := strings.TrimSpace(req.Options["thinking"]); th {
+		case "adaptive":
+			out.Thinking = &thinkingConfig{Type: "adaptive"}
+		case "disabled":
+			out.Thinking = &thinkingConfig{Type: "disabled"}
+		default:
+			if budget, err := strconv.Atoi(th); err == nil && budget >= 1024 {
+				out.Thinking = &thinkingConfig{Type: "enabled", BudgetTokens: budget}
+				if out.MaxTokens <= budget {
+					out.MaxTokens = budget + defaultMaxTokens
+				}
+			}
+		}
+	}
+
+	return out
 }
 
 // Ask sends a prompt to the Anthropic Messages API with bounded retries on transient errors.
@@ -108,16 +246,7 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 		model = p.cfg.Model
 	}
 
-	payload, err := json.Marshal(messagesRequest{
-		Model:     model,
-		MaxTokens: defaultMaxTokens,
-		Messages: []apiMessage{
-			{
-				Role:    "user",
-				Content: req.Prompt,
-			},
-		},
-	})
+	payload, err := json.Marshal(buildMessagesRequest(model, req))
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -139,7 +268,7 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 		}
 		lastErr = p.sanitizeError(err)
 
-		if !shouldRetry || attempt == maxRetries {
+		if !shouldRetry || attempt == maxRetries || retryDelay > 15*time.Second {
 			return nil, lastErr
 		}
 
@@ -158,7 +287,11 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 }
 
 func (p *Provider) doOnce(ctx context.Context, requestID string, payload []byte) (*core.ModelResponse, time.Duration, bool, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
+	reqCtx := ctx
+	var cancel context.CancelFunc = func() {}
+	if p.timeout > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, p.timeout)
+	}
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.endpoint+"/v1/messages", bytes.NewReader(payload))
@@ -194,7 +327,21 @@ func (p *Provider) doOnce(ctx context.Context, requestID string, payload []byte)
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		retryAfter := parseRateLimitWait(resp.Header)
+		detail := extractAPIErrorMessage(rawBytes)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resetHint := ""
+			if retryAfter > 0 {
+				resetHint = fmt.Sprintf(" (resets in %s)", retryAfter.Round(time.Second))
+			}
+			if detail != "" {
+				return nil, retryAfter, true, fmt.Errorf("transient API status 429 rate limit / quota exceeded%s: %s", resetHint, detail)
+			}
+			return nil, retryAfter, true, fmt.Errorf("transient API status 429 rate limit / quota exceeded%s", resetHint)
+		}
+		if detail != "" {
+			return nil, retryAfter, true, fmt.Errorf("transient API status %d: %s", resp.StatusCode, detail)
+		}
 		return nil, retryAfter, true, fmt.Errorf("transient API status %d", resp.StatusCode)
 	}
 
@@ -217,8 +364,10 @@ func (p *Provider) doOnce(ctx context.Context, requestID string, payload []byte)
 	var usage *core.Usage
 	if parsed.Usage != nil {
 		usage = &core.Usage{
-			InputTokens:  parsed.Usage.InputTokens,
-			OutputTokens: parsed.Usage.OutputTokens,
+			InputTokens:              parsed.Usage.InputTokens,
+			OutputTokens:             parsed.Usage.OutputTokens,
+			CacheCreationInputTokens: parsed.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     parsed.Usage.CacheReadInputTokens,
 		}
 	}
 
@@ -257,7 +406,59 @@ func parseRetryAfter(val string) time.Duration {
 	if secs, err := strconv.Atoi(val); err == nil && secs >= 0 {
 		return time.Duration(secs) * time.Second
 	}
+	if ts, err := http.ParseTime(val); err == nil {
+		if d := time.Until(ts); d > 0 {
+			return d
+		}
+	}
 	return 0
+}
+
+// parseRateLimitWait inspects Retry-After and Anthropic's unified/standard rate-limit reset headers
+// (as observed in Claude Code API traffic: anthropic-ratelimit-unified-5h-reset, 7d-reset, and
+// anthropic-ratelimit-*-reset) to compute an accurate cooldown window.
+func parseRateLimitWait(h http.Header) time.Duration {
+	if h == nil {
+		return 0
+	}
+	if raw := strings.TrimSpace(h.Get("Retry-After")); raw != "" {
+		return parseRetryAfter(raw)
+	}
+	now := time.Now()
+	for _, key := range []string{
+		"Anthropic-Ratelimit-Unified-5h-Reset",
+		"Anthropic-Ratelimit-Unified-7d-Reset",
+		"Anthropic-Ratelimit-Tokens-Reset",
+		"Anthropic-Ratelimit-Requests-Reset",
+	} {
+		val := strings.TrimSpace(h.Get(key))
+		if val == "" {
+			continue
+		}
+		if unixSec, err := strconv.ParseInt(val, 10, 64); err == nil && unixSec > now.Unix() {
+			return time.Until(time.Unix(unixSec, 0))
+		}
+		if ts, err := time.Parse(time.RFC3339, val); err == nil && ts.After(now) {
+			return time.Until(ts)
+		}
+	}
+	return 0
+}
+
+func extractAPIErrorMessage(raw []byte) string {
+	var env struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &env); err == nil && strings.TrimSpace(env.Error.Message) != "" {
+		if env.Error.Type != "" {
+			return env.Error.Type + ": " + strings.TrimSpace(env.Error.Message)
+		}
+		return strings.TrimSpace(env.Error.Message)
+	}
+	return ""
 }
 
 func isTimeoutOrTemporary(err error) bool {

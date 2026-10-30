@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/apiwat/apw-agent/internal/daemon"
+	"github.com/apiwat/apw-agent/internal/process"
 	"github.com/apiwat/apw-agent/internal/transport"
 )
 
@@ -305,6 +306,7 @@ func (m *terminalManager) start(workspace, command, hintURL string, targetPort i
 		cmd = exec.Command("sh", "-c", shScript)
 	}
 	cmd.Dir = workspace
+	process.HideWindow(cmd)
 	if targetPort > 0 {
 		cmd.Env = append(os.Environ(),
 			fmt.Sprintf("PORT=%d", targetPort),
@@ -402,7 +404,9 @@ func (m *terminalManager) stop(id string) (TerminalSessionView, bool) {
 
 	if wasRunning {
 		if runtime.GOOS == "windows" && pid > 0 {
-			_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
+			killCmd := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid))
+			process.HideWindow(killCmd)
+			_ = killCmd.Run()
 		}
 		if cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()

@@ -2,6 +2,7 @@
   import { ShieldQuestion, Check, CheckCheck, X } from "lucide-svelte";
   import type { ToolApprovalRequest } from "../lib/api";
   import { decideApproval } from "../lib/stores/tasks";
+  import { t } from "../lib/i18n";
 
   let { request }: { request: ToolApprovalRequest } = $props();
   let busy = $state(false);
@@ -19,10 +20,10 @@
   }
 </script>
 
-<div class="approval-card" role="region" aria-label="คำขออนุมัติคำสั่ง" data-testid="approval-card">
+<div class="approval-card" role="region" aria-label={$t("Tool approval request", "คำขออนุมัติคำสั่ง")} data-testid="approval-card">
   <div class="hdr">
     <ShieldQuestion size={16} />
-    <span class="title">ขออนุญาตดำเนินการ ({request.tool_name})</span>
+    <span class="title">{$t(`Tool Approval Request (${request.tool_name})`, `ขออนุญาตดำเนินการ (${request.tool_name})`)}</span>
     {#if request.task_id}
       <span class="task-id mono">{request.task_id}</span>
     {/if}
@@ -47,7 +48,7 @@
       data-testid="approve-once-btn"
     >
       <Check size={13} />
-      <span>อนุญาตครั้งเดียว (Approve)</span>
+      <span>{$t("Approve Once", "อนุญาตครั้งเดียว (Approve)")}</span>
     </button>
     <button
       type="button"
@@ -57,7 +58,7 @@
       data-testid="approve-always-btn"
     >
       <CheckCheck size={13} />
-      <span>อนุญาตเสมอ</span>
+      <span>{$t("Always Allow", "อนุญาตเสมอ")}</span>
     </button>
     <button
       type="button"
@@ -67,7 +68,7 @@
       data-testid="approve-deny-btn"
     >
       <X size={13} />
-      <span>ปฏิเสธ (Deny)</span>
+      <span>{$t("Deny", "ปฏิเสธ (Deny)")}</span>
     </button>
   </div>
 </div>

@@ -19,10 +19,11 @@ import (
 
 // ShellState is the native shell snapshot exposed to the frontend.
 type ShellState struct {
-	CurrentWorkspace string        `json:"current_workspace"`
-	Recent           []string      `json:"recent"`
-	Theme            string        `json:"theme"`
-	UI               UIPreferences `json:"ui"`
+	CurrentWorkspace string              `json:"current_workspace"`
+	Recent           []string            `json:"recent"`
+	Projects         []ProjectFolderView `json:"projects,omitempty"`
+	Theme            string              `json:"theme"`
+	UI               UIPreferences       `json:"ui"`
 }
 
 // App owns the window lifecycle and is bound to the page as window.go.main.App.
@@ -85,6 +86,18 @@ func (a *App) ChooseWorkspace() error {
 // OpenWorkspace switches to dir, remembers it, and reloads the page onto its Desktop.
 // Reopening the workspace that is already open is a no-op so approvals and page state stay intact.
 func (a *App) OpenWorkspace(dir string) error {
+	clean := strings.TrimSpace(dir)
+	if clean == "" {
+		return errors.New("workspace path is empty")
+	}
+	if abs, err := filepath.Abs(clean); err == nil {
+		if _, statErr := os.Stat(abs); errors.Is(statErr, os.ErrNotExist) {
+			if mkErr := os.MkdirAll(abs, 0o755); mkErr != nil {
+				return mkErr
+			}
+		}
+		dir = abs
+	}
 	prev := a.host.Current()
 	a.mu.Lock()
 	last := a.settings.LastWorkspace
@@ -98,13 +111,13 @@ func (a *App) OpenWorkspace(dir string) error {
 		return err
 	}
 	cur := a.host.Current()
-	changed := prev == "" || !samePath(prev, cur)
+	wasChooser := prev == "" && cur != ""
 	a.mu.Lock()
 	a.settings.RememberWorkspace(cur)
 	err := SaveSettings(a.settingsPath, a.settings)
 	ctx, shown := a.ctx, a.shown
 	a.mu.Unlock()
-	if changed && ctx != nil && shown {
+	if wasChooser && ctx != nil && shown {
 		runtime.WindowReloadApp(ctx)
 	}
 	return err
@@ -138,16 +151,114 @@ func (a *App) SetTheme(mode string) error {
 	return SaveSettings(a.settingsPath, a.settings)
 }
 
-// GetShellState returns the active workspace, recent list, theme and persisted UI preferences.
+// GetShellState returns the active workspace, recent list, multi-project tree, theme and persisted UI preferences.
 func (a *App) GetShellState() ShellState {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	cur := a.host.Current()
+	recent := append([]string(nil), a.settings.Recent...)
+	theme := a.settings.Theme
+	ui := a.settings.UI
+	a.mu.Unlock()
 	return ShellState{
-		CurrentWorkspace: a.host.Current(),
-		Recent:           append([]string(nil), a.settings.Recent...),
-		Theme:            a.settings.Theme,
-		UI:               a.settings.UI,
+		CurrentWorkspace: cur,
+		Recent:           recent,
+		Projects:         ListProjectFolders(cur, recent),
+		Theme:            theme,
+		UI:               ui,
 	}
+}
+
+// SwitchProjectSession switches to project folder dir and selects conversation sessionID.
+func (a *App) SwitchProjectSession(dir string, sessionID string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	if a.settings.UI.Selections == nil {
+		a.settings.UI.Selections = make(map[string]WorkspaceSelection)
+	}
+	a.settings.UI.Selections[abs] = WorkspaceSelection{
+		SessionID: sessionID,
+		TaskID:    "",
+	}
+	_ = SaveSettings(a.settingsPath, a.settings)
+	a.mu.Unlock()
+	return a.OpenWorkspace(abs)
+}
+
+// RemoveProject removes dir from the Sidebar Projects list without deleting files on disk.
+// If dir is currently active and another project exists in Recent, it switches to that project.
+func (a *App) RemoveProject(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	wasActive := a.host.Current() != "" && samePath(a.host.Current(), abs)
+	a.mu.Lock()
+	a.settings.ForgetWorkspace(abs)
+	nextWS := a.settings.LastWorkspace
+	err = SaveSettings(a.settingsPath, a.settings)
+	ctx, shown := a.ctx, a.shown
+	a.mu.Unlock()
+
+	a.host.Remove(abs)
+	if wasActive {
+		if nextWS != "" {
+			_ = a.OpenWorkspace(nextWS)
+		} else if ctx != nil && shown {
+			runtime.WindowReloadApp(ctx)
+		}
+	}
+	return err
+}
+
+// OpenNewWindow launches a separate side-by-side APW Desktop window for dir (or current workspace if empty).
+func (a *App) OpenNewWindow(dir string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	target := strings.TrimSpace(dir)
+	if target == "" {
+		target = a.host.Current()
+	}
+	if target != "" {
+		a.mu.Lock()
+		last := a.settings.LastWorkspace
+		recent := append([]string(nil), a.settings.Recent...)
+		a.mu.Unlock()
+		_ = BootstrapWorkspace(target, append([]string{a.host.Current(), last}, recent...)...)
+		a.mu.Lock()
+		a.settings.RememberWorkspace(target)
+		_ = SaveSettings(a.settingsPath, a.settings)
+		a.mu.Unlock()
+	}
+	cmdArgs := []string{"--new-window"}
+	if target != "" {
+		cmdArgs = append(cmdArgs, target)
+	}
+	cmd := exec.Command(exe, cmdArgs...)
+	if target != "" {
+		cmd.Dir = target
+	}
+	return cmd.Start()
+}
+
+// ChooseWorkspaceNewWindow asks for a project folder and opens it in a new parallel window.
+func (a *App) ChooseWorkspaceNewWindow() error {
+	ctx := a.context()
+	if ctx == nil {
+		return errNotReady
+	}
+	dir, err := runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
+		Title:            "เลือกโฟลเดอร์โปรเจกต์เพื่อเปิดในหน้าต่างใหม่",
+		DefaultDirectory: a.host.Current(),
+	})
+	if err != nil || dir == "" {
+		return err
+	}
+	return a.OpenNewWindow(dir)
 }
 
 // SaveUIPreferences persists panel widths, collapsed cards and per-workspace selection in desktop.json.
@@ -224,8 +335,10 @@ func (a *App) domReady(ctx context.Context) {
 		if saved.Maximised {
 			runtime.WindowMaximise(ctx)
 		}
+		applyWindowIcon()
 	}
 	runtime.WindowShow(ctx)
+	applyWindowIcon()
 	if first {
 		focusWindow()
 		if a.host.Current() != "" {

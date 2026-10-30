@@ -9,6 +9,7 @@
     rightPanelView
   } from "../../lib/stores/settings";
   import { fetchWorkspaceFile } from "../../lib/stores/workspace";
+  import { t } from "../../lib/i18n";
 
   let { job }: { job: TaskJob } = $props();
 
@@ -63,7 +64,7 @@
   {#if !collapsed}
     <div class="body">
       {#if fileDiffs.length === 0}
-        <div class="empty">ไม่มีไฟล์ที่แก้ไขในงานนี้</div>
+        <div class="empty">{$t("No modified files in this task", "ไม่มีไฟล์ที่แก้ไขในงานนี้")}</div>
       {:else}
         {#each fileDiffs as fd (fd.file)}
           <div class="file-block">
@@ -83,7 +84,7 @@
               <button
                 type="button"
                 class="view-file-btn"
-                title="ดูไฟล์เต็ม"
+                title={$t("View full file", "ดูไฟล์เต็ม")}
                 onclick={() => openFullFile(fd.file)}
                 data-testid="view-full-file-btn"
               >

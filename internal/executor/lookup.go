@@ -330,7 +330,11 @@ func (e *Executor) runRead(root string, r readRange) string {
 		fmt.Fprintf(&b, "%d\t%s\n", i, clipLine(lines[i-1]))
 	}
 	if end < len(lines) {
-		fmt.Fprintf(&b, "[file continues to line %d]\n", len(lines))
+		nextEnd := end + lookupMaxReadLines
+		if nextEnd > len(lines) {
+			nextEnd = len(lines)
+		}
+		fmt.Fprintf(&b, "[file continues to line %d; to read next chunk request {\"file\":%q,\"start\":%d,\"end\":%d}]\n", len(lines), filepath.ToSlash(rel), end+1, nextEnd)
 	}
 	return b.String()
 }
@@ -400,7 +404,7 @@ func (e *Executor) codeLookupIn(ctx context.Context, root string, grep []grepQue
 		labels = append(labels, label)
 		block := "\n--- " + label + " ---\n" + result
 		if out.Len()+len(block) > lookupMaxOutput {
-			block = headUTF8(block, lookupMaxOutput-out.Len()) + "\n[lookup output truncated]\n"
+			block = headUTF8(block, lookupMaxOutput-out.Len()) + "\n[lookup output truncated at 32KB; narrow glob/grep pattern or request targeted read start/end ranges]\n"
 		}
 		out.WriteString(block)
 	}

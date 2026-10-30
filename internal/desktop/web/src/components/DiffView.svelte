@@ -9,6 +9,7 @@
   import type { TaskJob } from "../lib/api";
   import { resolvedTheme, selectedDiffFile, rightPanelView } from "../lib/stores/settings";
   import { fetchWorkspaceFile } from "../lib/stores/workspace";
+  import { t } from "../lib/i18n";
 
   let { job }: { job: TaskJob } = $props();
 
@@ -70,12 +71,12 @@
       data-testid="diff-back-btn"
     >
       <ArrowLeft size={13} />
-      <span>กลับ</span>
+      <span>{$t("Back", "กลับ")}</span>
     </button>
 
     <select
       class="file-select mono"
-      aria-label="เลือกไฟล์ Diff"
+      aria-label={$t("Select Diff file", "เลือกไฟล์ Diff")}
       value={currentFile}
       onchange={(e) => selectedDiffFile.set((e.currentTarget as HTMLSelectElement).value)}
       data-testid="diff-file-select"
@@ -86,16 +87,19 @@
     </select>
 
     {#if currentFile}
-      <button type="button" class="full-btn" onclick={onOpenFullFile} title="ดูไฟล์เต็ม">
+      <button type="button" class="full-btn" onclick={onOpenFullFile} title={$t("View full file", "ดูไฟล์เต็ม")}>
         <FileCode2 size={13} />
-        <span>ไฟล์เต็ม</span>
+        <span>{$t("Full File", "ไฟล์เต็ม")}</span>
       </button>
     {/if}
   </div>
 
   {#if exceedsHighlightLimit}
     <div class="plain-banner" data-testid="plain-fallback-banner">
-      Diff มีขนาดเกิน {MAX_HIGHLIGHT_LINES} บรรทัด จึงแสดงผลแบบข้อความธรรมดาเพื่อความรวดเร็ว
+      {$t(
+        `Diff exceeds ${MAX_HIGHLIGHT_LINES} lines; rendered as plain text for performance`,
+        `Diff มีขนาดเกิน ${MAX_HIGHLIGHT_LINES} บรรทัด จึงแสดงผลแบบข้อความธรรมดาเพื่อความรวดเร็ว`
+      )}
     </div>
   {/if}
 
@@ -103,8 +107,8 @@
     {#if !currentDiff || currentDiff.lines.length === 0}
       <div class="empty">
         {job.status === "patching" || job.status === "planning" || job.status === "analyzing" || job.status === "queued"
-          ? "กำลังประมวลผลและสร้าง Diff สำหรับงานนี้…"
-          : "ไม่มีบรรทัด Diff สำหรับไฟล์นี้"}
+          ? $t("Processing and generating Diff for this task…", "กำลังประมวลผลและสร้าง Diff สำหรับงานนี้…")
+          : $t("No Diff lines for this file", "ไม่มีบรรทัด Diff สำหรับไฟล์นี้")}
       </div>
     {:else}
       {#each currentDiff.lines as ln, idx (idx)}

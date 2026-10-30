@@ -14,3 +14,4 @@ func isMinimised(uintptr) bool        { return false }
 func workAreaNear(Rect) (Rect, bool)  { return Rect{}, false }
 func moveWindow(uintptr, Rect)        {}
 func focusWindow()                    {}
+func applyWindowIcon()                {}

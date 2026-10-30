@@ -16,6 +16,9 @@ func prepare(cmd *exec.Cmd, _ Limits) (*processJob, error) {
 	cmd.SysProcAttr.Setpgid = true
 	return &processJob{}, nil
 }
+
+// HideWindow is a no-op on non-Windows platforms.
+func HideWindow(_ *exec.Cmd)                     {}
 func (j *processJob) attach(cmd *exec.Cmd) error { j.pid = cmd.Process.Pid; return nil }
 func (j *processJob) kill(cmd *exec.Cmd) error {
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

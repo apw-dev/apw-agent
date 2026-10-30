@@ -1,17 +1,21 @@
 <script lang="ts">
   import { AlertTriangle } from "lucide-svelte";
   import { conflictBanner } from "../../lib/stores/tasks";
+  import { t } from "../../lib/i18n";
 </script>
 
 {#if $conflictBanner}
   <section class="card conflict" id="artifact-conflict-box" data-testid="conflict-card">
     <div class="hdr">
       <AlertTriangle size={14} />
-      <span>พบข้อขัดแย้งของไฟล์ (Workspace Conflict / Drift)</span>
+      <span>{$t("Workspace Conflict / Drift Detected", "พบข้อขัดแย้งของไฟล์ (Workspace Conflict / Drift)")}</span>
     </div>
     <div class="msg selectable">{$conflictBanner.message}</div>
     <div class="hint">
-      ไฟล์ในโปรเจกต์ถูกแก้ไขหลังจากงานนี้เริ่มต้น กรุณาตรวจสอบ Diff หรือรันงานใหม่บนสถานะไฟล์ล่าสุด
+      {$t(
+        "Project files were modified after this task started. Please inspect the Diff or re-run the task on the latest file state.",
+        "ไฟล์ในโปรเจกต์ถูกแก้ไขหลังจากงานนี้เริ่มต้น กรุณาตรวจสอบ Diff หรือรันงานใหม่บนสถานะไฟล์ล่าสุด"
+      )}
     </div>
   </section>
 {/if}

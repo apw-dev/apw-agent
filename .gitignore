@@ -6,6 +6,7 @@ bin/
 *.dll
 *.so
 *.dylib
+*.syso
 
 # Test and coverage
 *.out

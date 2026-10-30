@@ -7,7 +7,20 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+func TestHideWindowSetsCreateNoWindow(t *testing.T) {
+	cmd := exec.Command("cmd", "/c", "echo", "ok")
+	HideWindow(cmd)
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.HideWindow {
+		t.Fatal("expected HideWindow=true on SysProcAttr")
+	}
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW == 0 {
+		t.Fatal("expected CREATE_NO_WINDOW flag on SysProcAttr.CreationFlags")
+	}
+}
 
 // A descendant that keeps the parent's inherited output pipe open must not turn the parent's
 // normal exit into exec.ErrWaitDelay: Run kills the rest of the tree as soon as the parent exits.

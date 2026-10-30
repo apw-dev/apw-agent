@@ -11,6 +11,7 @@ import (
 
 	"github.com/apiwat/apw-agent/internal/daemon"
 	"github.com/apiwat/apw-agent/internal/executor"
+	"github.com/apiwat/apw-agent/internal/process"
 	"github.com/apiwat/apw-agent/internal/surgeon"
 )
 
@@ -183,6 +184,7 @@ func classifyFileCategory(path string) (category, label string, autoCollapsed bo
 
 func detectCurrentBranch(workspace string) string {
 	cmd := exec.Command("git", "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD")
+	process.HideWindow(cmd)
 	out, err := cmd.Output()
 	if err == nil {
 		b := strings.TrimSpace(string(out))

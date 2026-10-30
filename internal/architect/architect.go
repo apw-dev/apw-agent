@@ -135,6 +135,7 @@ func (p *ExecutionPlan) Validate() error {
 type Architect struct {
 	Provider provider.Provider
 	Model    string
+	OnTrace  func(*core.PromptTrace)
 }
 
 // NewArchitect creates a new Architect
@@ -144,11 +145,17 @@ func NewArchitect(p provider.Provider) *Architect {
 	}
 }
 
-// BuildPlanningPrompt creates a structured prompt for the Architect model
-func BuildPlanningPrompt(task core.Task, codebaseOverview string) string {
-	return fmt.Sprintf(`You are the ARCHITECT in the APW Triad Agent Engine.
+// ArchitectSystemPrompt is the stable system persona and ruleset for the Architect, separated so
+// API providers can cache it with ephemeral prompt caching while CLI/local providers still receive
+// the identical full prompt.
+const ArchitectSystemPrompt = `You are the ARCHITECT in the APW Triad Agent Engine.
 Your mission is to analyze the user task and formulate a structured ExecutionPlan.
 CRITICAL: Do NOT invoke external shell commands, CLI tools, or file readers during this planning query. Rely exclusively on the Codebase Overview provided below, and produce the complete implementation plan for the requested task (never stop at a meta-plan or ask for human confirmation before implementing).
+LANGUAGE POLICY: This base system prompt is in English for optimal reasoning and schema accuracy. The user's Instruction and attached context may be in any language (e.g., Thai or English) and are passed verbatim without translation. Keep all JSON keys, action types, file paths, and code identifiers in English, and write human-facing summary fields ("objective" and subtask "description") in the language of the user's Instruction.`
+
+// BuildPlanningPrompt creates a structured prompt for the Architect model
+func BuildPlanningPrompt(task core.Task, codebaseOverview string) string {
+	return fmt.Sprintf(`%s
 
 User Task:
 Instruction: %s
@@ -195,7 +202,7 @@ Rules:
   "acceptance_criteria": ["..."],
   "checks": [{"criterion":"...","kind":"contains","file":"relative/path/to/file","value":"expected behavior in source"}]
 }
-Respond with ONLY the JSON object, wrapped in a single `+"```json ... ```"+` block.`, task.Instruction, task.Workspace, codebaseOverview)
+Respond with ONLY the JSON object, wrapped in a single `+"```json ... ```"+` block.`, ArchitectSystemPrompt, task.Instruction, task.Workspace, codebaseOverview)
 }
 
 // ParsePlan extracts ExecutionPlan from raw model response
@@ -297,13 +304,51 @@ func (a *Architect) Plan(ctx context.Context, task core.Task, codebaseOverview s
 	}
 
 	prompt := BuildPlanningPrompt(task, codebaseOverview)
+	reqID := fmt.Sprintf("req-%d", time.Now().UnixNano())
 	req := core.ModelRequest{
-		RequestID: fmt.Sprintf("req-%d", time.Now().UnixNano()),
+		RequestID: reqID,
 		Prompt:    prompt,
 		Model:     a.Model,
+		Options:   map[string]string{"cache_ttl": "1h"},
 	}
 
+	if a.OnTrace != nil {
+		a.OnTrace(&core.PromptTrace{
+			RequestID:   reqID,
+			Stage:       "planning",
+			Provider:    a.Provider.Name(),
+			Model:       a.Model,
+			Prompt:      prompt,
+			PromptBytes: len(prompt),
+			Status:      "running",
+			Timestamp:   time.Now(),
+		})
+	}
+
+	started := time.Now()
 	res, err := a.Provider.Ask(ctx, req)
+	if a.OnTrace != nil {
+		tr := &core.PromptTrace{
+			RequestID:   reqID,
+			Stage:       "planning",
+			Provider:    a.Provider.Name(),
+			Model:       a.Model,
+			Prompt:      prompt,
+			PromptBytes: len(prompt),
+			DurationMs:  time.Since(started).Milliseconds(),
+			Timestamp:   time.Now(),
+		}
+		if err != nil {
+			tr.Status = "failed"
+			tr.Error = err.Error()
+		} else if res != nil {
+			tr.Status = "completed"
+			tr.Response = res.Content
+			tr.ResponseBytes = len(res.Content)
+		}
+		a.OnTrace(tr)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("architect planning query failed: %w", err)
 	}

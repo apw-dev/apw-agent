@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -194,6 +195,77 @@ func TestProvider_Ask_ContextCancel(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func TestProvider_Ask_CacheControlAndSystem(t *testing.T) {
+	var capturedBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		capturedBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_cache",
+			"model": "claude-sonnet-4-20250514",
+			"stop_reason": "end_turn",
+			"content": [{"type": "text", "text": "cached ok"}],
+			"usage": {
+				"input_tokens": 120,
+				"output_tokens": 8,
+				"cache_creation_input_tokens": 1100,
+				"cache_read_input_tokens": 900
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	longPrefix := strings.Repeat("codebase context line\n", 80)
+	longSys := strings.Repeat("system rules\n", 100)
+	res, err := p.Ask(context.Background(), core.ModelRequest{
+		RequestID:   "req-cache",
+		System:      longSys,
+		CachePrefix: longPrefix,
+		Prompt:      "Respond with JSON.",
+		Options:     map[string]string{"cache_ttl": "1h", "effort": "medium", "thinking": "adaptive"},
+	})
+	if err != nil {
+		t.Fatalf("Ask failed: %v", err)
+	}
+	if res.Usage == nil || res.Usage.CacheCreationInputTokens != 1100 || res.Usage.CacheReadInputTokens != 900 {
+		t.Fatalf("expected cache token usage, got %+v", res.Usage)
+	}
+	if !strings.Contains(capturedBody, `"cache_control":{"type":"ephemeral","ttl":"1h"}`) {
+		t.Errorf("expected 1h ephemeral cache_control in request body, got: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, `"thinking":{"type":"adaptive"}`) {
+		t.Errorf("expected adaptive thinking in request body, got: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, `"output_config":{"effort":"medium"}`) {
+		t.Errorf("expected effort output_config in request body, got: %s", capturedBody)
+	}
+}
+
+func TestProvider_Ask_429UnifiedRateLimitResetHeader(t *testing.T) {
+	resetUnix := time.Now().Add(45 * time.Minute).Unix()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(resetUnix, 10))
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your rate limit"}}`))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, srv.URL)
+	_, err := p.Ask(context.Background(), core.ModelRequest{
+		RequestID: "req-429-reset",
+		Prompt:    "quota check",
+	})
+	if err == nil {
+		t.Fatal("expected error on 429")
+	}
+	if !strings.Contains(err.Error(), "resets in") || !strings.Contains(err.Error(), "rate_limit_error") {
+		t.Errorf("expected reset duration and error type in error, got: %v", err)
 	}
 }
 

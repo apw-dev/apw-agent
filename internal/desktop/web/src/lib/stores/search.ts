@@ -1,5 +1,6 @@
 import { writable } from "svelte/store";
 import { getAPI, type SearchPayload } from "../api";
+import { tNow } from "../i18n";
 
 export interface MentionCandidate {
   insert: string;
@@ -16,18 +17,91 @@ export interface ActiveToken {
   atEnd: number;
 }
 
-export const SLASH_COMMANDS: Array<{ cmd: string; label: string; meta: string; immediate?: string }> = [
-  { cmd: "/plan ", label: "/plan <คำสั่ง>", meta: "วางแผน ExecutionPlan ก่อนแก้ไขจริง" },
-  { cmd: "/review ", label: "/review <คำสั่ง>", meta: "อ่านและวิเคราะห์โค้ดโดยไม่รันคำสั่ง" },
-  { cmd: "/preview ", label: "/preview <คำสั่ง>", meta: "สร้าง Diff ใน Isolated Worktree" },
-  { cmd: "/verify", label: "/verify", meta: "รันตรวจสอบโค้ดด้วย Reflex Pipeline", immediate: "verify" },
-  { cmd: "/files", label: "/files", meta: "เปิดดูโครงสร้างไฟล์ในโปรเจกต์ (Workspace File Tree)", immediate: "files" },
-  { cmd: "/symbols", label: "/symbols", meta: "เปิดดู AST Symbols ทั้งโปรเจกต์", immediate: "symbols" },
-  { cmd: "/graph", label: "/graph", meta: "เปิดดู Cross-File Call Impact Graph", immediate: "graph" },
-  { cmd: "/board", label: "/board", meta: "เปิดโมดูล Agent Board (Interactive Canvas, Structural Diff & Decision Log)", immediate: "board" },
-  { cmd: "/autonomy", label: "/autonomy", meta: "เปิดมุมมอง Autonomy 24/7 & Skills", immediate: "autonomy" },
-  { cmd: "/settings", label: "/settings", meta: "ตั้งค่าธีม โมเดล และ Sandbox", immediate: "settings" },
-  { cmd: "/new", label: "/new", meta: "เริ่มบทสนทนาใหม่ (Ctrl+N)", immediate: "new" }
+export const SLASH_COMMANDS: Array<{
+  cmd: string;
+  label: string;
+  labelTh?: string;
+  meta: string;
+  metaTh?: string;
+  immediate?: string;
+}> = [
+  {
+    cmd: "/plan ",
+    label: "/plan <instruction>",
+    labelTh: "/plan <คำสั่ง>",
+    meta: "Create an ExecutionPlan before modifying files",
+    metaTh: "วางแผน ExecutionPlan ก่อนแก้ไขจริง"
+  },
+  {
+    cmd: "/review ",
+    label: "/review <instruction>",
+    labelTh: "/review <คำสั่ง>",
+    meta: "Read and analyze code without executing commands",
+    metaTh: "อ่านและวิเคราะห์โค้ดโดยไม่รันคำสั่ง"
+  },
+  {
+    cmd: "/preview ",
+    label: "/preview <instruction>",
+    labelTh: "/preview <คำสั่ง>",
+    meta: "Generate Diff in an Isolated Worktree",
+    metaTh: "สร้าง Diff ใน Isolated Worktree"
+  },
+  {
+    cmd: "/verify",
+    label: "/verify",
+    meta: "Run code verification via Reflex Pipeline",
+    metaTh: "รันตรวจสอบโค้ดด้วย Reflex Pipeline",
+    immediate: "verify"
+  },
+  {
+    cmd: "/files",
+    label: "/files",
+    meta: "Open Workspace File Tree",
+    metaTh: "เปิดดูโครงสร้างไฟล์ในโปรเจกต์ (Workspace File Tree)",
+    immediate: "files"
+  },
+  {
+    cmd: "/symbols",
+    label: "/symbols",
+    meta: "Open Workspace AST Symbols",
+    metaTh: "เปิดดู AST Symbols ทั้งโปรเจกต์",
+    immediate: "symbols"
+  },
+  {
+    cmd: "/graph",
+    label: "/graph",
+    meta: "Open Cross-File Call Impact Graph",
+    metaTh: "เปิดดู Cross-File Call Impact Graph",
+    immediate: "graph"
+  },
+  {
+    cmd: "/board",
+    label: "/board",
+    meta: "Open Agent Board (Interactive Canvas, Structural Diff & Decision Log)",
+    metaTh: "เปิดโมดูล Agent Board (Interactive Canvas, Structural Diff & Decision Log)",
+    immediate: "board"
+  },
+  {
+    cmd: "/autonomy",
+    label: "/autonomy",
+    meta: "Open Autonomy 24/7 & Skills view",
+    metaTh: "เปิดมุมมอง Autonomy 24/7 & Skills",
+    immediate: "autonomy"
+  },
+  {
+    cmd: "/settings",
+    label: "/settings",
+    meta: "Configure Theme, Language, Models & Sandbox",
+    metaTh: "ตั้งค่าธีม ภาษา โมเดล และ Sandbox",
+    immediate: "settings"
+  },
+  {
+    cmd: "/new",
+    label: "/new",
+    meta: "Start a new conversation (Ctrl+N)",
+    metaTh: "เริ่มบทสนทนาใหม่ (Ctrl+N)",
+    immediate: "new"
+  }
 ];
 
 export function parseInstructionSkillPills(raw: string): { skills: string[]; cleanText: string } {
@@ -86,11 +160,14 @@ export async function queryMentionCandidates(
     searchSeq++;
     const q = token.query.toLowerCase();
     const list: MentionCandidate[] = SLASH_COMMANDS.filter(
-      (c) => c.cmd.toLowerCase().includes(q) || c.meta.toLowerCase().includes(q)
+      (c) =>
+        c.cmd.toLowerCase().includes(q) ||
+        c.meta.toLowerCase().includes(q) ||
+        (c.metaTh || "").toLowerCase().includes(q)
     ).map((c) => ({
       insert: c.cmd,
-      display: c.label,
-      meta: c.meta,
+      display: tNow(c.label, c.labelTh || c.label),
+      meta: tNow(c.meta, c.metaTh || c.meta),
       kind: "slash",
       action: c.immediate && onImmediateCommand ? () => onImmediateCommand(c.immediate!) : undefined
     }));

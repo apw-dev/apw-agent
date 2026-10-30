@@ -148,6 +148,37 @@ func mergeDiscovered(cfg *config.Config, statuses []ConnectionStatus) {
 		}
 	}
 
+	// Migrate legacy defunct AGY model IDs (e.g. agy:claude-sonnet-4-6 -> agy:claude-sonnet-5-5-high)
+	if connectedPrefixes["agy:"] {
+		migrateAGYKey := func(k string) string {
+			switch k {
+			case "agy:claude-sonnet-4-6":
+				if activeKeys["agy:claude-sonnet-5-5-high"] {
+					return "agy:claude-sonnet-5-5-high"
+				}
+				if activeKeys["agy:claude-sonnet-5-5-medium"] {
+					return "agy:claude-sonnet-5-5-medium"
+				}
+			case "agy:claude-opus-4-6-thinking", "agy:claude-opus-4-6":
+				if activeKeys["agy:claude-opus-5-5-high"] {
+					return "agy:claude-opus-5-5-high"
+				}
+				if activeKeys["agy:claude-opus-5-5-medium"] {
+					return "agy:claude-opus-5-5-medium"
+				}
+			}
+			return k
+		}
+		cfg.Roles.Architect = migrateAGYKey(cfg.Roles.Architect)
+		cfg.Roles.Reflex = migrateAGYKey(cfg.Roles.Reflex)
+		for i, k := range cfg.Failover.Architect {
+			cfg.Failover.Architect[i] = migrateAGYKey(k)
+		}
+		for i, k := range cfg.Failover.Reflex {
+			cfg.Failover.Reflex[i] = migrateAGYKey(k)
+		}
+	}
+
 	// Prune obsolete provider keys from connected CLI sources (e.g. removed agy:* or chatgpt-sub:*)
 	referenced := map[string]bool{cfg.Roles.Architect: true, cfg.Roles.Reflex: true}
 	for _, key := range append(append([]string{}, cfg.Failover.Reflex...), cfg.Failover.Architect...) {
@@ -199,14 +230,21 @@ func discoverAGY() ConnectionStatus {
 		if line == "" || strings.HasPrefix(strings.ToLower(line), "fetching") {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 2)
-		modelID := strings.TrimSpace(parts[0])
+		var modelID, displayName string
+		if parts := strings.SplitN(line, "\t", 2); len(parts) == 2 {
+			modelID = strings.TrimSpace(parts[0])
+			displayName = strings.TrimSpace(parts[1])
+		} else if fields := strings.Fields(line); len(fields) >= 2 {
+			modelID = fields[0]
+			displayName = strings.TrimSpace(strings.TrimPrefix(line, modelID))
+		} else {
+			modelID = line
+		}
 		if modelID == "" || strings.Contains(modelID, " ") {
 			continue
 		}
-		displayName := modelID
-		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
-			displayName = strings.TrimSpace(parts[1])
+		if displayName == "" {
+			displayName = modelID
 		}
 		provKey := "agy:" + modelID
 		st.Models = append(st.Models, DiscoveredModel{
@@ -258,9 +296,7 @@ func discoverClaude(workspace string) ConnectionStatus {
 					{"claude-sonnet-5-5", "Claude Sonnet 5.5 (Subscription)"},
 					{"claude-opus-5-5", "Claude Opus 5.5 (Subscription)"},
 					{"claude-haiku-5-5", "Claude Haiku 5.5 (Subscription)"},
-					{"claude-sonnet-4-6", "Claude Sonnet 4.6 (Subscription)"},
-					{"claude-opus-4-6", "Claude Opus 4.6 (Subscription)"},
-					{"claude-haiku-4-5-20251001", "Claude Haiku 4.5 (Subscription)"},
+					{"claude-fable-5-1", "Claude Fable 5.1 (Subscription)"},
 				}
 				for _, m := range subModels {
 					st.Models = append(st.Models, DiscoveredModel{
@@ -580,7 +616,7 @@ func readCache(workspace string) ([]ConnectionStatus, bool) {
 	// Invalidate cache immediately if it contains legacy defunct model IDs
 	for _, st := range c.Statuses {
 		for _, m := range st.Models {
-			if strings.Contains(m.ID, "claude-opus-4-6-thinking") {
+			if strings.Contains(m.ID, "claude-opus-4-6") || strings.Contains(m.ID, "claude-sonnet-4-6") || strings.Contains(m.ID, "claude-haiku-4-5") {
 				return nil, false
 			}
 		}

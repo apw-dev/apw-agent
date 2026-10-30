@@ -40,12 +40,18 @@ func prepare(cmd *exec.Cmd, limits Limits) (*processJob, error) {
 			return nil, err
 		}
 	}
+	HideWindow(cmd)
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	return &processJob{handle: h}, nil
+}
+
+// HideWindow prevents Windows from allocating a visible console window for cmd and its descendants.
+func HideWindow(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.HideWindow = true
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
-	return &processJob{handle: h}, nil
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
 }
 func (j *processJob) attach(cmd *exec.Cmd) error {
 	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_INFORMATION|windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid))

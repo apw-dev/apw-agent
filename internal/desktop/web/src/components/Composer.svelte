@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUp, Cpu } from "lucide-svelte";
+  import { ArrowUp, Cpu, Folder, FolderPlus, ChevronDown, Check } from "lucide-svelte";
   import MentionMenu from "./MentionMenu.svelte";
   import {
     composerMode,
@@ -9,6 +9,8 @@
   } from "../lib/stores/tasks";
   import {
     workspaceStatus,
+    activeProjectPath,
+    loadStatus,
     fetchWorkspaceFiles,
     fetchWorkspaceSymbols,
     fetchWorkspaceGraph
@@ -19,8 +21,13 @@
     centerView,
     rightCollapsed,
     rightPanelView,
-    composerDraftText
+    composerDraftText,
+    recentWorkspaces,
+    projectFolders,
+    refreshProjectFolders
   } from "../lib/stores/settings";
+  import { chooseWorkspace, getNativeShellState, inDesktopShell } from "../lib/shell";
+  import { t } from "../lib/i18n";
   import {
     mentionCandidates,
     mentionSelectedIndex,
@@ -36,6 +43,100 @@
   let busy = $state(false);
   let submitError = $state("");
   const activeSkills = $derived(parseInstructionSkillPills(text).skills);
+
+  const currentProjectPath = $derived(
+    $activeProjectPath ||
+      $workspaceStatus?.workspace ||
+      $recentWorkspaces[0] ||
+      $projectFolders.find((p) => p.active)?.path ||
+      $projectFolders[0]?.path ||
+      ""
+  );
+
+  const currentProjectName = $derived.by(() => {
+    if (!currentProjectPath) return "apw-agent";
+    const clean = currentProjectPath.replace(/\\/g, "/").replace(/\/+$/, "");
+    return clean.split("/").pop() || clean;
+  });
+
+  let projectMenuOpen = $state(false);
+  let customProjectInput = $state("");
+
+  function normPath(p?: string): string {
+    return (p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+
+  function folderBaseName(p: string): string {
+    const clean = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return clean.split("/").pop() || clean;
+  }
+
+  const selectableProjects = $derived.by(() => {
+    const map = new Map<string, { path: string; name: string }>();
+    for (const p of $projectFolders || []) {
+      if (p?.path && p.path !== "__current__") {
+        map.set(normPath(p.path), { path: p.path, name: p.name || folderBaseName(p.path) });
+      }
+    }
+    for (const r of $recentWorkspaces || []) {
+      if (r && !map.has(normPath(r))) {
+        map.set(normPath(r), { path: r, name: folderBaseName(r) });
+      }
+    }
+    if (currentProjectPath && !map.has(normPath(currentProjectPath))) {
+      map.set(normPath(currentProjectPath), {
+        path: currentProjectPath,
+        name: folderBaseName(currentProjectPath)
+      });
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+    );
+  });
+
+  const resolvedCustomProjectPath = $derived.by(() => {
+    const raw = customProjectInput.trim();
+    if (!raw) return "";
+    if (raw.includes("\\") || raw.includes("/") || raw.includes(":")) {
+      return raw;
+    }
+    if (currentProjectPath) {
+      const useBackslash = currentProjectPath.includes("\\");
+      const sep = useBackslash ? "\\" : "/";
+      const normalized = currentProjectPath.replace(/[\\/]+$/, "");
+      const lastSep = Math.max(normalized.lastIndexOf("\\"), normalized.lastIndexOf("/"));
+      if (lastSep > 0) {
+        return normalized.slice(0, lastSep) + sep + raw;
+      }
+    }
+    return raw;
+  });
+
+  async function selectProjectFromChip(targetPath: string) {
+    const clean = targetPath.trim();
+    if (!clean) return;
+    projectMenuOpen = false;
+    customProjectInput = "";
+    await createNewConversation(clean);
+  }
+
+  async function handleBrowseNewProject() {
+    projectMenuOpen = false;
+    await chooseWorkspace();
+    const shell = await getNativeShellState();
+    const chosen = shell?.current_workspace || "";
+    if (chosen) {
+      await createNewConversation(chosen);
+    } else {
+      await Promise.all([loadStatus(), refreshProjectFolders()]);
+    }
+  }
+
+  async function handleApplyCustomProjectPath() {
+    const target = resolvedCustomProjectPath.trim();
+    if (!target) return;
+    await selectProjectFromChip(target);
+  }
 
   function removeSkillPill(slug: string) {
     const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -255,8 +356,8 @@
               type="button"
               class="remove-skill-btn"
               onclick={() => removeSkillPill(sk)}
-              aria-label={`ลบ Skill ${sk}`}
-              title={`ลบ Skill ${sk}`}
+              aria-label={$t(`Remove Skill ${sk}`, `ลบ Skill ${sk}`)}
+              title={$t(`Remove Skill ${sk}`, `ลบ Skill ${sk}`)}
             >
               ×
             </button>
@@ -272,14 +373,123 @@
       oninput={onInput}
       onkeydown={onKeyDown}
       rows="2"
-      placeholder="สั่งงาน… ใช้ @ อ้างไฟล์/Skill (@skill:), / สำหรับคำสั่ง (Ctrl+K)"
+      placeholder={$t(
+        "Ask anything… Use @ to mention files/skills (@skill:), / for commands (Ctrl+K)",
+        "สั่งงาน… ใช้ @ อ้างไฟล์/Skill (@skill:), / สำหรับคำสั่ง (Ctrl+K)"
+      )}
       data-testid="composer-input"
     ></textarea>
 
     <div class="toolbar">
+      <div class="project-chip-wrap">
+        <button
+          type="button"
+          class="chip project-chip"
+          onclick={(e) => {
+            e.stopPropagation();
+            projectMenuOpen = !projectMenuOpen;
+          }}
+          title={currentProjectPath
+            ? $t(
+                `Click to switch project or select a new path (${currentProjectPath})`,
+                `คลิกเพื่อเปลี่ยนโปรเจกต์ หรือเลือก Path ใหม่ (${currentProjectPath})`
+              )
+            : $t("Click to select a project", "คลิกเพื่อเลือกโปรเจกต์")}
+          data-testid="composer-project-chip"
+        >
+          <Folder size={12} class="project-chip-icon" />
+          <span class="project-chip-name">{currentProjectName}</span>
+          <ChevronDown size={11} class="project-chip-caret" />
+        </button>
+
+        {#if projectMenuOpen}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="project-menu-backdrop"
+            onclick={() => (projectMenuOpen = false)}
+          ></div>
+          <div class="project-menu" data-testid="composer-project-menu">
+            <div class="project-menu-hdr">{$t("Select project for this conversation", "เลือกโปรเจกต์สำหรับบทสนทนานี้")}</div>
+            <div class="project-menu-list">
+              {#each selectableProjects as proj (proj.path)}
+                {@const isCur = normPath(proj.path) === normPath(currentProjectPath)}
+                <button
+                  type="button"
+                  class="project-menu-item"
+                  class:active={isCur}
+                  onclick={() => void selectProjectFromChip(proj.path)}
+                  title={proj.path}
+                >
+                  <Folder size={13} class="proj-item-icon" />
+                  <div class="proj-item-info">
+                    <span class="proj-item-name">{proj.name}</span>
+                    <span class="proj-item-path mono">{proj.path}</span>
+                  </div>
+                  {#if isCur}
+                    <Check size={13} class="proj-item-check" />
+                  {/if}
+                </button>
+              {/each}
+            </div>
+
+            {#if inDesktopShell()}
+              <button
+                type="button"
+                class="project-browse-btn"
+                onclick={() => void handleBrowseNewProject()}
+                data-testid="composer-browse-project-btn"
+              >
+                <FolderPlus size={13} />
+                <span>{$t("Browse project folder from disk…", "เลือกโฟลเดอร์โปรเจกต์จากเครื่อง… (Browse)")}</span>
+              </button>
+            {/if}
+
+            <div class="project-custom-box">
+              <label class="project-custom-lbl" for="composer-custom-project-input">
+                {$t("Or enter a new project path / folder name:", "หรือระบุ Path / ชื่อโปรเจกต์ใหม่ที่ยังไม่มี:")}
+              </label>
+              <div class="project-custom-row">
+                <input
+                  id="composer-custom-project-input"
+                  type="text"
+                  class="project-custom-input mono"
+                  bind:value={customProjectInput}
+                  placeholder={$t("e.g. D:\\APW_Project\\new-app or folder name", "เช่น D:\\APW_Project\\new-app หรือชื่อโฟลเดอร์ใหม่")}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleApplyCustomProjectPath();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      projectMenuOpen = false;
+                    }
+                  }}
+                  data-testid="composer-custom-project-input"
+                />
+                <button
+                  type="button"
+                  class="project-custom-btn"
+                  disabled={!resolvedCustomProjectPath}
+                  onclick={() => void handleApplyCustomProjectPath()}
+                  data-testid="composer-custom-project-btn"
+                >
+                  {$t("Open / Create", "เปิด/สร้าง")}
+                </button>
+              </div>
+              {#if resolvedCustomProjectPath}
+                <div class="project-custom-preview mono">
+                  Path: {resolvedCustomProjectPath}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </div>
+
       <select
         class="chip"
-        aria-label="โหมดการทำงาน"
+        aria-label={$t("Execution mode", "โหมดการทำงาน")}
         value={$composerMode}
         onchange={(e) => composerMode.set((e.currentTarget as HTMLSelectElement).value as ComposerMode)}
         data-testid="mode-select"
@@ -293,7 +503,7 @@
         type="button"
         class="chip skill-picker-chip mono"
         onclick={triggerSkillPicker}
-        title="เลือกแนบ Skill เข้าคำสั่ง (@skill:)"
+        title={$t("Attach a Skill to instruction (@skill:)", "เลือกแนบ Skill เข้าคำสั่ง (@skill:)")}
         data-testid="skill-picker-btn"
       >
         <span class="skill-icon">&lt;&gt;</span>
@@ -317,7 +527,7 @@
         class="send-btn"
         onclick={onSend}
         disabled={busy || !text.trim()}
-        aria-label="ส่งคำสั่ง"
+        aria-label={$t("Send instruction", "ส่งคำสั่ง")}
         data-testid="composer-send-btn"
       >
         <ArrowUp size={15} />
@@ -394,6 +604,7 @@
     min-height: 44px;
     max-height: 260px;
     border: none;
+    outline: none;
     background: transparent;
     color: var(--text);
     font: inherit;
@@ -401,12 +612,18 @@
     line-height: 1.55;
     overflow-y: hidden;
   }
+  textarea:focus,
+  textarea:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
   textarea::placeholder {
     color: var(--faint);
   }
   .toolbar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 6px;
   }
   .chip {
@@ -423,6 +640,183 @@
   .chip:hover {
     background: var(--hover);
     color: var(--text);
+  }
+  .project-chip-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+  .project-chip {
+    background: var(--panel-subtle);
+    border-color: var(--line-strong);
+    color: var(--text);
+    font-weight: 600;
+    max-width: 210px;
+    cursor: pointer;
+  }
+  .project-chip:hover {
+    border-color: var(--accent);
+  }
+  .project-chip :global(.project-chip-icon) {
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .project-chip :global(.project-chip-caret) {
+    color: var(--faint);
+    flex-shrink: 0;
+  }
+  .project-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .project-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+  }
+  .project-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    width: 340px;
+    max-width: calc(100vw - 48px);
+    background: var(--panel);
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    box-shadow: var(--shadow-md);
+    padding: 8px;
+    z-index: 90;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .project-menu-hdr {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--faint);
+    padding: 2px 6px;
+  }
+  .project-menu-list {
+    max-height: 200px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .project-menu-item {
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .project-menu-item:hover,
+  .project-menu-item.active {
+    background: var(--hover);
+  }
+  .project-menu-item :global(.proj-item-icon) {
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .proj-item-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  .proj-item-name {
+    font-size: 12px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .proj-item-path {
+    font-size: 10.5px;
+    color: var(--faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .project-menu-item :global(.proj-item-check) {
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .project-browse-btn {
+    width: 100%;
+    border: 1px dashed var(--line-strong);
+    background: var(--panel-subtle);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .project-browse-btn:hover {
+    background: var(--hover);
+    border-color: var(--accent);
+  }
+  .project-custom-box {
+    border-top: 1px solid var(--line);
+    padding-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .project-custom-lbl {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 0 2px;
+  }
+  .project-custom-row {
+    display: flex;
+    gap: 5px;
+  }
+  .project-custom-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line-strong);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 11.5px;
+  }
+  .project-custom-input:focus {
+    border-color: var(--accent);
+  }
+  .project-custom-btn {
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-size: 11.5px;
+    font-weight: 600;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .project-custom-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .project-custom-preview {
+    font-size: 10.5px;
+    color: var(--muted);
+    padding: 0 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .model-chip {
     max-width: 340px;

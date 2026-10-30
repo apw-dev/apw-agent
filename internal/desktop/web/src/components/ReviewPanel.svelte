@@ -34,6 +34,7 @@
     fetchWorkspaceSymbols,
     fetchWorkspaceGraph
   } from "../lib/stores/workspace";
+  import { t } from "../lib/i18n";
 
   let busy = $state(false);
   let fullFileContainer = $state<HTMLDivElement | null>(null);
@@ -157,7 +158,7 @@
 </script>
 
 {#if !$rightCollapsed}
-  <aside class="review-panel" aria-label="พาเนลตรวจสอบและรีวิว" data-testid="review-panel">
+  <aside class="review-panel" aria-label={$t("Inspection and review panel", "พาเนลตรวจสอบและรีวิว")} data-testid="review-panel">
     <div class="panel-hdr">
       <span class="title" id="artifact-title">
         {#if $rightPanelView === "files"}
@@ -178,14 +179,14 @@
         type="button"
         class="close-btn"
         onclick={toggleRightPanel}
-        aria-label="ปิดพาเนลขวา"
-        title="ปิดพาเนล (Ctrl+J)"
+        aria-label={$t("Close right panel", "ปิดพาเนลขวา")}
+        title={$t("Close panel (Ctrl+J)", "ปิดพาเนล (Ctrl+J)")}
       >
         <X size={14} />
       </button>
     </div>
 
-    <div class="nav-tabs" role="tablist" aria-label="มุมมองพาเนลขวา">
+    <div class="nav-tabs" role="tablist" aria-label={$t("Right panel views", "มุมมองพาเนลขวา")}>
       <button
         type="button"
         class="nav-tab"
@@ -193,7 +194,7 @@
         onclick={() => rightPanelView.set("cards")}
         data-testid="tab-overview"
       >
-        Overview
+        {$t("Overview", "ภาพรวม")}
       </button>
       <button
         type="button"
@@ -203,7 +204,7 @@
         onclick={() => rightPanelView.set("diff")}
         data-testid="tab-review"
       >
-        Review
+        {$t("Review", "รีวิว Diff")}
       </button>
       <button
         type="button"
@@ -215,7 +216,7 @@
         }}
         data-testid="tab-files"
       >
-        Files
+        {$t("Files", "ไฟล์")}
       </button>
       <button
         type="button"
@@ -263,27 +264,27 @@
             }}
           >
             <ArrowLeft size={13} />
-            <span>{activeFileDiff ? "กลับหน้า Diff" : "Files"}</span>
+            <span>{activeFileDiff ? $t("Back to Diff", "กลับหน้า Diff") : $t("Files", "ไฟล์")}</span>
           </button>
           <span class="mono truncate file-title">
             {$activeFileView.path}{#if $highlightedFileLine}:L{$highlightedFileLine}{/if}
           </span>
-          <span class="ro-pill mono" title="โหมดอ่านและตรวจโค้ดอย่างเดียว (Read-Only)">READ-ONLY</span>
+          <span class="ro-pill mono" title={$t("Read-only code inspection mode", "โหมดอ่านและตรวจโค้ดอย่างเดียว (Read-Only)")}>READ-ONLY</span>
           {#if isMarkdownFile}
             <button type="button" class="jump-btn" onclick={() => (mdPreview = !mdPreview)}>
-              {mdPreview ? "ดูโค้ด & Diff" : "Preview Markdown"}
+              {mdPreview ? $t("View Code & Diff", "ดูโค้ด & Diff") : "Preview Markdown"}
             </button>
           {/if}
           {#if activeFileDiff && !mdPreview}
-            <button type="button" class="jump-btn mono" onclick={scrollToNextChange} title="เลื่อนไปยังบรรทัดที่แก้ไข">
+            <button type="button" class="jump-btn mono" onclick={scrollToNextChange} title={$t("Jump to next changed line", "เลื่อนไปยังบรรทัดที่แก้ไข")}>
               <span class="add">+{activeFileDiff.added}</span>
               <span class="del">−{activeFileDiff.deleted}</span>
-              <span>จุดที่แก้ ↓</span>
+              <span>{$t("Next change ↓", "จุดที่แก้ ↓")}</span>
             </button>
           {/if}
         </div>
         {#if $activeFileView.binary}
-          <div class="empty">ไฟล์ไบนารีไม่สามารถแสดงเป็นข้อความได้</div>
+          <div class="empty">{$t("Binary file cannot be displayed as text", "ไฟล์ไบนารีไม่สามารถแสดงเป็นข้อความได้")}</div>
         {:else if isMarkdownFile && mdPreview}
           <div class="md-file-preview selectable">
             <MarkdownView text={$activeFileView.content} taskId={$selectedTask?.id} />
@@ -311,13 +312,13 @@
         <div class="sub-bar">
           <button type="button" class="back-btn" onclick={() => rightPanelView.set("cards")}>
             <ArrowLeft size={13} />
-            <span>กลับ</span>
+            <span>{$t("Back", "กลับ")}</span>
           </button>
           <span>AST Symbols</span>
         </div>
         <div class="code-box mono selectable">
           {#if $workspaceSymbols.length === 0}
-            <div>ไม่พบ AST Symbols</div>
+            <div>{$t("No AST Symbols found", "ไม่พบ AST Symbols")}</div>
           {:else}
             {#each $workspaceSymbols as f (f.file)}
               <div class="sym-file">=== {f.file} ===</div>
@@ -333,7 +334,7 @@
         <div class="sub-bar">
           <button type="button" class="back-btn" onclick={() => rightPanelView.set("cards")}>
             <ArrowLeft size={13} />
-            <span>กลับ</span>
+            <span>{$t("Back", "กลับ")}</span>
           </button>
           <span>Cross-File Call Impact Graph</span>
         </div>
@@ -363,11 +364,11 @@
       <div class="panel-footer">
         <span class="ver-state" class:ok={$selectedTask.status === "ready_to_apply" || $selectedTask.status === "succeeded"}>
           {#if $selectedTask.status === "ready_to_apply"}
-            ✓ พร้อม apply
+            {$t("✓ Ready to apply", "✓ พร้อม apply")}
           {:else if $selectedTask.status === "succeeded"}
             ✓ Applied
           {:else if $selectedTask.status === "preview_ready"}
-            ✓ Preview พร้อมตรวจทาน
+            {$t("✓ Preview ready for review", "✓ Preview พร้อมตรวจทาน")}
           {:else}
             {$selectedTask.status}
           {/if}

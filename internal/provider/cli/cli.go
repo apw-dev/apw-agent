@@ -37,10 +37,8 @@ type Provider struct {
 var _ provider.Provider = (*Provider)(nil)
 
 // New creates a new CLI-bridged provider for agy, claude-cli, or codex-cli.
+// When timeout <= 0, completion is event/trigger-driven (waiting for the CLI process exit or user cancellation).
 func New(backend BackendType, defaultModel string, timeout time.Duration) *Provider {
-	if timeout <= 0 {
-		timeout = 120 * time.Second
-	}
 	bin := "agy"
 	switch backend {
 	case BackendClaude:
@@ -72,7 +70,14 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 		model = p.defaultModel
 	}
 
-	fullPrompt := strings.TrimSpace(req.Prompt)
+	fullPrompt := strings.TrimSpace(req.EffectivePrompt())
+	if sys := strings.TrimSpace(req.System); sys != "" {
+		if fullPrompt == "" {
+			fullPrompt = sys
+		} else {
+			fullPrompt = sys + "\n\n" + fullPrompt
+		}
+	}
 	if fullPrompt == "" {
 		return nil, errors.New("cli provider: prompt cannot be empty")
 	}
@@ -80,7 +85,11 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 		fullPrompt = "CRITICAL: Do NOT use any tools, commands, or file readers. Act purely as an offline text generator.\n" + fullPrompt
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, p.timeout)
+	runCtx := ctx
+	var cancel context.CancelFunc = func() {}
+	if p.timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, p.timeout)
+	}
 	defer cancel()
 
 	scratch, err := os.MkdirTemp("", "apw-model-")

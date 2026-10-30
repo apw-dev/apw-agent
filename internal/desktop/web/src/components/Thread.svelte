@@ -6,6 +6,7 @@
   import RunConsoleDock from "./RunConsoleDock.svelte";
   import Composer from "./Composer.svelte";
   import { sessionTurns, currentSessionId } from "../lib/stores/sessions";
+  import { t } from "../lib/i18n";
   import type { TurnView, TaskJob } from "../lib/api";
   import {
     tasks,
@@ -155,27 +156,41 @@
   });
 </script>
 
-<main class="thread-view" aria-label="บทสนทนาและงาน">
+<main class="thread-view" aria-label={$t("Conversation and tasks", "บทสนทนาและงาน")}>
   <div class="thread-scroll" id="feed" bind:this={scrollEl} onscroll={onFeedScroll}>
     <div class="col">
       {#if $sessionTurns.length === 0 && visibleTasks.length === 0 && $latestPlans.length === 0}
         <div class="empty-state">
+          <img src="/bee-icon.png" alt="APW Agents" class="empty-bee-logo" />
           <h2>APW Desktop</h2>
-          <p>สั่งงานตรวจสอบ แก้ไข หรือสร้างฟีเจอร์ใหม่ใน Isolated Git Worktree พร้อมตรวจสอบอัตโนมัติ</p>
+          <p>
+            {$t(
+              "Review, edit, or build new features in an Isolated Git Worktree with automated verification.",
+              "สั่งงานตรวจสอบ แก้ไข หรือสร้างฟีเจอร์ใหม่ใน Isolated Git Worktree พร้อมตรวจสอบอัตโนมัติ"
+            )}
+          </p>
           <div class="quick-row">
             <button
               type="button"
               class="q-chip"
-              onclick={() => submitComposerInstruction("ตรวจสอบโครงสร้างโค้ดและสรุปจุดสำคัญ", "review")}
+              onclick={() =>
+                submitComposerInstruction(
+                  $t("Review project architecture and summarize key files", "ตรวจสอบโครงสร้างโค้ดและสรุปจุดสำคัญ"),
+                  "review"
+                )}
             >
-              รีวิวโค้ดในโปรเจกต์
+              {$t("Review Project Code", "รีวิวโค้ดในโปรเจกต์")}
             </button>
             <button
               type="button"
               class="q-chip"
-              onclick={() => submitComposerInstruction("เตรียมการเปลี่ยนแปลงในโหมด Preview", "preview")}
+              onclick={() =>
+                submitComposerInstruction(
+                  $t("Prepare changes in Preview mode", "เตรียมการเปลี่ยนแปลงในโหมด Preview"),
+                  "preview"
+                )}
             >
-              ทดลองสร้าง Preview Diff
+              {$t("Create Preview Diff", "ทดลองสร้าง Preview Diff")}
             </button>
           </div>
         </div>
@@ -216,8 +231,8 @@
         type="button"
         class="scroll-down-btn"
         onclick={() => scrollToBottom(true)}
-        aria-label="เลื่อนลงล่างสุด"
-        title="เลื่อนลงล่างสุด"
+        aria-label={$t("Scroll to bottom", "เลื่อนลงล่างสุด")}
+        title={$t("Scroll to bottom", "เลื่อนลงล่างสุด")}
         data-testid="scroll-down-btn"
       >
         <ArrowDown size={16} />
@@ -289,6 +304,13 @@
     text-align: center;
     max-width: 460px;
     color: var(--muted);
+  }
+  .empty-bee-logo {
+    width: 68px;
+    height: 68px;
+    object-fit: contain;
+    margin: 0 auto 10px;
+    display: block;
   }
   .empty-state h2 {
     margin: 0 0 6px;

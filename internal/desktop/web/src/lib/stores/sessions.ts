@@ -1,14 +1,27 @@
 import { writable, derived, get } from "svelte/store";
 import { getAPI, postAPI, type SessionSummary, type TurnView } from "../api";
-import { workspaceStatus } from "./workspace";
+import { locale, tr, type AppLocale } from "../i18n";
+import { workspaceStatus, activeProjectPath, setActiveProjectPath, loadStatus, loadAutonomy } from "./workspace";
 import {
   getSelectionForWorkspace,
   rememberSelectionForWorkspace,
   centerView,
   rightPanelView,
-  selectedDiffFile
+  selectedDiffFile,
+  recentWorkspaces,
+  projectFolders,
+  refreshProjectFolders
 } from "./settings";
-import { selectedTaskId, latestPlans, conflictBanner, tasks, ACTIVE_TASK_STATUSES } from "./tasks";
+import { openWorkspaceDir } from "../shell";
+import {
+  selectedTaskId,
+  latestPlans,
+  conflictBanner,
+  tasks,
+  ACTIVE_TASK_STATUSES,
+  loadTasks,
+  loadApprovals
+} from "./tasks";
 
 export const sessions = writable<SessionSummary[]>([]);
 export const currentSessionId = writable<string>("");
@@ -20,7 +33,11 @@ export interface SessionGroup {
   items: SessionSummary[];
 }
 
-export function groupSessionsByDay(list: SessionSummary[], now = new Date()): SessionGroup[] {
+export function groupSessionsByDay(
+  list: SessionSummary[],
+  now = new Date(),
+  lang: AppLocale = get(locale)
+): SessionGroup[] {
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const yesterdayStart = todayStart - 86_400_000;
 
@@ -40,13 +57,15 @@ export function groupSessionsByDay(list: SessionSummary[], now = new Date()): Se
   }
 
   const groups: SessionGroup[] = [];
-  if (today.length) groups.push({ label: "วันนี้", items: today });
-  if (yesterday.length) groups.push({ label: "เมื่อวาน", items: yesterday });
-  if (older.length) groups.push({ label: "ก่อนหน้านี้", items: older });
+  if (today.length) groups.push({ label: tr(lang, "Today", "วันนี้"), items: today });
+  if (yesterday.length) groups.push({ label: tr(lang, "Yesterday", "เมื่อวาน"), items: yesterday });
+  if (older.length) groups.push({ label: tr(lang, "Earlier", "ก่อนหน้านี้"), items: older });
   return groups;
 }
 
-export const groupedSessions = derived(sessions, ($sessions) => groupSessionsByDay($sessions));
+export const groupedSessions = derived([sessions, locale], ([$sessions, $locale]) =>
+  groupSessionsByDay($sessions, new Date(), $locale)
+);
 
 export async function loadSessions(): Promise<SessionSummary[]> {
   const res = await getAPI<SessionSummary[]>("/api/sessions");
@@ -97,7 +116,30 @@ export async function selectSession(id: string): Promise<void> {
 
 let explicitNewSessionId = "";
 
-export async function createNewConversation(): Promise<string> {
+function normWsPath(p?: string): string {
+  return (p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+export async function createNewConversation(targetProjectPath?: string): Promise<string> {
+  const prevBackendWs = get(workspaceStatus)?.workspace || "";
+  const explicitTarget =
+    targetProjectPath && targetProjectPath !== "__current__" ? targetProjectPath.trim() : "";
+  const latestProject =
+    explicitTarget ||
+    get(activeProjectPath) ||
+    prevBackendWs ||
+    get(recentWorkspaces)[0] ||
+    get(projectFolders).find((p) => p.active)?.path ||
+    get(projectFolders)[0]?.path ||
+    "";
+
+  const switchedProject =
+    Boolean(latestProject) && normWsPath(latestProject) !== normWsPath(prevBackendWs);
+
+  if (latestProject) {
+    setActiveProjectPath(latestProject);
+  }
+
   const fallbackId = "conv-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   explicitNewSessionId = fallbackId;
   currentSessionId.set(fallbackId);
@@ -108,7 +150,7 @@ export async function createNewConversation(): Promise<string> {
   conflictBanner.set(null);
   rightPanelView.set("cards");
   centerView.set("thread");
-  const ws = get(workspaceStatus)?.workspace || "";
+  const ws = latestProject || prevBackendWs;
   rememberSelectionForWorkspace(ws, { session_id: fallbackId, task_id: "" });
 
   if (typeof document !== "undefined") {
@@ -116,15 +158,30 @@ export async function createNewConversation(): Promise<string> {
     input?.focus();
   }
 
+  if (switchedProject) {
+    await openWorkspaceDir(latestProject);
+  }
+
   const res = await postAPI<{ id: string }>("/api/sessions", {});
   const id = res.ok && res.data?.id ? res.data.id : fallbackId;
   explicitNewSessionId = id;
   if (get(currentSessionId) === fallbackId && get(selectedTaskId) === "") {
     currentSessionId.set(id);
-    const curWs = get(workspaceStatus)?.workspace || ws;
+    const curWs = get(activeProjectPath) || get(workspaceStatus)?.workspace || ws;
     rememberSelectionForWorkspace(curWs, { session_id: id, task_id: "" });
   }
-  await loadSessions();
+  if (switchedProject) {
+    await Promise.all([
+      loadStatus(),
+      loadSessions(),
+      refreshProjectFolders(),
+      loadTasks(),
+      loadApprovals(),
+      loadAutonomy()
+    ]);
+  } else {
+    await Promise.all([loadSessions(), refreshProjectFolders()]);
+  }
   return id;
 }
 
@@ -167,10 +224,14 @@ export async function ensureActiveSession(): Promise<string> {
     const existsOnServer = loaded.some((s) => s.id === saved);
     const hasPending = Boolean(get(localPendingTurns)[saved]?.length);
     const isExplicitNew = saved === explicitNewSessionId;
-    if (existsOnServer || hasPending || isExplicitNew || loaded.length === 0) {
+    if (existsOnServer || hasPending || isExplicitNew) {
       currentSessionId.set(saved);
       rememberSelectionForWorkspace(ws, { session_id: saved });
-      await loadSessionDetail(saved);
+      if (existsOnServer) {
+        await loadSessionDetail(saved);
+      } else if (!hasPending) {
+        sessionTurns.set([]);
+      }
       return saved;
     }
   }

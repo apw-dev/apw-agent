@@ -29,6 +29,8 @@ export interface ProviderOption {
 export interface ModelsPayload {
   architect: string;
   reflex: string;
+  architect_fallbacks?: string[];
+  reflex_fallbacks?: string[];
   approval: string;
   sandbox_mode: string;
   providers: ProviderOption[];
@@ -162,11 +164,41 @@ export interface TaskJob {
   report?: TaskReport;
 }
 
+export interface PromptTrace {
+  request_id: string;
+  stage: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  prompt_bytes?: number;
+  response?: string;
+  response_bytes?: number;
+  status: "running" | "completed" | "failed" | "fallback";
+  error?: string;
+  duration_ms?: number;
+  timestamp?: string;
+}
+
+export interface RouteCandidateInfo {
+  provider_key: string;
+  provider: string;
+  model: string;
+  priority: number;
+  role: "primary" | "fallback" | "architect" | "reflex" | string;
+  status: "ready" | "active" | "paused" | "failed";
+  detail?: string;
+}
+
 export interface TaskEvent {
   seq: number;
   stage: string;
   message: string;
   timestamp?: string;
+  data?: {
+    trace?: PromptTrace;
+    route_candidates?: RouteCandidateInfo[];
+    [key: string]: any;
+  };
 }
 
 export interface ToolApprovalRequest {

@@ -7,7 +7,9 @@ import {
   type ToolApprovalRequest,
   type ApprovalsPayload,
   type ExecutionPlan,
-  type SubagentReport
+  type SubagentReport,
+  type PromptTrace,
+  type RouteCandidateInfo
 } from "../api";
 import { workspaceStatus } from "./workspace";
 import {
@@ -209,6 +211,42 @@ export function extractTaskSubagents(job: TaskJob | null | undefined, events: Ta
     }
   }
   return list;
+}
+
+/**
+ * Extracts prompt traces sent to external AI from real-time events.
+ */
+export function extractTaskPromptTraces(events: TaskEvent[] = []): PromptTrace[] {
+  const traces: PromptTrace[] = [];
+  const byReqId = new Map<string, PromptTrace>();
+
+  for (const ev of events) {
+    const tr = ev.data?.trace;
+    if (tr && tr.request_id) {
+      if (!byReqId.has(tr.request_id)) {
+        const item = { ...tr };
+        byReqId.set(tr.request_id, item);
+        traces.push(item);
+      } else {
+        const existing = byReqId.get(tr.request_id)!;
+        Object.assign(existing, tr);
+      }
+    }
+  }
+  return traces;
+}
+
+/**
+ * Extracts route stack candidates from real-time events.
+ */
+export function extractRouteCandidates(events: TaskEvent[] = []): RouteCandidateInfo[] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const list = events[i].data?.route_candidates;
+    if (list && list.length > 0) {
+      return list;
+    }
+  }
+  return [];
 }
 
 const watchedIds = new Set<string>();

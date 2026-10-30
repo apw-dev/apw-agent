@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/apiwat/apw-agent/internal/auth"
 	"github.com/apiwat/apw-agent/internal/config"
 	"github.com/apiwat/apw-agent/internal/daemon"
 	"github.com/apiwat/apw-agent/internal/transport"
@@ -19,11 +20,13 @@ type providerOption struct {
 }
 
 type modelsPayload struct {
-	Architect   string           `json:"architect"`
-	Reflex      string           `json:"reflex"`
-	Approval    string           `json:"approval"`
-	SandboxMode string           `json:"sandbox_mode"`
-	Providers   []providerOption `json:"providers"`
+	Architect          string           `json:"architect"`
+	Reflex             string           `json:"reflex"`
+	ArchitectFallbacks []string         `json:"architect_fallbacks"`
+	ReflexFallbacks    []string         `json:"reflex_fallbacks"`
+	Approval           string           `json:"approval"`
+	SandboxMode        string           `json:"sandbox_mode"`
+	Providers          []providerOption `json:"providers"`
 }
 
 type telegramChannelPayload struct {
@@ -65,12 +68,22 @@ func buildModelsPayload(cfg *config.Config) modelsPayload {
 	if sandboxMode == "" {
 		sandboxMode = "off"
 	}
+	archFallbacks := append([]string{}, cfg.Failover.Architect...)
+	if archFallbacks == nil {
+		archFallbacks = []string{}
+	}
+	reflexFallbacks := append([]string{}, cfg.Failover.Reflex...)
+	if reflexFallbacks == nil {
+		reflexFallbacks = []string{}
+	}
 	return modelsPayload{
-		Architect:   cfg.Roles.Architect,
-		Reflex:      cfg.Roles.Reflex,
-		Approval:    approval,
-		SandboxMode: sandboxMode,
-		Providers:   providers,
+		Architect:          cfg.Roles.Architect,
+		Reflex:             cfg.Roles.Reflex,
+		ArchitectFallbacks: archFallbacks,
+		ReflexFallbacks:    reflexFallbacks,
+		Approval:           approval,
+		SandboxMode:        sandboxMode,
+		Providers:          providers,
 	}
 }
 
@@ -101,20 +114,29 @@ func resolveCredentialRoot(cfg *config.Config, cfgFile string) string {
 }
 
 func (s *Server) handleGetModels(w http.ResponseWriter, r *http.Request) {
-	cfg, _, err := daemon.LoadConfig(s.ConfigPath)
+	cfg, cfgFile, err := daemon.LoadConfig(s.ConfigPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
 		return
+	}
+	forceRefresh := r.URL.Query().Get("refresh") == "1" || r.URL.Query().Get("refresh") == "true"
+	wsRoot := resolveCredentialRoot(cfg, cfgFile)
+	beforeCount := len(cfg.Providers)
+	auth.SyncConfigWithDiscovered(wsRoot, cfg, forceRefresh)
+	if forceRefresh || len(cfg.Providers) != beforeCount {
+		_ = cfg.Save(cfgFile)
 	}
 	writeJSON(w, buildModelsPayload(cfg))
 }
 
 func (s *Server) handleUpdateModels(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Architect   string `json:"architect,omitempty"`
-		Reflex      string `json:"reflex,omitempty"`
-		Approval    string `json:"approval,omitempty"`
-		SandboxMode string `json:"sandbox_mode,omitempty"`
+		Architect          string    `json:"architect,omitempty"`
+		Reflex             string    `json:"reflex,omitempty"`
+		ArchitectFallbacks *[]string `json:"architect_fallbacks,omitempty"`
+		ReflexFallbacks    *[]string `json:"reflex_fallbacks,omitempty"`
+		Approval           string    `json:"approval,omitempty"`
+		SandboxMode        string    `json:"sandbox_mode,omitempty"`
 	}
 	if err := transport.Decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -130,6 +152,26 @@ func (s *Server) handleUpdateModels(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := strings.TrimSpace(body.Reflex); v != "" {
 		cfg.Roles.Reflex = v
+	}
+	if body.ArchitectFallbacks != nil {
+		var clean []string
+		for _, k := range *body.ArchitectFallbacks {
+			k = strings.TrimSpace(k)
+			if k != "" && k != cfg.Roles.Architect {
+				clean = append(clean, k)
+			}
+		}
+		cfg.Failover.Architect = clean
+	}
+	if body.ReflexFallbacks != nil {
+		var clean []string
+		for _, k := range *body.ReflexFallbacks {
+			k = strings.TrimSpace(k)
+			if k != "" && k != cfg.Roles.Reflex {
+				clean = append(clean, k)
+			}
+		}
+		cfg.Failover.Reflex = clean
 	}
 	if v := strings.TrimSpace(body.Approval); v != "" {
 		cfg.Approval = v

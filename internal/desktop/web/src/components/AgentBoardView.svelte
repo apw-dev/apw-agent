@@ -30,6 +30,7 @@
     type HighlightedCanvasElement
   } from "../lib/board";
   import FlowCanvas from "./FlowCanvas.svelte";
+  import { t } from "../lib/i18n";
 
   type BoardTab = "all" | "canvas" | "diff" | "decisions" | "workflow" | "architecture";
   type DiagramMode = "all" | "sequence" | "xyflow" | "er" | "trace";
@@ -186,7 +187,7 @@
         data-testid="board-back-btn"
       >
         <ArrowLeft size={14} />
-        <span>กลับไปที่บทสนทนา</span>
+        <span>{$t("Back to Conversation", "กลับไปที่บทสนทนา")}</span>
       </button>
 
       <div class="title-block">
@@ -202,7 +203,10 @@
           </span>
         </div>
         <p class="sub">
-          กระดานตรวจโค้ดและแผนภาพแบบ Local-first (Code OSS + Rust AST Diff + MCP Tooling) · คลิกส่วนใดของแผนภาพเพื่อเปิดโค้ดจริงด้านขวา
+          {$t(
+            "Local-first Code & Diagram Review Board (Code OSS + Rust AST Diff + MCP Tooling) · Click any diagram element to jump to live code",
+            "กระดานตรวจโค้ดและแผนภาพแบบ Local-first (Code OSS + Rust AST Diff + MCP Tooling) · คลิกส่วนใดของแผนภาพเพื่อเปิดโค้ดจริงด้านขวา"
+          )}
         </p>
       </div>
     </div>
@@ -216,22 +220,22 @@
         data-testid="board-plugin-btn"
       >
         <Sliders size={13} />
-        <span>Plugin ตั้งค่าแสดงผล</span>
+        <span>{$t("Display Plugins", "Plugin ตั้งค่าแสดงผล")}</span>
       </button>
 
       <button
         type="button"
         class="hdr-btn"
         onclick={copySnapshotLink}
-        title="แชร์รีวิวแบบภาพนิ่ง ณ เวลาปัจจุบัน (Snapshot)"
+        title={$t("Share a point-in-time review snapshot", "แชร์รีวิวแบบภาพนิ่ง ณ เวลาปัจจุบัน (Snapshot)")}
         data-testid="board-snapshot-btn"
       >
         {#if copiedSnapshot}
           <Check size={13} />
-          <span>คัดลอก Snapshot แล้ว</span>
+          <span>{$t("Snapshot Copied", "คัดลอก Snapshot แล้ว")}</span>
         {:else}
           <Share2 size={13} />
-          <span>แชร์ Snapshot</span>
+          <span>{$t("Share Snapshot", "แชร์ Snapshot")}</span>
         {/if}
       </button>
     </div>
@@ -240,25 +244,28 @@
   {#if pluginPanelOpen}
     <section class="plugin-bar" data-testid="board-plugin-panel">
       <div class="plugin-title">
-        <strong>ระบบปลั๊กอินปรับแต่งการแสดงผล (Display Plugin System):</strong>
-        <span class="muted">ปรับแก้ค่าเริ่มต้นของกระดานและหน้าต่างตรวจโค้ดได้ทั้งหมด</span>
+        <strong>{$t("Display Plugin System:", "ระบบปลั๊กอินปรับแต่งการแสดงผล (Display Plugin System):")}</strong>
+        <span class="muted">{$t(
+          "Customize default behavior of the board and structural code review",
+          "ปรับแก้ค่าเริ่มต้นของกระดานและหน้าต่างตรวจโค้ดได้ทั้งหมด"
+        )}</span>
       </div>
       <div class="plugin-toggles">
         <label class="chk">
           <input type="checkbox" bind:checked={pluginConfig.autoCollapseTests} />
-          <span>พับเก็บไฟล์เทสต์ (Tests) อัตโนมัติ</span>
+          <span>{$t("Auto-collapse test files (Tests)", "พับเก็บไฟล์เทสต์ (Tests) อัตโนมัติ")}</span>
         </label>
         <label class="chk">
           <input type="checkbox" bind:checked={pluginConfig.autoCollapseDocs} />
-          <span>พับเก็บไฟล์เอกสาร (Docs) อัตโนมัติ</span>
+          <span>{$t("Auto-collapse documentation files (Docs)", "พับเก็บไฟล์เอกสาร (Docs) อัตโนมัติ")}</span>
         </label>
         <label class="chk">
           <input type="checkbox" bind:checked={pluginConfig.defaultPseudocodeMode} />
-          <span>ย่อฟังก์ชันใหม่เป็น Pseudocode 3 ส่วนเป็นค่าเริ่มต้น</span>
+          <span>{$t("Summarize new functions into 3-step Pseudocode by default", "ย่อฟังก์ชันใหม่เป็น Pseudocode 3 ส่วนเป็นค่าเริ่มต้น")}</span>
         </label>
         <label class="chk">
           <input type="checkbox" bind:checked={pluginConfig.highlightUnpromptedPins} />
-          <span>เน้นหมุดแดงแจ้งเตือนสิ่งที่ Agent ตัดสินใจทำเอง</span>
+          <span>{$t("Highlight Red-Pin alerts for unprompted Agent changes", "เน้นหมุดแดงแจ้งเตือนสิ่งที่ Agent ตัดสินใจทำเอง")}</span>
         </label>
       </div>
     </section>
@@ -267,11 +274,11 @@
   {#if lastBoundJump}
     <div class="binding-banner" data-testid="board-binding-banner">
       <Code2 size={13} />
-      <span>Code-to-Diagram Binding เปิดไฟล์ในพาเนลด้านขวาแล้ว: <strong class="mono">{lastBoundJump}</strong></span>
+      <span>{$t("Code-to-Diagram Binding opened in right panel:", "Code-to-Diagram Binding เปิดไฟล์ในพาเนลด้านขวาแล้ว:")} <strong class="mono">{lastBoundJump}</strong></span>
     </div>
   {/if}
 
-  <nav class="board-tabs" aria-label="หมวดหมู่หลักการและฟีเจอร์ของ Agent Board">
+  <nav class="board-tabs" aria-label={$t("Agent Board sections and pillars", "หมวดหมู่หลักการและฟีเจอร์ของ Agent Board")}>
     <button
       type="button"
       class="tab-btn"
@@ -279,7 +286,7 @@
       onclick={() => (activeTab = "all")}
       data-testid="board-tab-all"
     >
-      ภาพรวมครบทั้ง 5 หลักการ
+      {$t("All 5 Pillars Overview", "ภาพรวมครบทั้ง 5 หลักการ")}
     </button>
     <button
       type="button"
@@ -308,7 +315,7 @@
     >
       3. Decision Log
       {#if unpromptedCount > 0}
-        <span class="pin-count">{unpromptedCount} หมุดแดง</span>
+        <span class="pin-count">{unpromptedCount} {$t("Red Pins", "หมุดแดง")}</span>
       {/if}
     </button>
     <button
@@ -318,7 +325,7 @@
       onclick={() => (activeTab = "workflow")}
       data-testid="board-tab-workflow"
     >
-      4. เวิร์กโฟลว์ & Prompt 3 ขั้น
+      {$t("4. Workflow & 3-Step Prompts", "4. เวิร์กโฟลว์ & Prompt 3 ขั้น")}
     </button>
     <button
       type="button"
@@ -327,7 +334,7 @@
       onclick={() => (activeTab = "architecture")}
       data-testid="board-tab-architecture"
     >
-      5. สถาปัตยกรรม, MCP & Privacy
+      {$t("5. Architecture, MCP & Privacy", "5. สถาปัตยกรรม, MCP & Privacy")}
     </button>
   </nav>
 
@@ -339,16 +346,19 @@
           <div class="sec-hdr">
             <div>
               <span class="sec-eyebrow mono">SPEC 3.1 · INTERACTIVE DIAGRAM CANVAS</span>
-              <h3>กระดานแผนภาพแบบโต้ตอบได้ (คลิกเพื่อเปิดโค้ดจริง · ไฮไลต์เพื่อคัดลอกสั่งแก้)</h3>
+              <h3>{$t(
+                "Interactive Diagram Canvas (Click to jump to live code · Highlight to copy feedback)",
+                "กระดานแผนภาพแบบโต้ตอบได้ (คลิกเพื่อเปิดโค้ดจริง · ไฮไลต์เพื่อคัดลอกสั่งแก้)"
+              )}</h3>
             </div>
-            <div class="pill-group" role="group" aria-label="สลับชนิดแผนภาพ">
+            <div class="pill-group" role="group" aria-label={$t("Switch diagram mode", "สลับชนิดแผนภาพ")}>
               <button
                 type="button"
                 class="pill-btn"
                 class:active={diagramMode === "all"}
                 onclick={() => (diagramMode = "all")}
               >
-                ทั้งหมด
+                {$t("All", "ทั้งหมด")}
               </button>
               <button
                 type="button"
@@ -403,8 +413,14 @@
           {#if diagramMode === "all" || diagramMode === "er"}
             <div class="canvas-block">
               <div class="canvas-block-hdr">
-                <strong>ER Diagram: ความสัมพันธ์ของตารางฐานข้อมูลและโครงสร้างบันทึก Trace</strong>
-                <span class="hint">แสดง Schema และความสัมพันธ์ 1:N พร้อมผูกไฟล์ต้นทาง</span>
+                <strong>{$t(
+                  "ER Diagram: Database Schema & Trace Storage Relationships",
+                  "ER Diagram: ความสัมพันธ์ของตารางฐานข้อมูลและโครงสร้างบันทึก Trace"
+                )}</strong>
+                <span class="hint">{$t(
+                  "Displays schema and 1:N relationships bound to source files",
+                  "แสดง Schema และความสัมพันธ์ 1:N พร้อมผูกไฟล์ต้นทาง"
+                )}</span>
               </div>
 
               <div class="er-grid">
@@ -433,7 +449,9 @@
                             detail: tbl.description
                           })}
                       >
-                        {isSelectedCanvasItem(tbl.id) ? "✓ ไฮไลต์แล้ว" : "+ ไฮไลต์"}
+                        {isSelectedCanvasItem(tbl.id)
+                          ? $t("✓ Highlighted", "✓ ไฮไลต์แล้ว")
+                          : $t("+ Highlight", "+ ไฮไลต์")}
                       </button>
                     </div>
                     <p class="node-desc">{tbl.description}</p>
@@ -455,7 +473,7 @@
                     >
                       <Code2 size={12} />
                       <span>{tbl.file}:L{tbl.line}</span>
-                      <span class="jump-arrow">เปิดโค้ด →</span>
+                      <span class="jump-arrow">{$t("Open Code →", "เปิดโค้ด →")}</span>
                     </button>
                   </div>
                 {/each}
@@ -487,8 +505,14 @@
           {#if diagramMode === "all" || diagramMode === "trace"}
             <div class="canvas-block">
               <div class="canvas-block-hdr">
-                <strong>Trace Notes: โน้ตสรุปจากบันทึกการทำงานและการตัดสินใจของ Agent</strong>
-                <span class="hint">ดึงข้อมูลจาก Trace ของ Agent มาแปะเป็นโน้ตสรุปพร้อมอ้างอิงโค้ด</span>
+                <strong>{$t(
+                  "Trace Notes: Summary Notes from Agent Execution & Decisions",
+                  "Trace Notes: โน้ตสรุปจากบันทึกการทำงานและการตัดสินใจของ Agent"
+                )}</strong>
+                <span class="hint">{$t(
+                  "Extracts Agent trace events into code-bound summary cards",
+                  "ดึงข้อมูลจาก Trace ของ Agent มาแปะเป็นโน้ตสรุปพร้อมอ้างอิงโค้ด"
+                )}</span>
               </div>
 
               <div class="trace-grid">
@@ -514,7 +538,9 @@
                             detail: note.summary
                           })}
                       >
-                        {isSelectedCanvasItem(note.id) ? "✓ ไฮไลต์แล้ว" : "+ ไฮไลต์"}
+                        {isSelectedCanvasItem(note.id)
+                          ? $t("✓ Highlighted", "✓ ไฮไลต์แล้ว")
+                          : $t("+ Highlight", "+ ไฮไลต์")}
                       </button>
                     </div>
                     <div class="node-title">{note.title}</div>
@@ -526,7 +552,7 @@
                     >
                       <Code2 size={12} />
                       <span>{note.file}:L{note.line}</span>
-                      <span class="jump-arrow">เปิดโค้ด →</span>
+                      <span class="jump-arrow">{$t("Open Code →", "เปิดโค้ด →")}</span>
                     </button>
                   </div>
                 {/each}
@@ -538,12 +564,21 @@
           <div class="feedback-dock" data-testid="visual-feedback-dock">
             <div class="feedback-hdr">
               <div>
-                <strong>Visual Feedback Loop (ไฮไลต์ส่วนที่ไม่ชอบเพื่อสั่งแก้):</strong>
+                <strong>{$t(
+                  "Visual Feedback Loop (Highlight elements to request changes):",
+                  "Visual Feedback Loop (ไฮไลต์ส่วนที่ไม่ชอบเพื่อสั่งแก้):"
+                )}</strong>
                 <span class="muted">
                   {#if selectedCanvasItems.length === 0}
-                    กดปุ่ม "+ ไฮไลต์สั่งแก้" บนกล่องแผนภาพด้านบน ระบบจะรวบรวมบริบทและตำแหน่งโค้ดเพื่อคัดลอกไปสั่ง Agent
+                    {$t(
+                      "Click '+ Highlight' on any diagram card above to collect code context and send instructions to the Agent",
+                      "กดปุ่ม \"+ ไฮไลต์สั่งแก้\" บนกล่องแผนภาพด้านบน ระบบจะรวบรวมบริบทและตำแหน่งโค้ดเพื่อคัดลอกไปสั่ง Agent"
+                    )}
                   {:else}
-                    เลือกไว้ {selectedCanvasItems.length} รายการบนกระดาน พร้อมคัดลอกบริบทไปยัง Clipboard
+                    {$t(
+                      `${selectedCanvasItems.length} item(s) selected on board · Ready to copy context to Clipboard`,
+                      `เลือกไว้ ${selectedCanvasItems.length} รายการบนกระดาน พร้อมคัดลอกบริบทไปยัง Clipboard`
+                    )}
                   {/if}
                 </span>
               </div>
@@ -553,7 +588,7 @@
                   class="clear-hl-btn"
                   onclick={() => (selectedCanvasItems = [])}
                 >
-                  ล้างที่เลือก
+                  {$t("Clear selection", "ล้างที่เลือก")}
                 </button>
               {/if}
             </div>
@@ -571,7 +606,10 @@
                 <input
                   type="text"
                   bind:value={feedbackComment}
-                  placeholder="ระบุสิ่งที่ต้องการให้ Agent วาดใหม่หรือปรับดีไซน์ (เว้นว่างเพื่อใช้ข้อความมาตรฐาน)..."
+                  placeholder={$t(
+                    "Describe what the Agent should redraw or refactor (leave blank for default prompt)...",
+                    "ระบุสิ่งที่ต้องการให้ Agent วาดใหม่หรือปรับดีไซน์ (เว้นว่างเพื่อใช้ข้อความมาตรฐาน)..."
+                  )}
                   data-testid="visual-feedback-input"
                 />
                 <button
@@ -582,10 +620,10 @@
                 >
                   {#if copiedFeedback}
                     <Check size={13} />
-                    <span>คัดลอกลง Clipboard แล้ว!</span>
+                    <span>{$t("Copied to Clipboard!", "คัดลอกลง Clipboard แล้ว!")}</span>
                   {:else}
                     <Copy size={13} />
-                    <span>คัดลอกบริบทไปวางสั่งแก้</span>
+                    <span>{$t("Copy Context to Clipboard", "คัดลอกบริบทไปวางสั่งแก้")}</span>
                   {/if}
                 </button>
                 <button
@@ -595,7 +633,7 @@
                   data-testid="send-visual-feedback-btn"
                 >
                   <Send size={13} />
-                  <span>ส่งเข้าช่องแชต Agent</span>
+                  <span>{$t("Send to Agent Composer", "ส่งเข้าช่องแชต Agent")}</span>
                 </button>
               </div>
             {/if}
@@ -609,7 +647,10 @@
           <div class="sec-hdr">
             <div>
               <span class="sec-eyebrow mono">SPEC 3.2 · STRUCTURAL DIFF & PSEUDOCODE</span>
-              <h3>หน้าต่างตรวจโค้ดอัจฉริยะ (แยกแยะ Core / Tests / Docs · ย่อเป็น Pseudocode 3 ส่วน)</h3>
+              <h3>{$t(
+                "Smart Structural Diff (Separates Core / Tests / Docs · 3-Step Pseudocode Summary)",
+                "หน้าต่างตรวจโค้ดอัจฉริยะ (แยกแยะ Core / Tests / Docs · ย่อเป็น Pseudocode 3 ส่วน)"
+              )}</h3>
             </div>
             <span class="engine-pill mono">Rust / AST Structural Diff</span>
           </div>
@@ -627,8 +668,11 @@
                 {:else}
                   <ChevronRight size={14} />
                 {/if}
-                <strong>1. โค้ดหลักและฟังก์ชันใหม่ (Core Logic)</strong>
-                <span class="cat-count mono">{coreDiffItems.length} รายการ · กางแสดง Pseudocode เป็นค่าเริ่มต้น</span>
+                <strong>{$t("1. Core Logic & New Functions", "1. โค้ดหลักและฟังก์ชันใหม่ (Core Logic)")}</strong>
+                <span class="cat-count mono">{coreDiffItems.length} {$t(
+                  "items · Expanded with Pseudocode by default",
+                  "รายการ · กางแสดง Pseudocode เป็นค่าเริ่มต้น"
+                )}</span>
               </button>
             </div>
 
@@ -651,7 +695,9 @@
                           class="mini-btn"
                           onclick={() => toggleRawCode(item.id)}
                         >
-                          {isRawCodeShown(item.id) ? "ดู Pseudocode 3 ส่วน" : "ดูโค้ดจริงย่อ"}
+                          {isRawCodeShown(item.id)
+                            ? $t("View 3-Step Pseudocode", "ดู Pseudocode 3 ส่วน")
+                            : $t("View Raw Code Snippet", "ดูโค้ดจริงย่อ")}
                         </button>
                         <button
                           type="button"
@@ -659,7 +705,7 @@
                           onclick={() => onJumpToCode(item.file, item.start_line, item.symbol)}
                         >
                           <Code2 size={11} />
-                          <span>เปิดโค้ด L{item.start_line} →</span>
+                          <span>{$t("Open Code", "เปิดโค้ด")} L{item.start_line} →</span>
                         </button>
                       </div>
                     </div>
@@ -667,15 +713,15 @@
                     {#if !isRawCodeShown(item.id)}
                       <div class="pseudocode-grid" data-testid={`pseudocode-${item.id}`}>
                         <div class="pseudo-step">
-                          <span class="pseudo-label mono">1. INPUT (รับอะไรเข้ามา)</span>
+                          <span class="pseudo-label mono">{$t("1. INPUT", "1. INPUT (รับอะไรเข้ามา)")}</span>
                           <p>{item.pseudocode.input}</p>
                         </div>
                         <div class="pseudo-step">
-                          <span class="pseudo-label mono">2. PROCESS / VALIDATION (ตรวจและประมวลผลอะไร)</span>
+                          <span class="pseudo-label mono">{$t("2. PROCESS / VALIDATION", "2. PROCESS / VALIDATION (ตรวจและประมวลผลอะไร)")}</span>
                           <p>{item.pseudocode.process}</p>
                         </div>
                         <div class="pseudo-step">
-                          <span class="pseudo-label mono">3. OUTPUT (ส่งอะไรกลับออกไป)</span>
+                          <span class="pseudo-label mono">{$t("3. OUTPUT", "3. OUTPUT (ส่งอะไรกลับออกไป)")}</span>
                           <p>{item.pseudocode.output}</p>
                         </div>
                       </div>
@@ -702,9 +748,14 @@
                 {:else}
                   <ChevronRight size={14} />
                 {/if}
-                <strong>2. ชุดทดสอบ (Tests) · {testDiffItems.length} ไฟล์</strong>
+                <strong>{$t(
+                  `2. Test Suites (Tests) · ${testDiffItems.length} files`,
+                  `2. ชุดทดสอบ (Tests) · ${testDiffItems.length} ไฟล์`
+                )}</strong>
                 <span class="auto-collapse-pill mono">
-                  {categoryExpanded.test ? "กางออกแล้ว" : "+ พับเก็บอัตโนมัติ (คลิก + เพื่อกางดูรายละเอียด)"}
+                  {categoryExpanded.test
+                    ? $t("Expanded", "กางออกแล้ว")
+                    : $t("+ Auto-collapsed (Click + to expand details)", "+ พับเก็บอัตโนมัติ (คลิก + เพื่อกางดูรายละเอียด)")}
                 </span>
               </button>
             </div>
@@ -728,7 +779,7 @@
                         onclick={() => onJumpToCode(item.file, item.start_line, item.symbol)}
                       >
                         <Code2 size={11} />
-                        <span>เปิดไฟล์เทสต์ →</span>
+                        <span>{$t("Open Test File →", "เปิดไฟล์เทสต์ →")}</span>
                       </button>
                     </div>
                     <div class="pseudocode-grid">
@@ -765,9 +816,14 @@
                 {:else}
                   <ChevronRight size={14} />
                 {/if}
-                <strong>3. เอกสาร (Documentation) · {docsDiffItems.length} ไฟล์</strong>
+                <strong>{$t(
+                  `3. Documentation · ${docsDiffItems.length} files`,
+                  `3. เอกสาร (Documentation) · ${docsDiffItems.length} ไฟล์`
+                )}</strong>
                 <span class="auto-collapse-pill mono">
-                  {categoryExpanded.docs ? "กางออกแล้ว" : "+ พับเก็บอัตโนมัติ (คลิก + เพื่อกางดูรายละเอียด)"}
+                  {categoryExpanded.docs
+                    ? $t("Expanded", "กางออกแล้ว")
+                    : $t("+ Auto-collapsed (Click + to expand details)", "+ พับเก็บอัตโนมัติ (คลิก + เพื่อกางดูรายละเอียด)")}
                 </span>
               </button>
             </div>
@@ -788,7 +844,7 @@
                         onclick={() => onJumpToCode(item.file, item.start_line, item.symbol)}
                       >
                         <Code2 size={11} />
-                        <span>เปิดเอกสาร →</span>
+                        <span>{$t("Open Doc →", "เปิดเอกสาร →")}</span>
                       </button>
                     </div>
                     <div class="pseudocode-grid">
@@ -819,16 +875,19 @@
           <div class="sec-hdr">
             <div>
               <span class="sec-eyebrow mono">SPEC 3.3 · DECISION LOG & UNPROMPTED CHANGE DETECTOR</span>
-              <h3>ระบบบันทึกการตัดสินใจ (แยก "สิ่งที่ผู้ใช้สั่ง" กับ "สิ่งที่ Agent ตัดสินใจทำไปเองโดยไม่ได้ถาม")</h3>
+              <h3>{$t(
+                "Decision Log (Separates User-Requested Actions vs. Unprompted Agent Decisions)",
+                "ระบบบันทึกการตัดสินใจ (แยก \"สิ่งที่ผู้ใช้สั่ง\" กับ \"สิ่งที่ Agent ตัดสินใจทำไปเองโดยไม่ได้ถาม\")"
+              )}</h3>
             </div>
-            <div class="pill-group" role="group" aria-label="ตัวกรอง Decision Log">
+            <div class="pill-group" role="group" aria-label={$t("Decision Log filter", "ตัวกรอง Decision Log")}>
               <button
                 type="button"
                 class="pill-btn"
                 class:active={decisionFilter === "all"}
                 onclick={() => (decisionFilter = "all")}
               >
-                ทั้งหมด ({board.decision_log.length})
+                {$t("All", "ทั้งหมด")} ({board.decision_log.length})
               </button>
               <button
                 type="button"
@@ -837,7 +896,7 @@
                 onclick={() => (decisionFilter = "unprompted")}
                 data-testid="filter-unprompted-btn"
               >
-                หมุดแดง: ตัดสินใจเอง ({unpromptedCount})
+                {$t("Red Pins: Unprompted", "หมุดแดง: ตัดสินใจเอง")} ({unpromptedCount})
               </button>
               <button
                 type="button"
@@ -845,7 +904,7 @@
                 class:active={decisionFilter === "requested"}
                 onclick={() => (decisionFilter = "requested")}
               >
-                ตามคำสั่งผู้ใช้
+                {$t("User Requested", "ตามคำสั่งผู้ใช้")}
               </button>
             </div>
           </div>
@@ -862,10 +921,10 @@
                     {#if dec.pinned_alert}
                       <span class="red-pin-badge" data-testid="red-pin-indicator">
                         <AlertTriangle size={12} />
-                        <span>ปักหมุดสีแดง · Agent ตัดสินใจทำเพิ่มเองโดยไม่ได้ถาม</span>
+                        <span>{$t("Red Pin · Agent decided without asking", "ปักหมุดสีแดง · Agent ตัดสินใจทำเพิ่มเองโดยไม่ได้ถาม")}</span>
                       </span>
                     {:else}
-                      <span class="req-pin-badge">✓ ตรงตามคำสั่งผู้ใช้</span>
+                      <span class="req-pin-badge">{$t("✓ Matches user instruction", "✓ ตรงตามคำสั่งผู้ใช้")}</span>
                     {/if}
                     <strong class="dec-title">{dec.title}</strong>
                   </div>
@@ -877,21 +936,21 @@
                     data-testid={`decision-jump-${dec.id}`}
                   >
                     <Code2 size={11} />
-                    <span>เปิดดูโค้ด/Diff ({dec.file}:L{dec.line}) →</span>
+                    <span>{$t("Open Code/Diff", "เปิดดูโค้ด/Diff")} ({dec.file}:L{dec.line}) →</span>
                   </button>
                 </div>
 
                 <div class="dec-compare-grid">
                   <div class="dec-col">
-                    <span class="dec-label">สิ่งที่ผู้ใช้สั่ง (User Instruction):</span>
+                    <span class="dec-label">{$t("User Instruction:", "สิ่งที่ผู้ใช้สั่ง (User Instruction):")}</span>
                     <p>{dec.user_requested}</p>
                   </div>
                   <div class="dec-col">
-                    <span class="dec-label">สิ่งที่ Agent ตัดสินใจทำใน Trace:</span>
+                    <span class="dec-label">{$t("Agent Decision in Trace:", "สิ่งที่ Agent ตัดสินใจทำใน Trace:")}</span>
                     <p>{dec.agent_decision}</p>
                   </div>
                   <div class="dec-col">
-                    <span class="dec-label">เหตุผลเบื้องหลัง (Trace Rationale):</span>
+                    <span class="dec-label">{$t("Trace Rationale:", "เหตุผลเบื้องหลัง (Trace Rationale):")}</span>
                     <p>{dec.rationale}</p>
                   </div>
                 </div>
@@ -907,18 +966,27 @@
           <div class="sec-hdr">
             <div>
               <span class="sec-eyebrow mono">SPEC 4 · READ-ONLY WORKFLOW & STANDARDIZED PROMPT TEMPLATES</span>
-              <h3>เวิร์กโฟลว์รีวิวระดับ Branch & โครงสร้าง Prompt มาตรฐาน 3 ลำดับขั้น</h3>
+              <h3>{$t(
+                "Branch-Level Review Workflow & Standardized 3-Step Prompt Templates",
+                "เวิร์กโฟลว์รีวิวระดับ Branch & โครงสร้าง Prompt มาตรฐาน 3 ลำดับขั้น"
+              )}</h3>
             </div>
           </div>
 
           <div class="workflow-banner">
             <div class="wf-item">
-              <strong>1. โหมด Read-Only (อ่านและตรวจโค้ดโดยเฉพาะ)</strong>
-              <p>ไม่อนุญาตให้แก้ไขไฟล์โค้ดโดยตรงบนกระดาน หากต้องการแก้โค้ดให้ไฮไลต์สั่งผ่าน Agent หรือกลับไปแก้ใน IDE ตัวเดิม</p>
+              <strong>{$t("1. Read-Only Review Mode", "1. โหมด Read-Only (อ่านและตรวจโค้ดโดยเฉพาะ)")}</strong>
+              <p>{$t(
+                "Direct code editing on the board is disabled. Highlight elements to instruct the Agent or edit in your IDE.",
+                "ไม่อนุญาตให้แก้ไขไฟล์โค้ดโดยตรงบนกระดาน หากต้องการแก้โค้ดให้ไฮไลต์สั่งผ่าน Agent หรือกลับไปแก้ใน IDE ตัวเดิม"
+              )}</p>
             </div>
             <div class="wf-item">
-              <strong>2. การรีวิวระดับกิ่งงาน (Branch Review vs main)</strong>
-              <p>เปรียบเทียบกิ่งงาน (<span class="mono">{board.architecture.current_branch}</span>) ที่ Agent เพิ่งทำเสร็จ เทียบกับกิ่งหลัก (<span class="mono">{board.architecture.base_branch}</span>) ก่อนตัดสินใจกด Apply / Merge</p>
+              <strong>{$t("2. Branch Review vs Base", "2. การรีวิวระดับกิ่งงาน (Branch Review vs main)")}</strong>
+              <p>{$t("Compare working branch", "เปรียบเทียบกิ่งงาน")} (<span class="mono">{board.architecture.current_branch}</span>) {$t(
+                "against base branch",
+                "ที่ Agent เพิ่งทำเสร็จ เทียบกับกิ่งหลัก"
+              )} (<span class="mono">{board.architecture.base_branch}</span>) {$t("before applying or merging.", "ก่อนตัดสินใจกด Apply / Merge")}</p>
             </div>
           </div>
 
@@ -951,10 +1019,10 @@
                   >
                     {#if copiedTemplateId === tpl.id}
                       <Check size={13} />
-                      <span>คัดลอก Prompt แล้ว</span>
+                      <span>{$t("Prompt Copied", "คัดลอก Prompt แล้ว")}</span>
                     {:else}
                       <Copy size={13} />
-                      <span>คัดลอก Prompt มาตรฐาน</span>
+                      <span>{$t("Copy Standard Prompt", "คัดลอก Prompt มาตรฐาน")}</span>
                     {/if}
                   </button>
                   <button
@@ -964,7 +1032,7 @@
                     data-testid={`use-tpl-${tpl.id}`}
                   >
                     <Send size={13} />
-                    <span>นำไฟใช้ในช่องแชต Agent</span>
+                    <span>{$t("Use in Agent Composer", "นำไฟใช้ในช่องแชต Agent")}</span>
                   </button>
                 </div>
               </div>
@@ -979,7 +1047,10 @@
           <div class="sec-hdr">
             <div>
               <span class="sec-eyebrow mono">SPEC 1, 2 & 5 · ARCHITECTURE, MCP TOOLING & PRIVACY CONSTRAINTS</span>
-              <h3>สถาปัตยกรรมหลัก, การเชื่อมต่อ AI Agent (MCP) และความเป็นส่วนตัว</h3>
+              <h3>{$t(
+                "Core Architecture, AI Agent Integration (MCP) & Privacy",
+                "สถาปัตยกรรมหลัก, การเชื่อมต่อ AI Agent (MCP) และความเป็นส่วนตัว"
+              )}</h3>
             </div>
           </div>
 
@@ -987,27 +1058,27 @@
             <div class="arch-card">
               <div class="arch-card-hdr">
                 <Layers size={15} />
-                <strong>1. สถาปัตยกรรมหลัก (Core Architecture & Tech Stack)</strong>
+                <strong>{$t("1. Core Architecture & Tech Stack", "1. สถาปัตยกรรมหลัก (Core Architecture & Tech Stack)")}</strong>
               </div>
               <ul class="arch-list">
-                <li><strong>ประเภทแอปพลิเคชัน:</strong> {board.architecture.app_type} ({board.architecture.license}) ประมวลผลในเครื่องผู้ใช้ 100%</li>
-                <li><strong>ฐานของระบบ (Core Base):</strong> {board.architecture.core_base} รองรับคีย์ลัดชุดเดียวกับ VS Code และการกดกระโดดไปดูจุดประกาศฟังก์ชัน (Go to Definition)</li>
-                <li><strong>ระบบประมวลผล Diff:</strong> {board.architecture.diff_engine}</li>
-                <li><strong>ระบบปลั๊กอิน:</strong> {board.architecture.plugin_system}</li>
-                <li><strong>ระบบปฏิบัติการที่รองรับ:</strong> {board.architecture.supported_os.join(" · ")}</li>
+                <li><strong>{$t("Application Type:", "ประเภทแอปพลิเคชัน:")}</strong> {board.architecture.app_type} ({board.architecture.license}) · {$t("100% Local Execution", "ประมวลผลในเครื่องผู้ใช้ 100%")}</li>
+                <li><strong>{$t("Core Base:", "ฐานของระบบ (Core Base):")}</strong> {board.architecture.core_base} · {$t("Supports VS Code keybindings and Go to Definition", "รองรับคีย์ลัดชุดเดียวกับ VS Code และการกดกระโดดไปดูจุดประกาศฟังก์ชัน (Go to Definition)")}</li>
+                <li><strong>{$t("Diff Engine:", "ระบบประมวลผล Diff:")}</strong> {board.architecture.diff_engine}</li>
+                <li><strong>{$t("Plugin System:", "ระบบปลั๊กอิน:")}</strong> {board.architecture.plugin_system}</li>
+                <li><strong>{$t("Supported OS:", "ระบบปฏิบัติการที่รองรับ:")}</strong> {board.architecture.supported_os.join(" · ")}</li>
               </ul>
             </div>
 
             <div class="arch-card">
               <div class="arch-card-hdr">
                 <Cpu size={15} />
-                <strong>2. การเชื่อมต่อกับ AI Agent (Tooling / MCP Integration)</strong>
+                <strong>{$t("2. AI Agent Connection (Tooling / MCP Integration)", "2. การเชื่อมต่อกับ AI Agent (Tooling / MCP Integration)")}</strong>
               </div>
               <ul class="arch-list">
-                <li><strong>รูปแบบการทำงาน:</strong> {board.architecture.integration_mode} ทำหน้าที่เป็นเครื่องมือวาดแผนภาพและอธิบายงานบนกระดานโดยไม่ต้องสร้าง Agent ใหม่มาแข่ง</li>
-                <li><strong>โมเดลที่แนะนำ (สมดุลความฉลาด ราคา ความเร็ว):</strong> <span class="mono">{board.architecture.recommended_models.join(", ")}</span></li>
-                <li><strong>โมเดลที่เชื่อมต่อใน Workspace ปัจจุบัน:</strong> Architect (<span class="mono">{board.architecture.active_architect}</span>) · Reflex (<span class="mono">{board.architecture.active_reflex}</span>)</li>
-                <li><strong>การเข้าถึง Trace:</strong> เปิดให้ Agent ค้นหาและดึงข้อมูลจากบันทึกการทำงาน (Trace) ของตัวเองมาอ้างอิงบนกระดานได้โดยตรง</li>
+                <li><strong>{$t("Integration Mode:", "รูปแบบการทำงาน:")}</strong> {board.architecture.integration_mode} · {$t("Acts as a visual diagramming & code-review tool without competing agents", "ทำหน้าที่เป็นเครื่องมือวาดแผนภาพและอธิบายงานบนกระดานโดยไม่ต้องสร้าง Agent ใหม่มาแข่ง")}</li>
+                <li><strong>{$t("Recommended Models:", "โมเดลที่แนะนำ (สมดุลความฉลาด ราคา ความเร็ว):")}</strong> <span class="mono">{board.architecture.recommended_models.join(", ")}</span></li>
+                <li><strong>{$t("Active Workspace Models:", "โมเดลที่เชื่อมต่อใน Workspace ปัจจุบัน:")}</strong> Architect (<span class="mono">{board.architecture.active_architect}</span>) · Reflex (<span class="mono">{board.architecture.active_reflex}</span>)</li>
+                <li><strong>{$t("Trace Access:", "การเข้าถึง Trace:")}</strong> {$t("Allows the Agent to query its own execution trace and reference it directly on the board", "เปิดให้ Agent ค้นหาและดึงข้อมูลจากบันทึกการทำงาน (Trace) ของตัวเองมาอ้างอิงบนกระดานได้โดยตรง")}</li>
               </ul>
             </div>
           </div>
@@ -1017,8 +1088,14 @@
               <div class="privacy-title">
                 <ShieldCheck size={16} />
                 <div>
-                  <strong>5. ระบบความเป็นส่วนตัว (Telemetry Redaction) และข้อจำกัดรุ่น Beta</strong>
-                  <p class="muted">กรองข้อมูลสำคัญออกทั้งหมด และมีสวิตช์ให้ผู้ใช้กดปิดการส่งข้อมูลได้ตลอดเวลา</p>
+                  <strong>{$t(
+                    "5. Privacy (Telemetry Redaction) & Beta Constraints",
+                    "5. ระบบความเป็นส่วนตัว (Telemetry Redaction) และข้อจำกัดรุ่น Beta"
+                  )}</strong>
+                  <p class="muted">{$t(
+                    "Redacts all sensitive data with an opt-out switch available at all times",
+                    "กรองข้อมูลสำคัญออกทั้งหมด และมีสวิตช์ให้ผู้ใช้กดปิดการส่งข้อมูลได้ตลอดเวลา"
+                  )}</p>
                 </div>
               </div>
 
@@ -1029,23 +1106,25 @@
                   data-testid="telemetry-switch-input"
                 />
                 <span class="mono">
-                  Telemetry: {telemetryEnabled ? "ON (เฉพาะสถานะระบบ ไม่ส่งโค้ด)" : "OFF (ปิดการส่งข้อมูลทั้งหมด)"}
+                  Telemetry: {telemetryEnabled
+                    ? $t("ON (System status only, no code)", "ON (เฉพาะสถานะระบบ ไม่ส่งโค้ด)")
+                    : $t("OFF (All telemetry disabled)", "OFF (ปิดการส่งข้อมูลทั้งหมด)")}
                 </span>
               </label>
             </div>
 
             <div class="privacy-cols">
               <div class="priv-col">
-                <span class="priv-sub">รายการข้อมูลที่ห้ามส่งออกนอกเครื่องโดยเด็ดขาด (Strictly Redacted):</span>
+                <span class="priv-sub">{$t("Strictly Redacted Fields:", "รายการข้อมูลที่ห้ามส่งออกนอกเครื่องโดยเด็ดขาด (Strictly Redacted):")}</span>
                 <div class="redacted-chips">
                   {#each board.privacy.redacted_fields as field (field)}
-                    <span class="redacted-chip mono">✕ ห้ามส่ง: {field}</span>
+                    <span class="redacted-chip mono">{$t("✕ Redacted:", "✕ ห้ามส่ง:")} {field}</span>
                   {/each}
                 </div>
               </div>
 
               <div class="priv-col">
-                <span class="priv-sub">ข้อจำกัดทางเทคนิคในรุ่นปัจจุบัน (Beta Constraints):</span>
+                <span class="priv-sub">{$t("Beta Technical Constraints:", "ข้อจำกัดทางเทคนิคในรุ่นปัจจุบัน (Beta Constraints):")}</span>
                 <ul class="constraint-list">
                   {#each board.privacy.beta_constraints as c (c)}
                     <li>{c}</li>

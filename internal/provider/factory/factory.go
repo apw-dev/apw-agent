@@ -17,26 +17,20 @@ import (
 )
 
 // New instantiates a provider.Provider from a ProviderConfig.
+// CLI subscription providers (agy, claude-cli, codex-cli) are event/trigger-driven (timeout=0):
+// they wait for the OS process exit trigger or user cancellation rather than killing deep AI thinking mid-stream.
 func New(cfg config.ProviderConfig) (provider.Provider, error) {
-	timeout := time.Duration(cfg.TimeoutSec) * time.Second
-	if timeout <= 0 {
-		timeout = 300 * time.Second
-	} else if (cfg.Type == config.ProviderClaudeCLI || cfg.Type == config.ProviderCodexCLI) && timeout < 300*time.Second {
-		// CLI subscription providers frequently execute deep reasoning models (e.g. Claude Opus 5.5 High, Codex)
-		// which require at least 300s to avoid getting killed mid-stream during deep planning.
-		timeout = 300 * time.Second
-	}
 	switch cfg.Type {
 	case config.ProviderAPI:
 		return api.New(cfg)
 	case config.ProviderOpenAI, config.ProviderLocal:
 		return local.New(cfg)
 	case config.ProviderAGY:
-		return cli.New(cli.BackendAGY, cfg.Model, timeout), nil
+		return cli.New(cli.BackendAGY, cfg.Model, 0), nil
 	case config.ProviderClaudeCLI:
-		return cli.New(cli.BackendClaude, cfg.Model, timeout), nil
+		return cli.New(cli.BackendClaude, cfg.Model, 0), nil
 	case config.ProviderCodexCLI:
-		return cli.New(cli.BackendCodex, cfg.Model, timeout), nil
+		return cli.New(cli.BackendCodex, cfg.Model, 0), nil
 	case config.ProviderMock:
 		return &builtinEngineProvider{model: cfg.Model}, nil
 	default:

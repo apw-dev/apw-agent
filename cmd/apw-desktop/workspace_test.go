@@ -184,3 +184,74 @@ func TestBootstrapWorkspaceDoesNotTrustNewFolders(t *testing.T) {
 		t.Fatalf("existing trust lost: %+v %v", cfg, err)
 	}
 }
+
+func TestWorkspaceHostKeepsMultipleWorkspacesAlive(t *testing.T) {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	writeConfig(t, dirA)
+	writeConfig(t, dirB)
+	h := NewWorkspaceHost()
+
+	if err := h.Open(dirA); err != nil {
+		t.Fatal(err)
+	}
+	indexA1 := inProcessGet(t, h, "/").Body.String()
+
+	if err := h.Open(dirB); err != nil {
+		t.Fatal(err)
+	}
+	indexB := inProcessGet(t, h, "/").Body.String()
+	// Shared host token allows in-place project switching without reloading the WebView.
+	if indexA1 != indexB {
+		t.Fatal("expected shared session token across workspaces in the same WorkspaceHost")
+	}
+
+	// Switching back to dirA should reuse the existing server.
+	if err := h.Open(dirA); err != nil {
+		t.Fatal(err)
+	}
+	if h.Current() != dirA {
+		t.Fatalf("Current = %q, want %q", h.Current(), dirA)
+	}
+}
+
+func TestListProjectFoldersAndNewWindowArgs(t *testing.T) {
+	root := t.TempDir()
+	dirA := filepath.Join(root, "alpha-proj")
+	dirEmpty := filepath.Join(root, "beta-proj")
+	sessDir := filepath.Join(dirA, ".apw", "sessions")
+	if err := os.MkdirAll(sessDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dirEmpty, ".apw", "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sessJSON := `{"id":"sess-1","owner":"local","conversation":"conv-1","updated_at":"2026-10-28T10:00:00Z","history":[{"instruction":"Refactor pipeline"}]}`
+	if err := os.WriteFile(filepath.Join(sessDir, "sess-1.json"), []byte(sessJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projects := ListProjectFolders(dirA, []string{dirEmpty, dirA})
+	if len(projects) != 2 || !projects[0].Active || len(projects[0].Sessions) != 1 {
+		t.Fatalf("unexpected projects: %+v", projects)
+	}
+	if projects[1].Sessions == nil {
+		t.Fatal("expected non-nil empty Sessions slice for folder with empty .apw/sessions")
+	}
+	if projects[0].Sessions[0].Title != "Refactor pipeline" {
+		t.Fatalf("unexpected session title: %+v", projects[0].Sessions[0])
+	}
+	// Switching active workspace to dirEmpty must NOT reorder the project folders.
+	projectsSwitched := ListProjectFolders(dirEmpty, []string{dirEmpty, dirA})
+	if projectsSwitched[0].Path != projects[0].Path || projectsSwitched[1].Path != projects[1].Path {
+		t.Fatalf("folder order jumped after switching workspace: %v vs %v", projects, projectsSwitched)
+	}
+	if projectsSwitched[0].Active || !projectsSwitched[1].Active {
+		t.Fatalf("active flag not updated in place: %+v", projectsSwitched)
+	}
+
+	if !NewWindowRequested([]string{"--new-window", dirA}) {
+		t.Fatal("expected NewWindowRequested=true for --new-window")
+	}
+	if got := WorkspaceArg([]string{"--new-window", dirA}); got != filepath.Clean(dirA) {
+		t.Fatalf("WorkspaceArg with --new-window = %q, want %q", got, filepath.Clean(dirA))
+	}
+}

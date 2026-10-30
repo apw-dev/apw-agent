@@ -76,8 +76,20 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		first := ""
 		last := ""
 		if n := len(sess.History); n > 0 {
-			first = sess.History[0].Instruction
-			last = sess.History[n-1].Instruction
+			for _, turn := range sess.History {
+				cand := strings.TrimSpace(turn.Instruction)
+				if cand != "" && cand != "." {
+					first = cand
+					break
+				}
+			}
+			for i := n - 1; i >= 0; i-- {
+				cand := strings.TrimSpace(sess.History[i].Instruction)
+				if cand != "" && cand != "." {
+					last = cand
+					break
+				}
+			}
 		}
 		out = append(out, sessionSummary{
 			ID:               sess.Conversation,

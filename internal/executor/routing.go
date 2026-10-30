@@ -50,11 +50,11 @@ func candidateGroup(c FailoverCandidate) string {
 	return c.Provider.Name()
 }
 
-var resetDurationPattern = regexp.MustCompile(`(?i)(?:resets?|refreshes?) in\s+([0-9]+(?:\.[0-9]+)?[hms](?:\s*[0-9]+(?:\.[0-9]+)?[hms])*)`)
+var resetDurationPattern = regexp.MustCompile(`(?i)(?:resets?|refreshes?|retry[- ]after) in\s+([0-9]+(?:\.[0-9]+)?[hms](?:\s*[0-9]+(?:\.[0-9]+)?[hms])*)`)
 
 func quotaFailure(err error) bool {
 	m := strings.ToLower(err.Error())
-	return strings.Contains(m, "quota") || strings.Contains(m, "insufficient_quota") || strings.Contains(m, "credit")
+	return strings.Contains(m, "quota") || strings.Contains(m, "insufficient_quota") || strings.Contains(m, "credit") || strings.Contains(m, "rate_limit_error") || strings.Contains(m, "429")
 }
 
 func quotaCooldown(err error) time.Duration {
@@ -97,12 +97,12 @@ func (e *Executor) directiveCandidates() []FailoverCandidate {
 	return result
 }
 
-// scaledTimeout lengthens the per-candidate directive timeout (default 90s) with the request size:
-// a large file or context takes longer to read and to answer. Each 16 KiB beyond the first adds
-// 30 seconds, up to 5 minutes; a configured timeout above that cap is kept as is.
+// scaledTimeout lengthens an explicitly configured per-candidate directive timeout with the request size:
+// a large file or context takes longer to read and to answer. When base <= 0 (default), it returns 0
+// so model requests are event/trigger-driven (completing when the process/stream finishes or the user cancels).
 func scaledTimeout(base time.Duration, promptBytes int) time.Duration {
 	if base <= 0 {
-		base = 90 * time.Second
+		return 0
 	}
 	const step, extra, limit = 16 * 1024, 30 * time.Second, 5 * time.Minute
 	if base >= limit || promptBytes <= step {
@@ -143,14 +143,40 @@ func (e *Executor) askDirective(ctx context.Context, prompt string) (*patchDirec
 }
 
 func (e *Executor) askDirectiveOnce(ctx context.Context, prompt string) (*patchDirective, error) {
-	prompt = "CRITICAL: Do NOT use any tools, shell commands, apply_patch, or file readers. Act purely as an offline JSON generator and output ONLY the requested JSON object.\n" + prompt + InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + e.ReadContext
+	cachePrefix := "CRITICAL: Do NOT use any tools, shell commands, apply_patch, or file readers. Act purely as an offline JSON generator and output ONLY the requested JSON object." + InstructionsBlock(e.Workspace) + "\nPreviously read source context:\n" + e.ReadContext
+	fullPrompt := cachePrefix + "\n" + prompt
 	if e.Failover.Models == nil {
 		e.Failover.Models = make(map[string]time.Time)
 	}
 	if e.Failover.Groups == nil {
 		e.Failover.Groups = make(map[string]time.Time)
 	}
-	timeout := scaledTimeout(e.DirectiveTimeout, len(prompt))
+
+	allCands := e.directiveCandidates()
+	var candInfos []core.RouteCandidateInfo
+	for idx, c := range allCands {
+		r := "fallback"
+		if idx == 0 {
+			r = "primary"
+		}
+		candInfos = append(candInfos, core.RouteCandidateInfo{
+			ProviderKey: candidateID(c),
+			Provider:    c.Provider.Name(),
+			Model:       c.Model,
+			Priority:    idx + 1,
+			Role:        r,
+			Status:      "ready",
+		})
+	}
+	if len(candInfos) > 0 {
+		e.emit(ProgressEvent{
+			Stage:           "route_stack",
+			Message:         fmt.Sprintf("Directive route combo ready (%d candidates)", len(candInfos)),
+			RouteCandidates: candInfos,
+		})
+	}
+
+	timeout := scaledTimeout(e.DirectiveTimeout, len(fullPrompt))
 	var failures []error
 	var modelPaused []FailoverCandidate
 	for _, cand := range e.directiveCandidates() {
@@ -173,7 +199,7 @@ func (e *Executor) askDirectiveOnce(ctx context.Context, prompt string) (*patchD
 			e.emit(ProgressEvent{Stage: "step_directive_fallback", Message: fmt.Sprintf("Skipping %s (%s): paused until %s", cand.Model, group, until.Format(time.RFC3339))})
 			continue
 		}
-		directive, fatalErr, attemptErr := e.tryDirectiveCandidate(ctx, cand, prompt, timeout)
+		directive, fatalErr, attemptErr := e.tryDirectiveCandidate(ctx, cand, cachePrefix, prompt, timeout)
 		if directive != nil {
 			return directive, nil
 		}
@@ -193,7 +219,7 @@ func (e *Executor) askDirectiveOnce(ctx context.Context, prompt string) (*patchD
 			}
 			id := candidateID(cand)
 			delete(e.Failover.Models, id)
-			directive, fatalErr, attemptErr := e.tryDirectiveCandidate(ctx, cand, prompt, timeout)
+			directive, fatalErr, attemptErr := e.tryDirectiveCandidate(ctx, cand, cachePrefix, prompt, timeout)
 			if directive != nil {
 				return directive, nil
 			}
@@ -211,13 +237,40 @@ func (e *Executor) askDirectiveOnce(ctx context.Context, prompt string) (*patchD
 	return nil, fmt.Errorf("all configured directive candidates unavailable: %w", errors.Join(failures...))
 }
 
-func (e *Executor) tryDirectiveCandidate(ctx context.Context, cand FailoverCandidate, prompt string, timeout time.Duration) (*patchDirective, error, error) {
+func (e *Executor) tryDirectiveCandidate(ctx context.Context, cand FailoverCandidate, cachePrefix, prompt string, timeout time.Duration) (*patchDirective, error, error) {
 	id, group := candidateID(cand), candidateGroup(cand)
-	e.emit(ProgressEvent{Stage: "directive_attempt", Message: fmt.Sprintf("Requesting patch from %s (%s; timeout %v)", cand.Model, cand.Provider.Name(), timeout)})
+	reqID := fmt.Sprintf("req-%d", time.Now().UnixNano())
+	fullPrompt := cachePrefix + "\n" + prompt
+	modeLabel := "event-triggered"
+	if timeout > 0 {
+		modeLabel = fmt.Sprintf("timeout %v", timeout)
+	}
+	e.emit(ProgressEvent{
+		Stage:   "directive_attempt",
+		Message: fmt.Sprintf("Requesting patch from %s (%s; %s)", cand.Model, cand.Provider.Name(), modeLabel),
+		Trace: &core.PromptTrace{
+			RequestID:   reqID,
+			Stage:       "directive",
+			Provider:    cand.Provider.Name(),
+			Model:       cand.Model,
+			Prompt:      fullPrompt,
+			PromptBytes: len(fullPrompt),
+			Status:      "running",
+			Timestamp:   time.Now(),
+		},
+	})
 	started := time.Now()
-	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	attemptCtx := ctx
+	var cancel context.CancelFunc = func() {}
+	if timeout > 0 {
+		attemptCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	resp, err := cand.Provider.Ask(attemptCtx, core.ModelRequest{
-		RequestID: fmt.Sprintf("req-%d", time.Now().UnixNano()), Prompt: prompt, Model: cand.Model,
+		RequestID:   reqID,
+		CachePrefix: cachePrefix,
+		Prompt:      fullPrompt,
+		Model:       cand.Model,
+		Options:     map[string]string{"cache_ttl": "5m"},
 	})
 	if attemptCtx.Err() != nil {
 		err = attemptCtx.Err()
@@ -243,6 +296,24 @@ func (e *Executor) tryDirectiveCandidate(ctx context.Context, cand FailoverCandi
 			directive, err = parsePatchDirective(resp.Content)
 			if err == nil {
 				e.Failover.Preferred = id
+				e.emit(ProgressEvent{
+					Stage:    "directive_done",
+					Message:  fmt.Sprintf("Patch directive received from %s (%s; %v)", cand.Model, cand.Provider.Name(), time.Since(started).Round(time.Millisecond)),
+					Duration: time.Since(started),
+					Trace: &core.PromptTrace{
+						RequestID:     reqID,
+						Stage:         "directive",
+						Provider:      cand.Provider.Name(),
+						Model:         cand.Model,
+						Prompt:        fullPrompt,
+						PromptBytes:   len(fullPrompt),
+						Response:      resp.Content,
+						ResponseBytes: len(resp.Content),
+						Status:        "completed",
+						DurationMs:    time.Since(started).Milliseconds(),
+						Timestamp:     time.Now(),
+					},
+				})
 				return directive, nil, nil
 			}
 			parseFailure = true
@@ -261,7 +332,23 @@ func (e *Executor) tryDirectiveCandidate(ctx context.Context, cand FailoverCandi
 		e.Failover.Models[id] = time.Now().Add(45 * time.Second)
 		reason = err.Error()
 	}
-	e.emit(ProgressEvent{Stage: "step_directive_fallback", Duration: time.Since(started), Message: fmt.Sprintf("%s failed after %v: %s; trying next eligible configured provider", cand.Model, time.Since(started).Round(time.Millisecond), reason)})
+	e.emit(ProgressEvent{
+		Stage:    "step_directive_fallback",
+		Duration: time.Since(started),
+		Message:  fmt.Sprintf("%s failed after %v: %s; trying next eligible configured provider", cand.Model, time.Since(started).Round(time.Millisecond), reason),
+		Trace: &core.PromptTrace{
+			RequestID:   reqID,
+			Stage:       "directive",
+			Provider:    cand.Provider.Name(),
+			Model:       cand.Model,
+			Prompt:      fullPrompt,
+			PromptBytes: len(fullPrompt),
+			Status:      "fallback",
+			Error:       reason,
+			DurationMs:  time.Since(started).Milliseconds(),
+			Timestamp:   time.Now(),
+		},
+	})
 	return nil, nil, attemptErr
 }
 
@@ -297,6 +384,29 @@ func (e *Executor) withArchitectFailover(ctx context.Context, stage string, atte
 	if len(candidates) == 0 {
 		return errors.New("architect: model provider not configured")
 	}
+	var candInfos []core.RouteCandidateInfo
+	for idx, c := range candidates {
+		r := "fallback"
+		if idx == 0 {
+			r = "primary"
+		}
+		candInfos = append(candInfos, core.RouteCandidateInfo{
+			ProviderKey: candidateID(c),
+			Provider:    c.Provider.Name(),
+			Model:       c.Model,
+			Priority:    idx + 1,
+			Role:        r,
+			Status:      "ready",
+		})
+	}
+	if len(candInfos) > 0 {
+		e.emit(ProgressEvent{
+			Stage:           "route_stack",
+			Message:         fmt.Sprintf("Architect route combo ready (%d candidates)", len(candInfos)),
+			RouteCandidates: candInfos,
+		})
+	}
+
 	if e.Failover.Models == nil {
 		e.Failover.Models = make(map[string]time.Time)
 	}
@@ -322,9 +432,6 @@ func (e *Executor) withArchitectFailover(ctx context.Context, stage string, atte
 		eligible = candidates
 	}
 	timeout := e.DirectiveTimeout
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
 	var failures []error
 	for i, cand := range eligible {
 		if err := ctx.Err(); err != nil {
@@ -335,7 +442,11 @@ func (e *Executor) withArchitectFailover(ctx context.Context, stage string, atte
 			Message: fmt.Sprintf("Requesting %s from %s (%s)...", stage, cand.Model, cand.Provider.Name()),
 		})
 		started := time.Now()
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		attemptCtx := ctx
+		var cancel context.CancelFunc = func() {}
+		if timeout > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
 		err := attempt(attemptCtx, cand)
 		if attemptCtx.Err() != nil && ctx.Err() == nil {
 			err = attemptCtx.Err()
@@ -384,6 +495,22 @@ func (e *Executor) PlanTask(ctx context.Context, task core.Task, overview string
 	err = e.withArchitectFailover(ctx, "planning", func(ctx context.Context, c FailoverCandidate) error {
 		a := architect.NewArchitect(c.Provider)
 		a.Model = c.Model
+		a.OnTrace = func(trace *core.PromptTrace) {
+			st := "planning_attempt"
+			msg := fmt.Sprintf("Planning request to %s (%s)...", c.Model, c.Provider.Name())
+			if trace.Status == "completed" {
+				st = "planning_done"
+				msg = fmt.Sprintf("Planning response received from %s (%d bytes)", c.Model, trace.ResponseBytes)
+			} else if trace.Status == "failed" {
+				st = "planning_failed"
+				msg = fmt.Sprintf("Planning failed for %s: %s", c.Model, trace.Error)
+			}
+			e.emit(ProgressEvent{
+				Stage:   st,
+				Message: msg,
+				Trace:   trace,
+			})
+		}
 		p, err := a.Plan(ctx, task, overview)
 		if err == nil {
 			plan = p

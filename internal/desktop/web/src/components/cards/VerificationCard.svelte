@@ -2,6 +2,7 @@
   import { ChevronDown, ChevronRight } from "lucide-svelte";
   import type { TaskJob } from "../../lib/api";
   import { collapsedCards, toggleCardCollapsed } from "../../lib/stores/settings";
+  import { t } from "../../lib/i18n";
 
   let { job }: { job: TaskJob } = $props();
 
@@ -75,9 +76,9 @@
   {#if !collapsed}
     <div class="body">
       {#if job.report?.unverified || job.mode === "unverified"}
-        <div class="unverified-note">งานนี้รันในโหมด Unverified (ไม่ได้รัน build หรือ test)</div>
+        <div class="unverified-note">{$t("This task ran in Unverified mode (build and tests skipped)", "งานนี้รันในโหมด Unverified (ไม่ได้รัน build หรือ test)")}</div>
       {:else if items.length === 0}
-        <div class="empty">ยังไม่มีผลตรวจสอบสำหรับงานนี้</div>
+        <div class="empty">{$t("No verification results yet for this task", "ยังไม่มีผลตรวจสอบสำหรับงานนี้")}</div>
       {:else}
         {#each items as item (item.id)}
           <div class="v-item">

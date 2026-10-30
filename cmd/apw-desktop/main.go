@@ -15,14 +15,17 @@ import (
 )
 
 func main() {
-	if exe, err := os.Executable(); err == nil {
-		if sha, err := ComputeFileSHA256(exe); err == nil {
-			if instPath, err := InstanceStatePath(); err == nil {
-				ReconcileDesktopInstance(instPath, os.Getpid(), exe, sha, existingWindowPID, killProcessByPID)
+	args := os.Args[1:]
+	isNewWin := NewWindowRequested(args)
+	if !isNewWin {
+		if exe, err := os.Executable(); err == nil {
+			if sha, err := ComputeFileSHA256(exe); err == nil {
+				if instPath, err := InstanceStatePath(); err == nil {
+					ReconcileDesktopInstance(instPath, os.Getpid(), exe, sha, existingWindowPID, killProcessByPID)
+				}
 			}
 		}
 	}
-	args := os.Args[1:]
 	settingsPath, err := SettingsPath()
 	settings := DefaultSettings()
 	if err == nil {
@@ -49,6 +52,11 @@ func main() {
 		bg = options.NewRGB(0x1f, 0x1e, 0x1c)
 	}
 
+	lockID := "8e0c1f9a-apw-desktop"
+	if isNewWin {
+		lockID = fmt.Sprintf("8e0c1f9a-apw-desktop-%d", os.Getpid())
+	}
+
 	err = wails.Run(&options.App{
 		Title:            "APW",
 		Width:            1280, // first-run size; a saved geometry is restored in domReady
@@ -62,7 +70,7 @@ func main() {
 		OnDomReady:       app.domReady,
 		OnBeforeClose:    app.beforeClose,
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId:               "8e0c1f9a-apw-desktop",
+			UniqueId:               lockID,
 			OnSecondInstanceLaunch: app.secondInstance,
 		},
 		Windows: &windows.Options{

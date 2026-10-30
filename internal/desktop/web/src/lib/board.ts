@@ -7,6 +7,7 @@ import type {
   TaskJob
 } from "./api";
 import { parseUnifiedDiff } from "./diff";
+import { tNow } from "./i18n";
 import {
   centerView,
   composerDraftText,
@@ -48,12 +49,12 @@ export function classifyDiffCategory(filePath: string): {
     lower.includes("/test") ||
     lower.includes("/e2e/")
   ) {
-    return { category: "test", label: "Tests (ชุดทดสอบ)", autoCollapsed: true };
+    return { category: "test", label: tNow("Tests", "Tests (ชุดทดสอบ)"), autoCollapsed: true };
   }
   if (base.endsWith(".md") || base.endsWith(".txt") || lower.startsWith("docs/")) {
-    return { category: "docs", label: "Documentation (เอกสาร)", autoCollapsed: true };
+    return { category: "docs", label: tNow("Documentation", "Documentation (เอกสาร)"), autoCollapsed: true };
   }
-  return { category: "core", label: "Core Logic (โค้ดหลัก)", autoCollapsed: false };
+  return { category: "core", label: tNow("Core Logic", "Core Logic (โค้ดหลัก)"), autoCollapsed: false };
 }
 
 export async function jumpToBoardCode(
@@ -104,9 +105,12 @@ export function formatVisualFeedbackClipboard(
     )
     .join("\n");
   const note = userFeedback.trim()
-    ? `\nคำสั่งปรับแก้ดีไซน์/โค้ด: ${userFeedback.trim()}`
-    : "\nคำสั่งปรับแก้ดีไซน์/โค้ด: ช่วยปรับโครงสร้างส่วนที่ไฮไลต์บนกระดานและอัปเดตโค้ดที่ผูกอยู่ให้เหมาะสม";
-  return `${header}\nองค์ประกอบที่เลือกบนกระดาน:\n${targets}${note}`;
+    ? `\n${tNow("Design / Code Instruction:", "คำสั่งปรับแก้ดีไซน์/โค้ด:")} ${userFeedback.trim()}`
+    : `\n${tNow(
+        "Design / Code Instruction: Please refine the highlighted elements on the board and update their bound code accordingly.",
+        "คำสั่งปรับแก้ดีไซน์/โค้ด: ช่วยปรับโครงสร้างส่วนที่ไฮไลต์บนกระดานและอัปเดตโค้ดที่ผูกอยู่ให้เหมาะสม"
+      )}`;
+  return `${header}\n${tNow("Selected elements on board:", "องค์ประกอบที่เลือกบนกระดาน:")}\n${targets}${note}`;
 }
 
 export function sendFeedbackToComposer(promptText: string) {

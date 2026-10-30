@@ -25,6 +25,7 @@
     copyTextToClipboard
   } from "../lib/stores/terminal";
   import { openExternalURL } from "../lib/shell";
+  import { t, locale } from "../lib/i18n";
 
   let customCommand = $state("");
   let customPortInput = $state("");
@@ -115,7 +116,7 @@
       {#if runningSessions.length > 0}
         <span class="running-pill mono">
           <span class="pulse-dot"></span>
-          กำลังรัน {runningSessions.length}
+          {$t(`Running ${runningSessions.length}`, `กำลังรัน ${runningSessions.length}`)}
         </span>
       {/if}
       {#if $terminalDockOpen}
@@ -138,7 +139,7 @@
           type="text"
           class="cmd-input mono"
           bind:value={customCommand}
-          placeholder="พิมพ์คำสั่งรันเอง เช่น npm run dev"
+          placeholder={$t("Enter custom command, e.g. npm run dev", "พิมพ์คำสั่งรันเอง เช่น npm run dev")}
           onkeydown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -147,13 +148,19 @@
           }}
           data-testid="custom-terminal-input"
         />
-        <label class="port-override-box mono" title="กำหนดพอร์ตเองเพื่อไม่ให้ชนกับระบบอื่น (เว้นว่างให้ APW หาพอร์ตว่างให้อัตโนมัติ)">
+        <label
+          class="port-override-box mono"
+          title={$t(
+            "Override port to avoid conflicts (leave blank to auto-assign a free port)",
+            "กำหนดพอร์ตเองเพื่อไม่ให้ชนกับระบบอื่น (เว้นว่างให้ APW หาพอร์ตว่างให้อัตโนมัติ)"
+          )}
+        >
           <span>PORT:</span>
           <input
             type="text"
             class="port-override-input mono"
             bind:value={customPortInput}
-            placeholder="อัตโนมัติ"
+            placeholder={$t("Auto", "อัตโนมัติ")}
             maxlength="5"
           />
         </label>
@@ -162,34 +169,34 @@
           class="cmd-act-btn primary"
           disabled={!customCommand.trim()}
           onclick={onRunCustom}
-          title="รันคำสั่งภายใน APW Console พร้อมกำหนดพอร์ตไม่ให้ชนกับระบบอื่น"
+          title={$t("Run inside APW Console with automatic port conflict protection", "รันคำสั่งภายใน APW Console พร้อมกำหนดพอร์ตไม่ให้ชนกับระบบอื่น")}
         >
           <Play size={11} />
-          <span>รันใน APW</span>
+          <span>{$t("Run in APW", "รันใน APW")}</span>
         </button>
         <button
           type="button"
           class="cmd-act-btn"
           disabled={!customCommand.trim()}
           onclick={onOpenExternalCustom}
-          title="เปิดหน้าต่าง PowerShell แยกเพื่อรันคำสั่งนี้"
+          title={$t("Open in a separate PowerShell window", "เปิดหน้าต่าง PowerShell แยกเพื่อรันคำสั่งนี้")}
         >
           <ExternalLink size={11} />
-          <span>เปิด Terminal</span>
+          <span>{$t("Open Terminal", "เปิด Terminal")}</span>
         </button>
         <button
           type="button"
           class="cmd-act-btn"
           disabled={!customCommand.trim()}
           onclick={() => flashCopied("custom-cmd", customCommand.trim())}
-          title="คัดลอกคำสั่ง"
+          title={$t("Copy command", "คัดลอกคำสั่ง")}
         >
           {#if copiedKey === "custom-cmd"}
             <Check size={11} />
-            <span>คัดลอกแล้ว</span>
+            <span>{$t("Copied", "คัดลอกแล้ว")}</span>
           {:else}
             <Copy size={11} />
-            <span>คัดลอก</span>
+            <span>{$t("Copy", "คัดลอก")}</span>
           {/if}
         </button>
       </div>
@@ -221,10 +228,10 @@
             type="button"
             class="clear-sess-btn"
             onclick={clearFinishedTerminalSessions}
-            title="ล้างรายการที่รันเสร็จแล้ว"
+            title={$t("Clear finished sessions", "ล้างรายการที่รันเสร็จแล้ว")}
           >
             <Trash2 size={11} />
-            <span>ล้างที่จบแล้ว</span>
+            <span>{$t("Clear Finished", "ล้างที่จบแล้ว")}</span>
           </button>
         </div>
 
@@ -234,13 +241,13 @@
               <div class="meta-left mono">
                 <span class="status-chip {selectedSession.status}">
                   {#if selectedSession.status === "running"}
-                    ● กำลังรัน {selectedSession.pid ? `(PID ${selectedSession.pid})` : ""}
+                    ● {$t("Running", "กำลังรัน")} {selectedSession.pid ? `(PID ${selectedSession.pid})` : ""}
                   {:else if selectedSession.status === "exited"}
-                    ✓ เสร็จสิ้น (Exit 0)
+                    ✓ {$t("Exited (Exit 0)", "เสร็จสิ้น (Exit 0)")}
                   {:else if selectedSession.status === "stopped"}
-                    ■ หยุดแล้ว
+                    ■ {$t("Stopped", "หยุดแล้ว")}
                   {:else}
-                    ✗ ล้มเหลว (Exit {selectedSession.exit_code})
+                    ✗ {$t(`Failed (Exit ${selectedSession.exit_code})`, `ล้มเหลว (Exit ${selectedSession.exit_code})`)}
                   {/if}
                 </span>
                 <code class="meta-cmd-txt">{selectedSession.command}</code>
@@ -254,7 +261,7 @@
                     onclick={() => openExternalURL(u)}
                   >
                     <Globe size={11} />
-                    <span>เปิด {shortUrlLabel(u)}</span>
+                    <span>{$t(`Open ${shortUrlLabel(u)}`, `เปิด ${shortUrlLabel(u)}`)}</span>
                     <ExternalLink size={10} />
                   </button>
                 {/each}
@@ -264,7 +271,9 @@
                   class="meta-btn"
                   onclick={() => flashCopied("sess-cmd-" + selectedSession.id, selectedSession.command)}
                 >
-                  {copiedKey === "sess-cmd-" + selectedSession.id ? "✓ คัดลอกคำสั่งแล้ว" : "คัดลอกคำสั่ง"}
+                  {copiedKey === "sess-cmd-" + selectedSession.id
+                    ? $t("✓ Copied Command", "✓ คัดลอกคำสั่งแล้ว")
+                    : $t("Copy Command", "คัดลอกคำสั่ง")}
                 </button>
 
                 <button
@@ -272,7 +281,9 @@
                   class="meta-btn"
                   onclick={() => flashCopied("sess-out-" + selectedSession.id, selectedSession.output || "")}
                 >
-                  {copiedKey === "sess-out-" + selectedSession.id ? "✓ คัดลอก Log แล้ว" : "คัดลอก Log"}
+                  {copiedKey === "sess-out-" + selectedSession.id
+                    ? $t("✓ Copied Log", "✓ คัดลอก Log แล้ว")
+                    : $t("Copy Log", "คัดลอก Log")}
                 </button>
 
                 <button
@@ -280,7 +291,7 @@
                   class="meta-btn"
                   onclick={() => openCommandInExternalTerminal(selectedSession.command, selectedSession.port)}
                 >
-                  ↗ เปิดใน Terminal
+                  {$t("↗ Open in Terminal", "↗ เปิดใน Terminal")}
                 </button>
 
                 {#if selectedSession.status === "running"}
@@ -290,7 +301,7 @@
                     onclick={() => stopTerminalSession(selectedSession.id)}
                   >
                     <Square size={10} />
-                    <span>หยุด</span>
+                    <span>{$t("Stop", "หยุด")}</span>
                   </button>
                 {:else}
                   <button
@@ -304,18 +315,22 @@
                       )}
                   >
                     <Play size={10} />
-                    <span>รันใหม่</span>
+                    <span>{$t("Rerun", "รันใหม่")}</span>
                   </button>
                 {/if}
               </div>
             </div>
 
-            <pre class="session-output mono selectable" bind:this={logEl}>{selectedSession.output || "กำลังรอผลลัพธ์จากโปรเซส..."}</pre>
+            <pre class="session-output mono selectable" bind:this={logEl}>{selectedSession.output || $t("Waiting for process output...", "กำลังรอผลลัพธ์จากโปรเซส...")}</pre>
           </div>
         {/if}
       {:else}
         <div class="empty-console-hint">
-          ยังไม่มีโปรเซสของโปรเจกต์นี้ที่กำลังรัน — หากพอร์ตเดิม (เช่น :5173 หรือ :8080) มีระบบอื่นใช้อยู่ APW จะสลับหาพอร์ตว่างให้อัตโนมัติ หรือพิมพ์เลขพอร์ตที่ต้องการในช่อง <b>PORT</b> ด้านบนได้เลยครับ
+          {#if $locale === "th"}
+            ยังไม่มีโปรเซสของโปรเจกต์นี้ที่กำลังรัน — หากพอร์ตเดิม (เช่น :5173 หรือ :8080) มีระบบอื่นใช้อยู่ APW จะสลับหาพอร์ตว่างให้อัตโนมัติ หรือพิมพ์เลขพอร์ตที่ต้องการในช่อง <b>PORT</b> ด้านบนได้เลยครับ
+          {:else}
+            No running processes for this project — if a default port (e.g. :5173 or :8080) is busy, APW automatically selects a free port, or you can specify one in the <b>PORT</b> field above.
+          {/if}
         </div>
       {/if}
     </div>

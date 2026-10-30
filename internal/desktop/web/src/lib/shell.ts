@@ -4,6 +4,7 @@ export interface WorkspaceSelection {
 }
 
 export interface UIPreferences {
+  language?: "en" | "th";
   left_width?: number;
   right_width?: number;
   left_collapsed?: boolean;
@@ -12,9 +13,26 @@ export interface UIPreferences {
   selections?: Record<string, WorkspaceSelection>;
 }
 
+export interface ProjectSessionItem {
+  id: string;
+  title: string;
+  updated_at: string;
+  turn_count: number;
+  running?: boolean;
+}
+
+export interface ProjectFolderView {
+  path: string;
+  name: string;
+  active: boolean;
+  running?: boolean;
+  sessions: ProjectSessionItem[];
+}
+
 export interface ShellState {
   current_workspace: string;
   recent: string[];
+  projects?: ProjectFolderView[];
   theme: "system" | "light" | "dark";
   ui: UIPreferences;
 }
@@ -28,7 +46,11 @@ declare global {
       main?: {
         App?: {
           ChooseWorkspace: () => Promise<void>;
+          ChooseWorkspaceNewWindow?: () => Promise<void>;
           OpenWorkspace: (dir: string) => Promise<void>;
+          SwitchProjectSession?: (dir: string, sessionId: string) => Promise<void>;
+          RemoveProject?: (dir: string) => Promise<void>;
+          OpenNewWindow?: (dir: string) => Promise<void>;
           SetTheme: (mode: string) => Promise<void>;
           GetShellState?: () => Promise<ShellState>;
           SaveUIPreferences?: (ui: UIPreferences) => Promise<void>;
@@ -52,6 +74,32 @@ export async function chooseWorkspace(): Promise<void> {
 export async function openWorkspaceDir(dir: string): Promise<void> {
   if (window.go?.main?.App?.OpenWorkspace) {
     await window.go.main.App.OpenWorkspace(dir);
+  }
+}
+
+export async function switchProjectSession(dir: string, sessionId: string): Promise<void> {
+  if (window.go?.main?.App?.SwitchProjectSession) {
+    await window.go.main.App.SwitchProjectSession(dir, sessionId);
+  } else if (window.go?.main?.App?.OpenWorkspace) {
+    await window.go.main.App.OpenWorkspace(dir);
+  }
+}
+
+export async function removeProjectFolder(dir: string): Promise<void> {
+  if (window.go?.main?.App?.RemoveProject) {
+    await window.go.main.App.RemoveProject(dir);
+  }
+}
+
+export async function openNewWindow(dir = ""): Promise<void> {
+  if (window.go?.main?.App?.OpenNewWindow) {
+    await window.go.main.App.OpenNewWindow(dir);
+  }
+}
+
+export async function chooseWorkspaceNewWindow(): Promise<void> {
+  if (window.go?.main?.App?.ChooseWorkspaceNewWindow) {
+    await window.go.main.App.ChooseWorkspaceNewWindow();
   }
 }
 

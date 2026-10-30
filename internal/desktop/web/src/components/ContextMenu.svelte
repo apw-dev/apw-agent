@@ -2,6 +2,7 @@
   import { Copy, FolderOpen } from "lucide-svelte";
   import { contextMenu } from "../lib/stores/settings";
   import { revealInExplorer, inDesktopShell } from "../lib/shell";
+  import { t } from "../lib/i18n";
 
   async function onCopyText() {
     const text = $contextMenu?.copyText || window.getSelection()?.toString() || "";
@@ -38,17 +39,17 @@
   >
     <button type="button" class="item" onclick={onCopyText}>
       <Copy size={13} />
-      <span>คัดลอกข้อความ (Copy)</span>
+      <span>{$t("Copy text", "คัดลอกข้อความ (Copy)")}</span>
     </button>
     {#if $contextMenu.filePath}
       <button type="button" class="item" onclick={onCopyPath}>
         <Copy size={13} />
-        <span>คัดลอกพาธไฟล์ (Copy path)</span>
+        <span>{$t("Copy path", "คัดลอกพาธไฟล์ (Copy path)")}</span>
       </button>
       {#if inDesktopShell()}
         <button type="button" class="item" onclick={onOpenExplorer}>
           <FolderOpen size={13} />
-          <span>เปิดใน Explorer</span>
+          <span>{$t("Reveal in Explorer", "เปิดใน Explorer")}</span>
         </button>
       {/if}
     {/if}

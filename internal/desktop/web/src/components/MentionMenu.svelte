@@ -1,11 +1,12 @@
 <script lang="ts">
   import { mentionCandidates, mentionSelectedIndex, type MentionCandidate } from "../lib/stores/search";
+  import { t } from "../lib/i18n";
 
   let { onSelect }: { onSelect: (cand: MentionCandidate) => void } = $props();
 </script>
 
 {#if $mentionCandidates.length > 0}
-  <div class="mention-menu" id="mention-menu" role="listbox" aria-label="ตัวเลือกคำสั่งและไฟล์">
+  <div class="mention-menu" id="mention-menu" role="listbox" aria-label={$t("Command and file suggestions", "ตัวเลือกคำสั่งและไฟล์")}>
     {#each $mentionCandidates as cand, idx (cand.display + idx)}
       <button
         type="button"

@@ -47,7 +47,7 @@ func TestConfigureFailoverDoesNotEnrollDiscoveredModels(t *testing.T) {
 		if len(candidates) != 2 || candidates[0].ProviderKey != "flash" || candidates[1].ProviderKey != "gpt" {
 			t.Fatalf("discovery changed routing order: %+v", candidates)
 		}
-		if ex.DirectiveTimeout != 90*time.Second {
+		if ex.DirectiveTimeout != 0 {
 			t.Fatalf("unexpected default timeout: %v", ex.DirectiveTimeout)
 		}
 	}

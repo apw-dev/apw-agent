@@ -3,6 +3,7 @@
   import type { TaskJob, TaskEvent } from "../../lib/api";
   import { mapTaskSteps } from "../../lib/stores/tasks";
   import { collapsedCards, toggleCardCollapsed } from "../../lib/stores/settings";
+  import { t } from "../../lib/i18n";
 
   let { job, events = [] }: { job: TaskJob; events?: TaskEvent[] } = $props();
 
@@ -25,7 +26,7 @@
       {:else}
         <ChevronDown size={13} />
       {/if}
-      <span>สถานะ</span>
+      <span>{$t("Status", "สถานะ")}</span>
     </span>
     <span
       class="badge"

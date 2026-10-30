@@ -187,3 +187,16 @@ func contains(list []string, want string) bool {
 	}
 	return false
 }
+
+func TestDetectDotNet(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, map[string]string{
+		"App.sln":                     "Microsoft Visual Studio Solution File...\n",
+		"src/Core/Core.csproj":        "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+		"tests/Core/CoreTests.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+	})
+	p := Detect(root, nil)
+	if p.Kind != "dotnet" || !reflect.DeepEqual(p.StageNames(), []string{"test"}) {
+		t.Fatalf("unexpected .NET profile: %+v", p)
+	}
+}

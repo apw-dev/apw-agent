@@ -12,7 +12,9 @@
     Globe
   } from "lucide-svelte";
   import MarkdownView from "./MarkdownView.svelte";
-  import type { TaskJob, TaskEvent } from "../lib/api";
+  import ModelFlowRunner from "./ModelFlowRunner.svelte";
+  import PromptInspectorModal from "./PromptInspectorModal.svelte";
+  import type { TaskJob, TaskEvent, PromptTrace } from "../lib/api";
   import { parseUnifiedDiff } from "../lib/diff";
   import {
     ACTIVE_TASK_STATUSES,
@@ -20,6 +22,7 @@
     selectedTaskId,
     mapTaskSteps,
     extractTaskSubagents,
+    extractTaskPromptTraces,
     selectTask,
     applyTaskChanges,
     cancelTaskById,
@@ -30,6 +33,7 @@
   import { rightCollapsed, rightPanelView, selectedDiffFile } from "../lib/stores/settings";
   import { parseInstructionSkillPills } from "../lib/stores/search";
   import { openExternalURL } from "../lib/shell";
+  import { t, tNow, locale } from "../lib/i18n";
   import {
     terminalScripts,
     activeWorkspacePorts,
@@ -52,6 +56,8 @@
   let skillNotice = $state("");
   let copiedCmdKey = $state("");
   let nowMs = $state(Date.now());
+  let inspectedTrace = $state<PromptTrace | null>(null);
+  const promptTraces = $derived(extractTaskPromptTraces(events));
 
   async function flashTaskCopy(key: string, text: string) {
     const ok = await copyTextToClipboard(text);
@@ -304,6 +310,7 @@
   });
 
   const latestLiveMessage = $derived.by(() => {
+    void $locale;
     if (!isRunning) return "";
     if (events.length > 0) {
       const last = events[events.length - 1];
@@ -311,48 +318,48 @@
     }
     switch (job.status) {
       case "queued":
-        return "อยู่ในคิวรอประมวลผล (กำลังเตรียมเริ่มงาน)…";
+        return tNow("Queued (preparing workspace)…", "อยู่ในคิวรอประมวลผล (กำลังเตรียมเริ่มงาน)…");
       case "analyzing":
-        return "กำลังวิเคราะห์โปรเจกต์และเตรียมสภาพแวดล้อม…";
+        return tNow("Analyzing project & preparing environment…", "กำลังวิเคราะห์โปรเจกต์และเตรียมสภาพแวดล้อม…");
       case "planning":
-        return "กำลังวางแผนขั้นตอนการแก้ไขโค้ด (Architect)…";
+        return tNow("Planning execution steps (Architect)…", "กำลังวางแผนขั้นตอนการแก้ไขโค้ด (Architect)…");
       case "patching":
-        return "กำลังอ่านและแก้ไขไฟล์ใน Isolated Worktree…";
+        return tNow("Reading & editing files in Isolated Worktree…", "กำลังอ่านและแก้ไขไฟล์ใน Isolated Worktree…");
       case "verifying":
-        return "กำลังรันตรวจสอบโค้ดและเทสต์อัตโนมัติ (Reflex)…";
+        return tNow("Running automated verification & tests (Reflex)…", "กำลังรันตรวจสอบโค้ดและเทสต์อัตโนมัติ (Reflex)…");
       case "applying":
-        return "กำลังนำการเปลี่ยนแปลงไปใช้ในโปรเจกต์…";
+        return tNow("Applying changes to project…", "กำลังนำการเปลี่ยนแปลงไปใช้ในโปรเจกต์…");
       default:
-        return "กำลังทำงาน…";
+        return tNow("Working…", "กำลังทำงาน…");
     }
   });
 
   function statusLabel(st: string): string {
     switch (st) {
       case "succeeded":
-        return "✓ เสร็จสมบูรณ์ (Applied)";
+        return tNow("✓ Succeeded (Applied)", "✓ เสร็จสมบูรณ์ (Applied)");
       case "ready_to_apply":
-        return "✓ ตรวจสอบผ่านแล้ว · พร้อม Apply";
+        return tNow("✓ Verified · Ready to Apply", "✓ ตรวจสอบผ่านแล้ว · พร้อม Apply");
       case "preview_ready":
-        return "✓ สร้าง Preview เสร็จแล้ว";
+        return tNow("✓ Preview Ready", "✓ สร้าง Preview เสร็จแล้ว");
       case "interrupted":
-        return "⏸ พักงานชั่วคราว (พร้อมทำต่อ)";
+        return tNow("⏸ Paused (Ready to Resume)", "⏸ พักงานชั่วคราว (พร้อมทำต่อ)");
       case "failed":
-        return "✗ ไม่สำเร็จ (Failed)";
+        return tNow("✗ Failed", "✗ ไม่สำเร็จ (Failed)");
       case "cancelled":
-        return "⊘ ยกเลิกแล้ว";
+        return tNow("⊘ Cancelled", "⊘ ยกเลิกแล้ว");
       case "queued":
-        return "รอคิวทำงาน…";
+        return tNow("Queued…", "รอคิวทำงาน…");
       case "analyzing":
-        return "กำลังวิเคราะห์…";
+        return tNow("Analyzing…", "กำลังวิเคราะห์…");
       case "planning":
-        return "กำลังวางแผน…";
+        return tNow("Planning…", "กำลังวางแผน…");
       case "patching":
-        return "กำลังแก้ไขโค้ด…";
+        return tNow("Editing code…", "กำลังแก้ไขโค้ด…");
       case "verifying":
-        return "กำลังรันทดสอบ…";
+        return tNow("Running verification…", "กำลังรันทดสอบ…");
       case "applying":
-        return "กำลัง Apply…";
+        return tNow("Applying…", "กำลัง Apply…");
       default:
         return st;
     }
@@ -399,7 +406,9 @@
       title: job.instruction,
       instruction: job.instruction
     });
-    skillNotice = res.ok ? `บันทึก Skill แล้ว (${res.path})` : res.message;
+    skillNotice = res.ok
+      ? tNow(`Saved Skill (${res.path})`, `บันทึก Skill แล้ว (${res.path})`)
+      : res.message;
     busy = false;
   }
 
@@ -575,9 +584,9 @@
       {#if isRunning}
         <span class="pulse-dot" aria-hidden="true"></span>
       {/if}
-      <span class="mode-label">{job.report?.answered ? "ตอบคำถาม" : (job.mode || "execute").toUpperCase()}</span>
+      <span class="mode-label">{job.report?.answered ? $t("Answered", "ตอบคำถาม") : (job.mode || "execute").toUpperCase()}</span>
       <span class="sep">·</span>
-      <span>{changedFiles.length} ไฟล์</span>
+      <span>{changedFiles.length} {$t(changedFiles.length === 1 ? "file" : "files", "ไฟล์")}</span>
       {#if totalAdded > 0 || totalDeleted > 0}
         <span class="diff-stat add mono">+{totalAdded}</span>
         <span class="diff-stat del mono">−{totalDeleted}</span>
@@ -595,11 +604,11 @@
     </div>
     <div class="hdr-right">
       {#if isRunning}
-        <span class="timer-pill running mono" data-testid="task-live-timer" title="เวลาที่ใช้ไปทั้งหมดในงานนี้">
+        <span class="timer-pill running mono" data-testid="task-live-timer" title={$t("Total elapsed time for this task", "เวลาที่ใช้ไปทั้งหมดในงานนี้")}>
           ⏱ {formatLiveClock(liveElapsedSec)}
         </span>
       {:else if elapsedText}
-        <span class="timer-pill done mono" data-testid="task-elapsed-pill" title="เวลาที่ใช้ทั้งหมด">
+        <span class="timer-pill done mono" data-testid="task-elapsed-pill" title={$t("Total elapsed time", "เวลาที่ใช้ทั้งหมด")}>
           ⏱ {elapsedText}
         </span>
       {/if}
@@ -610,7 +619,7 @@
         class:warn={job.status === "interrupted"}
         class:err={job.status === "failed" || job.status === "cancelled"}
       >
-        {statusLabel(job.status)}
+        {#key $locale}{statusLabel(job.status)}{/key}
       </span>
     </div>
   </div>
@@ -642,9 +651,9 @@
                   type="button"
                   class="cmd-copy-btn"
                   onclick={() => flashTaskCopy("ran-" + cmd.key, cmd.output || cmd.label)}
-                  title="คัดลอกผลลัพธ์คำสั่ง"
+                  title={$t("Copy command output", "คัดลอกผลลัพธ์คำสั่ง")}
                 >
-                  {copiedCmdKey === "ran-" + cmd.key ? "✓ คัดลอกแล้ว" : "คัดลอก"}
+                  {copiedCmdKey === "ran-" + cmd.key ? $t("✓ Copied", "✓ คัดลอกแล้ว") : $t("Copy", "คัดลอก")}
                 </button>
               </div>
               {#if cmd.output}
@@ -800,7 +809,7 @@
       {:else}
         <ChevronRight size={13} />
       {/if}
-      <span>บันทึกเหตุการณ์ละเอียด ({structuredEvents.length} รายการ)</span>
+      <span>{$t(`Detailed Event Log (${structuredEvents.length} events)`, `บันทึกเหตุการณ์ละเอียด (${structuredEvents.length} รายการ)`)}</span>
     </button>
     {#if logExpanded}
       <div class="log-panel" data-testid="task-event-log-panel">
@@ -812,7 +821,7 @@
               class:active={logFilter === "all"}
               onclick={() => (logFilter = "all")}
             >
-              ทั้งหมด ({eventCategoryCounts.all})
+              {$t(`All (${eventCategoryCounts.all})`, `ทั้งหมด (${eventCategoryCounts.all})`)}
             </button>
             <button
               type="button"
@@ -820,7 +829,7 @@
               class:active={logFilter === "steps"}
               onclick={() => (logFilter = "steps")}
             >
-              ขั้นตอนหลัก ({eventCategoryCounts.steps})
+              {$t(`Core Steps (${eventCategoryCounts.steps})`, `ขั้นตอนหลัก (${eventCategoryCounts.steps})`)}
             </button>
             {#if eventCategoryCounts.subagents > 0}
               <button
@@ -839,21 +848,21 @@
                 class:active={logFilter === "alerts"}
                 onclick={() => (logFilter = "alerts")}
               >
-                แจ้งเตือน/แก้ไข ({eventCategoryCounts.alerts})
+                {$t(`Alerts / Retries (${eventCategoryCounts.alerts})`, `แจ้งเตือน/แก้ไข (${eventCategoryCounts.alerts})`)}
               </button>
             {/if}
           </div>
           <input
             type="search"
             class="log-search"
-            placeholder="ค้นหาเหตุการณ์ หรือชื่อไฟล์…"
+            placeholder={$t("Filter events or file names…", "ค้นหาเหตุการณ์ หรือชื่อไฟล์…")}
             bind:value={logSearch}
           />
         </div>
 
         <div class="log-box mono selectable">
           {#if filteredLogEvents.length === 0}
-            <div class="log-empty">ไม่พบเหตุการณ์ที่ตรงกับตัวกรอง</div>
+            <div class="log-empty">{$t("No events match this filter", "ไม่พบเหตุการณ์ที่ตรงกับตัวกรอง")}</div>
           {:else}
             {#each filteredLogEvents as item (item.seq)}
               <div class="log-item">
@@ -870,7 +879,7 @@
                       class="log-more-btn"
                       onclick={() => toggleEventExpand(item.seq)}
                     >
-                      {expandedEventSeqs[item.seq] ? "ย่อ" : "ดูเต็ม"}
+                      {expandedEventSeqs[item.seq] ? $t("Collapse", "ย่อ") : $t("Full", "ดูเต็ม")}
                     </button>
                   {/if}
                 </div>
@@ -919,7 +928,13 @@
   {/if}
 
   {#if !job.report?.answered}
-  <div class="steps" role="list" aria-label="ขั้นตอนของงาน">
+  <ModelFlowRunner
+    {job}
+    {events}
+    onInspectPrompt={(tr) => (inspectedTrace = tr)}
+  />
+
+  <div class="steps" role="list" aria-label={$t("Task stages", "ขั้นตอนของงาน")}>
     {#each stepBar.steps as step (step.label)}
       <i
         class="step-bar"
@@ -942,18 +957,18 @@
     <div class="live-banner">
       <span class="pulse-dot" aria-hidden="true"></span>
       <div class="live-text">
-        <b>Agent กำลังทำงานอยู่ในขณะนี้</b>
+        <b>{$t("Agent is currently working", "Agent กำลังทำงานอยู่ในขณะนี้")}</b>
         <div class="mono live-sub">{latestLiveMessage}</div>
       </div>
       <div class="live-timer-box mono" data-testid="live-banner-timer">
         <span class="live-timer-main">⏱ {formatLiveClock(liveElapsedSec)}</span>
-        <span class="live-timer-stage">ขั้นตอนนี้ {formatLiveClock(liveStageSec)}</span>
+        <span class="live-timer-stage">{$t(`Stage ${formatLiveClock(liveStageSec)}`, `ขั้นตอนนี้ ${formatLiveClock(liveStageSec)}`)}</span>
       </div>
     </div>
     <div class="thinking-status-line mono" data-testid="task-thinking-status">
       <span class="thinking-dots" aria-hidden="true"></span>
       <span>
-        {events.length || 1} events · Thinking · ⏱ รวม {formatLiveClock(liveElapsedSec)} (ขั้นตอนนี้ {formatLiveClock(liveStageSec)})
+        {events.length || 1} events · Thinking · ⏱ {$t(`Total ${formatLiveClock(liveElapsedSec)} (Stage ${formatLiveClock(liveStageSec)})`, `รวม ${formatLiveClock(liveElapsedSec)} (ขั้นตอนนี้ ${formatLiveClock(liveStageSec)})`)}
       </span>
     </div>
   {/if}
@@ -961,22 +976,26 @@
   {#if job.error || actionErr}
     {#if isInterruptedRestart && !actionErr}
       <div class="interrupted-banner selectable" data-testid="task-error">
-        <div class="interrupted-title">⏸ งานนี้ถูกพักชั่วคราวเนื่องจากบริการรีสตาร์ท (Recovered after service restart)</div>
+        <div class="interrupted-title">{$t("⏸ Task paused after service restart (Recovered after service restart)", "⏸ งานนี้ถูกพักชั่วคราวเนื่องจากบริการรีสตาร์ท (Recovered after service restart)")}</div>
         <div class="interrupted-desc">
-          โค้ดและขั้นตอนที่ทำสำเร็จก่อนหน้านี้ถูกบันทึกไว้ใน Git Worktree และ Checkpoint เรียบร้อยแล้ว กดปุ่ม <b>ทำต่อ (Resume)</b> ด้านล่างเพื่อทำงานต่อจากจุดเดิมได้ทันที
+          {#if $locale === "th"}
+            โค้ดและขั้นตอนที่ทำสำเร็จก่อนหน้านี้ถูกบันทึกไว้ใน Git Worktree และ Checkpoint เรียบร้อยแล้ว กดปุ่ม <b>ทำต่อ (Resume)</b> ด้านล่างเพื่อทำงานต่อจากจุดเดิมได้ทันที
+          {:else}
+            Completed steps and code changes are safely preserved in the Git Worktree and Checkpoint. Click <b>Resume</b> below to continue from where it left off.
+          {/if}
         </div>
       </div>
     {:else if unmetAcceptanceItems.length > 1}
       <div class="error-box acceptance-err selectable" data-testid="task-error">
         <div class="acc-err-hdr">
-          <span>⚠️ เงื่อนไข Acceptance ที่ยังไม่ผ่าน ({unmetAcceptanceItems.length} รายการ):</span>
+          <span>{$t(`⚠️ Unmet Acceptance Criteria (${unmetAcceptanceItems.length} items):`, `⚠️ เงื่อนไข Acceptance ที่ยังไม่ผ่าน (${unmetAcceptanceItems.length} รายการ):`)}</span>
           {#if unmetAcceptanceItems.length > 5}
             <button
               type="button"
               class="acc-expand-btn"
               onclick={() => (allAcceptanceExpanded = !allAcceptanceExpanded)}
             >
-              {allAcceptanceExpanded ? "ย่อรายการ" : `ดูทั้งหมด (${unmetAcceptanceItems.length})`}
+              {allAcceptanceExpanded ? $t("Show less", "ย่อรายการ") : $t(`Show all (${unmetAcceptanceItems.length})`, `ดูทั้งหมด (${unmetAcceptanceItems.length})`)}
             </button>
           {/if}
         </div>
@@ -1025,23 +1044,39 @@
 
       <div class="completion-prompt">
         {#if job.status === "preview_ready"}
-          <b>Agent สร้าง Preview Diff เสร็จแล้ว ({changedFiles.length} ไฟล์):</b> ยังไม่ได้รันทดสอบและยังไม่ได้แก้ไขไฟล์จริงในโปรเจกต์ ต้องการรันตรวจสอบเพื่อเตรียม Apply เลยไหม?
+          {#if $locale === "th"}
+            <b>Agent สร้าง Preview Diff เสร็จแล้ว ({changedFiles.length} ไฟล์):</b> ยังไม่ได้รันทดสอบและยังไม่ได้แก้ไขไฟล์จริงในโปรเจกต์ ต้องการรันตรวจสอบเพื่อเตรียม Apply เลยไหม?
+          {:else}
+            <b>Preview Diff ready ({changedFiles.length} files):</b> Verification has not run and workspace files are untouched. Run verification to prepare for Apply?
+          {/if}
         {:else if job.status === "ready_to_apply"}
-          <b>Agent แก้ไขและรันตรวจสอบผ่านครบแล้ว ({changedFiles.length} ไฟล์):</b> ต้องการนำการเปลี่ยนแปลงนี้ไปใช้ (Apply) ลงโปรเจกต์เลยไหม?
+          {#if $locale === "th"}
+            <b>Agent แก้ไขและรันตรวจสอบผ่านครบแล้ว ({changedFiles.length} ไฟล์):</b> ต้องการนำการเปลี่ยนแปลงนี้ไปใช้ (Apply) ลงโปรเจกต์เลยไหม?
+          {:else}
+            <b>All changes verified ({changedFiles.length} files):</b> Ready to apply these changes to your project?
+          {/if}
         {:else if job.status === "succeeded"}
-          <b>✓ Agent ทำงานเสร็จสมบูรณ์แล้ว</b>
-          {job.report?.applied ? " (นำการเปลี่ยนแปลงไปใช้ใน Workspace เรียบร้อยแล้ว)" : ""}
+          <b>{$t("✓ Task completed successfully", "✓ Agent ทำงานเสร็จสมบูรณ์แล้ว")}</b>
+          {job.report?.applied ? $t(" (Changes applied to Workspace)", " (นำการเปลี่ยนแปลงไปใช้ใน Workspace เรียบร้อยแล้ว)") : ""}
         {:else if job.status === "interrupted"}
-          <b>⏸ งานนี้ถูกพักชั่วคราว (Interrupted):</b> ขั้นตอนที่ทำไปแล้วถูกเก็บไว้ใน Git Worktree เรียบร้อย กด <b>ทำต่อ (Resume)</b> เพื่อให้ Agent ทำงานต่อจากจุดเดิมได้เลย
+          {#if $locale === "th"}
+            <b>⏸ งานนี้ถูกพักชั่วคราว (Interrupted):</b> ขั้นตอนที่ทำไปแล้วถูกเก็บไว้ใน Git Worktree เรียบร้อย กด <b>ทำต่อ (Resume)</b> เพื่อให้ Agent ทำงานต่อจากจุดเดิมได้เลย
+          {:else}
+            <b>⏸ Task Interrupted:</b> Previous progress is saved in the Git Worktree. Click <b>Resume</b> to continue from the last checkpoint.
+          {/if}
         {:else if job.status === "failed" || job.status === "cancelled"}
-          <b>งานนี้หยุดลงก่อนเสร็จสมบูรณ์:</b> ต้องการสั่งให้ Agent ทำงานต่อจากจุดเดิม (Resume) หรือเปิดดู Diff ก่อนไหม?
+          {#if $locale === "th"}
+            <b>งานนี้หยุดลงก่อนเสร็จสมบูรณ์:</b> ต้องการสั่งให้ Agent ทำงานต่อจากจุดเดิม (Resume) หรือเปิดดู Diff ก่อนไหม?
+          {:else}
+            <b>Task stopped before completion:</b> Would you like to Resume from the checkpoint or inspect the Diff first?
+          {/if}
         {/if}
       </div>
 
       {#if $terminalScripts.length > 0 && (job.status === "succeeded" || job.status === "ready_to_apply")}
         <div class="task-launch-strip" data-testid="task-launch-strip">
           <div class="launch-strip-hdr">
-            <span class="launch-strip-title">⚡ คำสั่งรันโปรเจกต์ &amp; พอร์ต (กดรันหรือคัดลอกได้ทันที)</span>
+            <span class="launch-strip-title">{$t("⚡ Project Run Commands & Ports (Click to run or copy)", "⚡ คำสั่งรันโปรเจกต์ & พอร์ต (กดรันหรือคัดลอกได้ทันที)")}</span>
             {#if $activeWorkspacePorts.length > 0}
               <div class="launch-active-ports">
                 {#each $activeWorkspacePorts as ap (ap.port)}
@@ -1049,16 +1084,16 @@
                     type="button"
                     class="launch-port-badge mono"
                     onclick={() => openExternalURL(ap.url)}
-                    title={`เปิด ${ap.url}`}
+                    title={$t(`Open ${ap.url}`, `เปิด ${ap.url}`)}
                   >
                     <Globe size={11} />
-                    <span>กำลังรัน: {ap.url.replace(/^https?:\/\//i, "")}</span>
+                    <span>{$t(`Running: ${ap.url.replace(/^https?:\/\//i, "")}`, `กำลังรัน: ${ap.url.replace(/^https?:\/\//i, "")}`)}</span>
                     <ExternalLink size={10} />
                   </button>
                 {/each}
               </div>
             {:else}
-              <span class="launch-idle-note">หมายเหตุ: โหมด Execute รันตรวจสอบแล้วปิดโปรเซสอัตโนมัติ — กดปุ่มด้านล่างเพื่อเปิดเซิร์ฟเวอร์ค้างไว้</span>
+              <span class="launch-idle-note">{$t("Note: Execute mode verifies and closes processes automatically — click below to keep a dev server running", "หมายเหตุ: โหมด Execute รันตรวจสอบแล้วปิดโปรเซสอัตโนมัติ — กดปุ่มด้านล่างเพื่อเปิดเซิร์ฟเวอร์ค้างไว้")}</span>
             {/if}
           </div>
 
@@ -1070,12 +1105,18 @@
                   {#if sc.port_conflict && sc.default_port && sc.target_port}
                     <span
                       class="launch-conflict-badge"
-                      title={`พอร์ต :${sc.default_port} มีระบบอื่นในเครื่องใช้อยู่แล้ว — APW สลับไปใช้พอร์ตว่าง :${sc.target_port} อัตโนมัติ`}
+                      title={$t(
+                        `Port :${sc.default_port} is in use — APW automatically switched to free port :${sc.target_port}`,
+                        `พอร์ต :${sc.default_port} มีระบบอื่นในเครื่องใช้อยู่แล้ว — APW สลับไปใช้พอร์ตว่าง :${sc.target_port} อัตโนมัติ`
+                      )}
                     >
-                      ⚠️ พอร์ต :{sc.default_port} ชนระบบอื่น → สลับไปใช้ :{sc.target_port}
+                      {$t(
+                        `⚠️ Port :${sc.default_port} busy → switched to :${sc.target_port}`,
+                        `⚠️ พอร์ต :${sc.default_port} ชนระบบอื่น → สลับไปใช้ :${sc.target_port}`
+                      )}
                     </span>
                   {:else if sc.target_port}
-                    <span class="launch-hint-url">พอร์ต :{sc.target_port}</span>
+                    <span class="launch-hint-url">{$t(`Port :${sc.target_port}`, `พอร์ต :${sc.target_port}`)}</span>
                   {/if}
                 </div>
                 <div class="launch-cmd-btns">
@@ -1085,16 +1126,16 @@
                     onclick={() => runCommandInAPW(sc.command, sc.hint_url, sc.target_port)}
                   >
                     <Play size={10} />
-                    <span>รันใน APW{sc.target_port ? ` (:${sc.target_port})` : ""}</span>
+                    <span>{$t(`Run in APW${sc.target_port ? ` (:${sc.target_port})` : ""}`, `รันใน APW${sc.target_port ? ` (:${sc.target_port})` : ""}`)}</span>
                   </button>
                   <button
                     type="button"
                     class="launch-btn"
                     onclick={() => openCommandInExternalTerminal(sc.command, sc.target_port)}
-                    title="เปิดรันในหน้าต่าง PowerShell แยก"
+                    title={$t("Run in a separate PowerShell window", "เปิดรันในหน้าต่าง PowerShell แยก")}
                   >
                     <ExternalLink size={10} />
-                    <span>เปิด Terminal</span>
+                    <span>{$t("Open Terminal", "เปิด Terminal")}</span>
                   </button>
                   <button
                     type="button"
@@ -1102,7 +1143,7 @@
                     onclick={() => flashTaskCopy("lsc-" + sc.id, sc.command)}
                   >
                     <Copy size={10} />
-                    <span>{copiedCmdKey === "lsc-" + sc.id ? "✓ คัดลอกแล้ว" : "คัดลอก"}</span>
+                    <span>{copiedCmdKey === "lsc-" + sc.id ? $t("✓ Copied", "✓ คัดลอกแล้ว") : $t("Copy", "คัดลอก")}</span>
                   </button>
                 </div>
               </div>
@@ -1120,7 +1161,7 @@
             disabled={busy}
             data-testid="apply-task-btn"
           >
-            Apply ลงโปรเจกต์เลย
+            {$t("Apply to Project", "Apply ลงโปรเจกต์เลย")}
           </button>
         {/if}
 
@@ -1132,12 +1173,16 @@
             disabled={busy}
             data-testid="resume-task-btn"
           >
-            {job.status === "preview_ready" ? "รันตรวจสอบและเตรียม Apply (Resume)" : "ทำต่อ (Resume)"}
+            {job.status === "preview_ready"
+              ? $t("Verify & Prepare Apply (Resume)", "รันตรวจสอบและเตรียม Apply (Resume)")
+              : $t("Resume", "ทำต่อ (Resume)")}
           </button>
         {/if}
 
         <button type="button" class="btn" onclick={() => openDiffFor()} data-testid="review-task-btn">
-          {changedFiles.length > 0 ? `ดู diff / รีวิว (${changedFiles.length} ไฟล์)` : "ดู diff / รีวิว"}
+          {changedFiles.length > 0
+            ? $t(`View Diff / Review (${changedFiles.length} files)`, `ดู diff / รีวิว (${changedFiles.length} ไฟล์)`)
+            : $t("View Diff / Review", "ดู diff / รีวิว")}
         </button>
 
         {#if (job.status === "succeeded" || job.status === "ready_to_apply") && job.report?.passed}
@@ -1151,7 +1196,7 @@
   {:else}
     <div class="actions">
       <button type="button" class="btn" onclick={() => openDiffFor()} data-testid="review-task-btn">
-        ดู diff / รีวิว
+        {$t("View Diff / Review", "ดู diff / รีวิว")}
       </button>
       <button
         type="button"
@@ -1160,11 +1205,20 @@
         disabled={busy}
         data-testid="cancel-task-btn"
       >
-        Cancel
+        {$t("Cancel", "ยกเลิก (Cancel)")}
       </button>
     </div>
   {/if}
 </div>
+
+{#if inspectedTrace}
+  <PromptInspectorModal
+    trace={inspectedTrace}
+    traces={promptTraces}
+    onSelectTrace={(tr) => (inspectedTrace = tr)}
+    onClose={() => (inspectedTrace = null)}
+  />
+{/if}
 
 <style>
   .task-card {

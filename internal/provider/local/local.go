@@ -59,9 +59,9 @@ func New(cfg config.ProviderConfig) (*Provider, error) {
 		apiKey = k
 	}
 
-	timeout := time.Duration(cfg.TimeoutSec) * time.Second
-	if timeout <= 0 {
-		timeout = 120 * time.Second
+	var timeout time.Duration
+	if cfg.TimeoutSec > 0 && cfg.TimeoutSec != 60 && cfg.TimeoutSec != 120 && cfg.TimeoutSec != 180 {
+		timeout = time.Duration(cfg.TimeoutSec) * time.Second
 	}
 
 	return &Provider{
@@ -116,14 +116,18 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 		model = p.cfg.Model
 	}
 
+	var msgs []chatMessage
+	if sys := strings.TrimSpace(req.System); sys != "" {
+		msgs = append(msgs, chatMessage{Role: "system", Content: sys})
+	}
+	msgs = append(msgs, chatMessage{
+		Role:    "user",
+		Content: req.EffectivePrompt(),
+	})
+
 	payload, err := json.Marshal(chatCompletionRequest{
-		Model: model,
-		Messages: []chatMessage{
-			{
-				Role:    "user",
-				Content: req.Prompt,
-			},
-		},
+		Model:    model,
+		Messages: msgs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -165,7 +169,11 @@ func (p *Provider) Ask(ctx context.Context, req core.ModelRequest) (*core.ModelR
 }
 
 func (p *Provider) doOnce(ctx context.Context, requestID string, payload []byte) (*core.ModelResponse, time.Duration, bool, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
+	reqCtx := ctx
+	var cancel context.CancelFunc = func() {}
+	if p.timeout > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, p.timeout)
+	}
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.endpoint+"/v1/chat/completions", bytes.NewReader(payload))

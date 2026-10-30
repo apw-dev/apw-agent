@@ -1,8 +1,11 @@
 import { writable, get } from "svelte/store";
+import { activeProjectPath } from "./workspace";
+import { locale, type AppLocale } from "../i18n";
 import {
   getNativeShellState,
   saveNativeUIPreferences,
   setNativeTheme,
+  type ProjectFolderView,
   type UIPreferences,
   type WorkspaceSelection
 } from "../shell";
@@ -41,6 +44,7 @@ function saveLocalPrefs(prefs: UIPreferences & { theme?: ThemeMode }) {
 export const themeMode = writable<ThemeMode>("system");
 export const resolvedTheme = writable<"light" | "dark">("light");
 export const recentWorkspaces = writable<string[]>([]);
+export const projectFolders = writable<ProjectFolderView[]>([]);
 export const leftWidth = writable<number>(240);
 export const rightWidth = writable<number>(360);
 export const leftCollapsed = writable<boolean>(false);
@@ -73,9 +77,18 @@ export function applyThemeToDocument(mode: ThemeMode) {
   }
 }
 
+export function applyLanguageToDocument(lang: AppLocale) {
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("lang", lang);
+  }
+}
+
 export async function initSettingsStore(): Promise<void> {
   const local = loadLocalPrefs();
   if (local.theme) themeMode.set(local.theme);
+  if (local.language === "en" || local.language === "th") {
+    locale.set(local.language);
+  }
   if (local.left_width) leftWidth.set(local.left_width);
   if (local.right_width) rightWidth.set(local.right_width);
   if (typeof local.left_collapsed === "boolean") leftCollapsed.set(local.left_collapsed);
@@ -87,20 +100,42 @@ export async function initSettingsStore(): Promise<void> {
   if (shell) {
     if (shell.theme) themeMode.set(shell.theme);
     if (shell.recent) recentWorkspaces.set(shell.recent);
+    if (shell.projects) projectFolders.set(shell.projects);
+    if (shell.current_workspace) {
+      activeProjectPath.set(shell.current_workspace);
+    } else if (shell.recent?.length && !get(activeProjectPath)) {
+      activeProjectPath.set(shell.recent[0]);
+    }
     if (shell.ui) {
+      if (shell.ui.language === "en" || shell.ui.language === "th") {
+        locale.set(shell.ui.language);
+      }
       if (shell.ui.left_width) leftWidth.set(shell.ui.left_width);
       if (shell.ui.right_width) rightWidth.set(shell.ui.right_width);
-      if (typeof shell.ui.left_collapsed === "boolean") leftCollapsed.set(shell.ui.left_collapsed);
-      if (typeof shell.ui.right_collapsed === "boolean") rightCollapsed.set(shell.ui.right_collapsed);
+      leftCollapsed.set(Boolean(shell.ui.left_collapsed));
+      rightCollapsed.set(Boolean(shell.ui.right_collapsed));
       if (shell.ui.collapsed_cards) collapsedCards.set(shell.ui.collapsed_cards);
       if (shell.ui.selections) workspaceSelections.set(shell.ui.selections);
     }
   }
   applyThemeToDocument(get(themeMode));
+  applyLanguageToDocument(get(locale));
+}
+
+export async function refreshProjectFolders(): Promise<void> {
+  const shell = await getNativeShellState();
+  if (shell) {
+    if (shell.recent) recentWorkspaces.set(shell.recent);
+    if (shell.projects) projectFolders.set(shell.projects);
+    if (shell.current_workspace) {
+      activeProjectPath.set(shell.current_workspace);
+    }
+  }
 }
 
 export function persistUIPreferences() {
   const ui: UIPreferences = {
+    language: get(locale),
     left_width: get(leftWidth),
     right_width: get(rightWidth),
     left_collapsed: get(leftCollapsed),
@@ -110,6 +145,12 @@ export function persistUIPreferences() {
   };
   saveLocalPrefs({ ...ui, theme: get(themeMode) });
   void saveNativeUIPreferences(ui);
+}
+
+export function updateLanguage(lang: AppLocale): void {
+  locale.set(lang);
+  applyLanguageToDocument(lang);
+  persistUIPreferences();
 }
 
 export async function updateTheme(mode: ThemeMode): Promise<void> {

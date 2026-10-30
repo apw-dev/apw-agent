@@ -26,18 +26,22 @@
     }
   }
 
+  async function openWorkspacePath(filePath: string) {
+    rightCollapsed.set(false);
+    const res = await fetchWorkspaceFile(filePath, taskId);
+    if (res.ok) {
+      rightPanelView.set("file");
+      return;
+    }
+    const wsRes = await fetchWorkspaceFile(filePath);
+    if (wsRes.ok) {
+      rightPanelView.set("file");
+    }
+  }
+
   async function onLinkClick(tok: Extract<InlineToken, { kind: "link" }>) {
     if (tok.filePath) {
-      rightCollapsed.set(false);
-      const res = await fetchWorkspaceFile(tok.filePath, taskId);
-      if (res.ok) {
-        rightPanelView.set("file");
-        return;
-      }
-      const wsRes = await fetchWorkspaceFile(tok.filePath);
-      if (wsRes.ok) {
-        rightPanelView.set("file");
-      }
+      await openWorkspacePath(tok.filePath);
       return;
     }
     if (tok.href.startsWith("http://") || tok.href.startsWith("https://")) {
@@ -81,6 +85,16 @@
           title={`เปิด ${tok.text.trim()}`}
         >
           🌐 {tok.text.trim()}
+        </button>
+      {:else if tok.filePath}
+        <button
+          type="button"
+          class="md-file-chip mono"
+          data-file-path={tok.filePath}
+          onclick={() => openWorkspacePath(tok.filePath!)}
+          title={`เปิดดูไฟล์ ${tok.filePath}`}
+        >
+          {tok.text}
         </button>
       {:else}
         <code class="md-inline-code mono">{tok.text}</code>
@@ -156,6 +170,41 @@
         </div>
         <pre class="mono"><code>{block.code}</code></pre>
       </div>
+    {:else if block.kind === "table"}
+      <div class="md-table-wrap">
+        <table class="md-table">
+          <thead>
+            <tr>
+              {#each block.headers as hdr, hIdx}
+                <th class:col-num={hIdx === 0 && hdr.length === 1 && hdr[0].kind === "text" && hdr[0].text === "#"}>
+                  {@render renderInline(hdr)}
+                </th>
+              {/each}
+            </tr>
+          </thead>
+          <tbody>
+            {#each block.rows as row}
+              <tr>
+                {#each row as cell, cIdx}
+                  <td class:col-num={cIdx === 0 && cell.length === 1 && cell[0].kind === "text" && /^\d+$/.test(cell[0].text)}>
+                    {#if cIdx === 0 && cell.length === 1 && cell[0].kind === "text" && /^\d+$/.test(cell[0].text)}
+                      <span class="row-num-badge mono">{cell[0].text}</span>
+                    {:else}
+                      {@render renderInline(cell)}
+                    {/if}
+                  </td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else if block.kind === "blockquote"}
+      <blockquote class="md-blockquote">
+        {#each block.lines as qLine}
+          <p class="md-p">{@render renderInline(qLine)}</p>
+        {/each}
+      </blockquote>
     {:else if block.kind === "list"}
       {#if block.ordered}
         <ol class="md-list">
@@ -206,6 +255,9 @@
   }
   .md-h2 {
     font-size: 13.5px;
+    margin-top: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
   }
   .md-h3 {
     font-size: 12.5px;
@@ -213,6 +265,88 @@
   }
   .md-p {
     margin: 0;
+  }
+  .md-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    margin: 4px 0;
+  }
+  .md-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .md-table th {
+    text-align: left;
+    padding: 7px 10px;
+    font-weight: 600;
+    color: var(--muted);
+    background: var(--panel-subtle);
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .md-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    color: var(--text);
+  }
+  .md-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+  .md-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--panel-subtle) 50%, transparent);
+  }
+  .md-table tbody tr:hover {
+    background: var(--hover);
+  }
+  .md-table .col-num {
+    width: 34px;
+    text-align: center;
+  }
+  .row-num-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 5px;
+    background: var(--panel-subtle);
+    border: 1px solid var(--line);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .md-blockquote {
+    margin: 2px 0;
+    padding: 6px 10px;
+    border-left: 3px solid var(--accent);
+    background: var(--panel-subtle);
+    border-radius: 0 6px 6px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .md-file-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+    color: var(--accent);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .md-file-chip:hover {
+    background: var(--hover);
+    text-decoration: underline;
   }
   .md-list {
     margin: 0;

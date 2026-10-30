@@ -37,3 +37,13 @@ func DevtoolsRequested(args []string) bool {
 	}
 	return false
 }
+
+// NewWindowRequested reports whether --new-window was passed to open an independent side-by-side window.
+func NewWindowRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--new-window" {
+			return true
+		}
+	}
+	return false
+}

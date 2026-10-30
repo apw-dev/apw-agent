@@ -72,13 +72,15 @@ type ExecutionReport struct {
 
 // ProgressEvent describes a real-time progress update during Triad execution.
 type ProgressEvent struct {
-	Stage      string // "planning", "plan_ready", "step_start", "step_done", "verifying", "verified", "synthesizing", "done"
-	Message    string
-	StepIndex  int
-	TotalSteps int
-	Duration   time.Duration
-	Step       *StepReport
-	Passed     bool
+	Stage           string                    `json:"stage"` // "planning", "plan_ready", "step_start", "step_done", "verifying", "verified", "synthesizing", "done"
+	Message         string                    `json:"message"`
+	StepIndex       int                       `json:"step_index,omitempty"`
+	TotalSteps      int                       `json:"total_steps,omitempty"`
+	Duration        time.Duration             `json:"duration,omitempty"`
+	Step            *StepReport               `json:"step,omitempty"`
+	Passed          bool                      `json:"passed,omitempty"`
+	Trace           *core.PromptTrace         `json:"trace,omitempty"`
+	RouteCandidates []core.RouteCandidateInfo `json:"route_candidates,omitempty"`
 }
 
 // ProgressCallback receives live progress events as each Triad phase runs.

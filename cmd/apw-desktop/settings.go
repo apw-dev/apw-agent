@@ -29,6 +29,7 @@ type WorkspaceSelection struct {
 
 // UIPreferences persists panel widths, collapsed cards and per-workspace selection in desktop.json.
 type UIPreferences struct {
+	Language       string                        `json:"language,omitempty"`
 	LeftWidth      int                           `json:"left_width,omitempty"`
 	RightWidth     int                           `json:"right_width,omitempty"`
 	LeftCollapsed  bool                          `json:"left_collapsed,omitempty"`
@@ -120,6 +121,29 @@ func (s *Settings) RememberWorkspace(dir string) {
 	}
 	s.Recent = recent
 	s.LastWorkspace = dir
+}
+
+// ForgetWorkspace removes dir from Recent and Selections, updating LastWorkspace if needed.
+func (s *Settings) ForgetWorkspace(dir string) {
+	var recent []string
+	for _, d := range s.Recent {
+		if !samePath(d, dir) {
+			recent = append(recent, d)
+		}
+	}
+	s.Recent = recent
+	for k := range s.UI.Selections {
+		if samePath(k, dir) {
+			delete(s.UI.Selections, k)
+		}
+	}
+	if samePath(s.LastWorkspace, dir) {
+		if len(s.Recent) > 0 {
+			s.LastWorkspace = s.Recent[0]
+		} else {
+			s.LastWorkspace = ""
+		}
+	}
 }
 
 func samePath(a, b string) bool {

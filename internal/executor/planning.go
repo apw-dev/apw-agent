@@ -42,7 +42,7 @@ func (e *Executor) lookupWanted(overview string) bool {
 	return strings.Contains(overview, contextTruncatedMarker)
 }
 
-func (e *Executor) gatherPrompt(instruction, overview string, lookup bool) string {
+func (e *Executor) gatherPromptParts(instruction, overview, gathered string, lookup bool) (cachePrefix, tailPrompt string) {
 	limit := lookupMaxQueries
 	if e.Research != nil && e.Research.MaxSources() > limit {
 		limit = e.Research.MaxSources()
@@ -64,7 +64,7 @@ func (e *Executor) gatherPrompt(instruction, overview string, lookup bool) strin
 			overview = headUTF8(overview, 24*1024)
 		}
 	}
-	return fmt.Sprintf(`You are the ARCHITECT in the APW Triad Agent Engine, preparing to plan a code change.
+	cachePrefix = fmt.Sprintf(`You are the ARCHITECT in the APW Triad Agent Engine, preparing to plan a code change.
 Before planning you may gather more context in one request. Ask only for what materially helps with this task; use at most %d items in total. If you need nothing, return empty lists.
 
 Available:
@@ -74,9 +74,20 @@ User Task:
 %s
 
 Codebase Overview:
-%s
+%s`, limit, strings.Join(abilities, "\n- "), instruction, overview)
 
-Respond with ONLY a JSON object: {%s}`, limit, strings.Join(abilities, "\n- "), instruction, overview, strings.Join(keys, ","))
+	var tail strings.Builder
+	if gathered != "" {
+		tail.WriteString(gathered)
+		tail.WriteString("\n")
+	}
+	fmt.Fprintf(&tail, "Respond with ONLY a JSON object: {%s}", strings.Join(keys, ","))
+	return cachePrefix, tail.String()
+}
+
+func (e *Executor) gatherPrompt(instruction, overview string, lookup bool) string {
+	prefix, tail := e.gatherPromptParts(instruction, overview, "", lookup)
+	return prefix + "\n\n" + tail
 }
 
 // gatherContext lets the Architect request documentation (apw.json research) and read-only code
@@ -92,17 +103,20 @@ func (e *Executor) gatherContext(ctx context.Context, task core.Task, overview s
 	var out strings.Builder
 	for turn := 1; turn <= lookupMaxTurns; turn++ {
 		var req contextRequest
-		currentOverview := overview
-		if out.Len() > 0 {
-			currentOverview = overview + "\n" + out.String()
-		}
-		prompt := e.gatherPrompt(task.Instruction, currentOverview, lookup)
+		cachePrefix, tailPrompt := e.gatherPromptParts(task.Instruction, overview, out.String(), lookup)
+		fullPrompt := cachePrefix + "\n\n" + tailPrompt
 		reqID := task.ID + "-research"
 		if turn > 1 {
 			reqID = fmt.Sprintf("%s-research-%d", task.ID, turn)
 		}
 		err := e.withArchitectFailover(ctx, "research", func(ctx context.Context, c FailoverCandidate) error {
-			resp, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: reqID, Model: c.Model, Prompt: prompt})
+			resp, err := c.Provider.Ask(ctx, core.ModelRequest{
+				RequestID:   reqID,
+				Model:       c.Model,
+				CachePrefix: cachePrefix,
+				Prompt:      fullPrompt,
+				Options:     map[string]string{"cache_ttl": "1h"},
+			})
 			if err != nil {
 				return err
 			}

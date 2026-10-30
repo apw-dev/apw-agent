@@ -340,11 +340,7 @@ func (s *Service) run(j *store.Job) {
 		s.persistJob(j.ID, core.StatusFailed, nil, cfgErr.Error())
 		return
 	}
-	timeout := time.Duration(cfg.Budget.TaskTimeoutSec) * time.Second
-	if timeout <= 0 {
-		timeout = 20 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(s.ctx, timeout)
+	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	s.mu.Lock()
 	s.activeID = j.ID
@@ -415,7 +411,7 @@ func (s *Service) run(j *store.Job) {
 		e.OnProgress = func(ev executor.ProgressEvent) {
 			status := core.TaskStatus("")
 			switch ev.Stage {
-			case "analyzing", "reviewing":
+			case "analyzing", "reviewing", "review_attempt", "review_done", "review_failed", "review_fallback":
 				status = core.StatusAnalyzing
 			case "planning", "replanning", "planning_attempt", "replanning_attempt", "research", "research_attempt", "research_source", "research_done", "proposals", "proposal", "proposal_chosen", "proposal_judge", "plan_ready", "planning_fallback", "research_fallback":
 				status = core.StatusPlanning
@@ -626,7 +622,16 @@ func (s *Service) loadTaskConfig() (*config.Config, error) {
 // skips any fallback that cannot be constructed.
 func readOnlyConfig(cfg *config.Config) *config.Config {
 	copyCfg := *cfg
-	copyCfg.Roles.Reflex = cfg.Roles.Architect
+	if r, ok := cfg.Providers[cfg.Roles.Reflex]; !ok {
+		copyCfg.Roles.Reflex = cfg.Roles.Architect
+	} else {
+		r.Workspace = cfg.Workspace
+		if p, err := factory.New(r); err != nil {
+			copyCfg.Roles.Reflex = cfg.Roles.Architect
+		} else {
+			_ = p.Close()
+		}
+	}
 	copyCfg.Failover.Reflex = nil
 	copyCfg.Failover.Architect = nil
 	return &copyCfg

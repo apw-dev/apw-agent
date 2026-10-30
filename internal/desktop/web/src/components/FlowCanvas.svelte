@@ -2,6 +2,7 @@
   import { Code2, ZoomIn, ZoomOut, Maximize2, RotateCcw, MousePointerSquareDashed } from "lucide-svelte";
   import type { BoardDiagramCanvas, BoardDecisionItem } from "../lib/api";
   import type { HighlightedCanvasElement } from "../lib/board";
+  import { t } from "../lib/i18n";
 
   let {
     diagram,
@@ -491,8 +492,11 @@
   <div class="seq-diagram-frame" data-testid="visual-sequence-diagram">
     <div class="seq-diagram-top">
       <div>
-        <strong>Sequence Lifeline Diagram (ผูกตำแหน่งไฟล์และบรรทัดโค้ดจริง)</strong>
-        <span class="seq-sub">คลิกที่กล่อง Actor, แท่ง Activation หรือเส้นลูกศรเพื่อเปิดโค้ดจริงด้านขวา · กด "+ ไฮไลต์สั่งแก้" เพื่อคัดลอกบริบท</span>
+        <strong>{$t("Sequence Lifeline Diagram (Code-to-Diagram Binding)", "Sequence Lifeline Diagram (ผูกตำแหน่งไฟล์และบรรทัดโค้ดจริง)")}</strong>
+        <span class="seq-sub">{$t(
+          "Click any Actor box, Activation bar, or arrow to jump to live code · Click '+ Highlight' to copy context",
+          "คลิกที่กล่อง Actor, แท่ง Activation หรือเส้นลูกศรเพื่อเปิดโค้ดจริงด้านขวา · กด \"+ ไฮไลต์สั่งแก้\" เพื่อคัดลอกบริบท"
+        )}</span>
       </div>
     </div>
 
@@ -501,7 +505,10 @@
         viewBox="0 0 920 450"
         class="seq-svg"
         role="img"
-        aria-label="Sequence Diagram แสดงลำดับการทำงานของระบบและลิงก์ไปยังโค้ดจริง"
+        aria-label={$t(
+          "Sequence Diagram showing system execution flow and links to live code",
+          "Sequence Diagram แสดงลำดับการทำงานของระบบและลิงก์ไปยังโค้ดจริง"
+        )}
       >
         <defs>
           <marker id="arrow-req" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
@@ -766,22 +773,24 @@
               })}
             data-testid={`highlight-${node.id}`}
           >
-            {isSelected(node.id) ? "✓ ไฮไลต์แล้ว" : "+ ไฮไลต์สั่งแก้"}
+            {isSelected(node.id)
+              ? $t("✓ Highlighted", "✓ ไฮไลต์แล้ว")
+              : $t("+ Highlight", "+ ไฮไลต์สั่งแก้")}
           </button>
         </div>
       {/each}
     </div>
 
-    <div class="seq-legend" aria-label="คำอธิบายสัญลักษณ์ Sequence Diagram">
+    <div class="seq-legend" aria-label={$t("Sequence Diagram Legend", "คำอธิบายสัญลักษณ์ Sequence Diagram")}>
       <span class="legend-title mono">LEGEND</span>
       <div class="legend-items">
         <span class="leg-item">
           <span class="leg-box focal"></span>
-          <span>Focal actor (แกนประมวลผลหลัก)</span>
+          <span>{$t("Focal actor (Core engine)", "Focal actor (แกนประมวลผลหลัก)")}</span>
         </span>
         <span class="leg-item">
           <span class="leg-act"></span>
-          <span>Activation (ช่วงกำลังทำงาน)</span>
+          <span>{$t("Activation (Active span)", "Activation (ช่วงกำลังทำงาน)")}</span>
         </span>
         <span class="leg-item">
           <span class="leg-line req"></span>
@@ -806,7 +815,10 @@
     <div class="xyflow-topbar">
       <div class="xyflow-title">
         <strong>XYFlow / Svelte Flow Interactive Node Canvas</strong>
-        <span class="xy-hint">ลากโหนดเพื่อจัดวาง · คลิกโหนด/เส้นเชื่อมเพื่อเปิดโค้ดจริง · กดปุ่ม "โหมดลากคลุมสั่งแก้" (หรือกด Shift ค้างแล้วลากเมาส์) เพื่อเลือกหลายโหนดเข้า Clipboard</span>
+        <span class="xy-hint">{$t(
+          "Drag nodes to arrange · Click nodes/edges to jump to code · Toggle 'Box Select' (or hold Shift + drag) to select multiple nodes into Clipboard",
+          "ลากโหนดเพื่อจัดวาง · คลิกโหนด/เส้นเชื่อมเพื่อเปิดโค้ดจริง · กดปุ่ม \"โหมดลากคลุมสั่งแก้\" (หรือกด Shift ค้างแล้วลากเมาส์) เพื่อเลือกหลายโหนดเข้า Clipboard"
+        )}</span>
       </div>
       <div class="xyflow-actions">
         <button
@@ -817,7 +829,9 @@
           data-testid="xyflow-lasso-btn"
         >
           <MousePointerSquareDashed size={13} />
-          <span>{lassoMode ? "กำลังใช้โหมดลากคลุมสั่งแก้" : "โหมดลากคลุมสั่งแก้ (Box Select)"}</span>
+          <span>{lassoMode
+            ? $t("Box Select Active", "กำลังใช้โหมดลากคลุมสั่งแก้")
+            : $t("Box Select Mode", "โหมดลากคลุมสั่งแก้ (Box Select)")}</span>
         </button>
       </div>
     </div>
@@ -923,7 +937,7 @@
             <span
               class="xy-handle left"
               style={`top:${node.handleY - 1.5}px;`}
-              title="จุดเชื่อมต่อฝั่งซ้าย (Left Handle) · ลากเพื่อเชื่อมเส้นใหม่"
+              title={$t("Left Handle · Drag to connect a new wire", "จุดเชื่อมต่อฝั่งซ้าย (Left Handle) · ลากเพื่อเชื่อมเส้นใหม่")}
               onpointerdown={(e) => onHandlePointerDown(e, node, "left")}
               onpointerup={(e) => onHandlePointerUp(e, node, "left")}
             ></span>
@@ -946,7 +960,9 @@
                     detail: node.subtitle
                   })}
               >
-                {isSelected(node.id) ? "✓ ไฮไลต์" : "+ ไฮไลต์"}
+                {isSelected(node.id)
+                  ? $t("✓ Highlight", "✓ ไฮไลต์")
+                  : $t("+ Highlight", "+ ไฮไลต์")}
               </button>
             </div>
 
@@ -972,14 +988,14 @@
             >
               <Code2 size={11} />
               <span class="xy-file-loc">{node.file}:L{node.line}</span>
-              <span class="xy-go">เปิดโค้ด →</span>
+              <span class="xy-go">{$t("Open Code →", "เปิดโค้ด →")}</span>
             </button>
 
             <!-- Right Handle Dot (Source / Target) -->
             <span
               class="xy-handle right"
               style={`top:${node.handleY - 1.5}px;`}
-              title="จุดเชื่อมต่อฝั่งขวา (Right Handle) · ลากเพื่อเชื่อมเส้นใหม่"
+              title={$t("Right Handle · Drag to connect a new wire", "จุดเชื่อมต่อฝั่งขวา (Right Handle) · ลากเพื่อเชื่อมเส้นใหม่")}
               onpointerdown={(e) => onHandlePointerDown(e, node, "right")}
               onpointerup={(e) => onHandlePointerUp(e, node, "right")}
             ></span>
@@ -988,13 +1004,13 @@
       </div>
 
       <!-- XYFlow Controls (Bottom-Left) -->
-      <div class="xy-controls" role="group" aria-label="ควบคุมการซูมและจัดวางกระดาน XYFlow">
+      <div class="xy-controls" role="group" aria-label={$t("XYFlow zoom and layout controls", "ควบคุมการซูมและจัดวางกระดาน XYFlow")}>
         <button
           type="button"
           class="xy-ctrl-btn"
           onclick={() => (zoom = Math.min(1.5, Number((zoom + 0.12).toFixed(2))))}
-          title="ซูมเข้า (Zoom In)"
-          aria-label="ซูมเข้า"
+          title={$t("Zoom In", "ซูมเข้า (Zoom In)")}
+          aria-label={$t("Zoom In", "ซูมเข้า")}
         >
           <ZoomIn size={13} />
         </button>
@@ -1002,8 +1018,8 @@
           type="button"
           class="xy-ctrl-btn"
           onclick={() => (zoom = Math.max(0.6, Number((zoom - 0.12).toFixed(2))))}
-          title="ซูมออก (Zoom Out)"
-          aria-label="ซูมออก"
+          title={$t("Zoom Out", "ซูมออก (Zoom Out)")}
+          aria-label={$t("Zoom Out", "ซูมออก")}
         >
           <ZoomOut size={13} />
         </button>
@@ -1015,8 +1031,8 @@
             panX = 20;
             panY = 16;
           }}
-          title="พอดีหน้าจอ (Fit View)"
-          aria-label="พอดีหน้าจอ"
+          title={$t("Fit View", "พอดีหน้าจอ (Fit View)")}
+          aria-label={$t("Fit View", "พอดีหน้าจอ")}
         >
           <Maximize2 size={13} />
         </button>
@@ -1024,8 +1040,8 @@
           type="button"
           class="xy-ctrl-btn"
           onclick={resetLayout}
-          title="รีเซ็ตตำแหน่งโหนด (Reset Layout)"
-          aria-label="รีเซ็ตตำแหน่งโหนด"
+          title={$t("Reset Layout", "รีเซ็ตตำแหน่งโหนด (Reset Layout)")}
+          aria-label={$t("Reset Layout", "รีเซ็ตตำแหน่งโหนด")}
         >
           <RotateCcw size={13} />
         </button>

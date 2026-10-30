@@ -236,9 +236,9 @@ describe("components", () => {
 
     // 2. Structural Diff has Core expanded by default and Tests/Docs auto-collapsed
     expect(screen.getByTestId("diff-group-core")).toHaveTextContent("INPUT");
-    expect(screen.getByTestId("diff-group-test")).toHaveTextContent("พับเก็บอัตโนมัติ");
+    expect(screen.getByTestId("diff-group-test")).toHaveTextContent(/Auto-collapsed|พับเก็บอัตโนมัติ/);
     await fireEvent.click(screen.getByTestId("toggle-test-group-btn"));
-    expect(screen.getByTestId("diff-group-test")).toHaveTextContent("กางออกแล้ว");
+    expect(screen.getByTestId("diff-group-test")).toHaveTextContent(/Expanded|กางออกแล้ว/);
 
     // 3. Decision Log shows red pins for unprompted agent decisions
     expect(screen.getAllByTestId("red-pin-indicator").length).toBeGreaterThan(0);
@@ -275,8 +275,11 @@ describe("run console dock", () => {
   });
 });
 
-describe("answered questions", () => {
-  it("shows an answer without the change pipeline", () => {
+describe("answered questions & i18n language switching", () => {
+  it("shows an answer without the change pipeline in English (default) and switches to Thai", async () => {
+    const { locale } = await import("./lib/i18n");
+    const { tick } = await import("svelte");
+    locale.set("en");
     const answered: TaskJob = {
       id: "task-answer",
       instruction: "CROWDSEC_BOUNCER_KEY ได้มายังไง",
@@ -285,9 +288,15 @@ describe("answered questions", () => {
       report: { mode: "review", passed: true, answered: true, summary: "รัน `cscli bouncers add web-ui` แล้วคัดลอก key" } as any
     };
     const { container, unmount } = render(TaskCard, { props: { job: answered, events: [] } });
-    expect(screen.getByText("ตอบคำถาม")).toBeInTheDocument();
+    expect(screen.getByText("Answered")).toBeInTheDocument();
     expect(container.querySelector(".step-bar")).toBeNull();
     expect(screen.queryByTestId("apply-task-btn")).not.toBeInTheDocument();
+
+    locale.set("th");
+    await tick();
+    expect(screen.getByText("ตอบคำถาม")).toBeInTheDocument();
+
+    locale.set("en");
     unmount();
   });
 });

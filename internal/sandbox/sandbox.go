@@ -333,6 +333,7 @@ func (s *Session) dockerCommand(ctx context.Context, spec Spec) (*Prepared, erro
 	cleanup := func() {
 		// Killing the CLI does not stop the container; remove it explicitly (no-op once --rm ran).
 		rm := exec.Command("docker", "rm", "-f", name)
+		process.HideWindow(rm)
 		_ = rm.Run()
 	}
 	return &Prepared{Cmd: cmd, Limits: process.Limits{}, Cleanup: cleanup}, nil

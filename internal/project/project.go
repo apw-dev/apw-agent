@@ -144,6 +144,10 @@ func detect(root string) Profile {
 	case exists(root, "pyproject.toml") || exists(root, "requirements.txt") || exists(root, "setup.py") ||
 		exists(root, "backend/pyproject.toml") || exists(root, "backend/requirements.txt") || exists(root, "backend/setup.py"):
 		return detectPython(root)
+	case hasDotNet(root):
+		return Profile{Kind: "dotnet", Summary: ".NET (dotnet)", Stages: []Stage{
+			{Name: "test", Command: []string{"dotnet", "test"}, Timeout: defaultInstallTimeout},
+		}}
 	}
 	if sub, ok := detectNodeSubprojects(root); ok {
 		return sub
@@ -477,6 +481,48 @@ func globHTML(root string) []string {
 	matches, _ := filepath.Glob(filepath.Join(root, "*.html"))
 	sort.Strings(matches)
 	return matches
+}
+
+func globPattern(root, pattern string) []string {
+	matches, _ := filepath.Glob(filepath.Join(root, pattern))
+	sort.Strings(matches)
+	return matches
+}
+
+func hasDotNet(root string) bool {
+	if len(globPattern(root, "*.sln")) > 0 || len(globPattern(root, "*.csproj")) > 0 || len(globPattern(root, "*.fsproj")) > 0 {
+		return true
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || name == "bin" || name == "obj" || name == "node_modules" {
+			continue
+		}
+		sub := filepath.Join(root, name)
+		if len(globPattern(sub, "*.sln")) > 0 || len(globPattern(sub, "*.csproj")) > 0 || len(globPattern(sub, "*.fsproj")) > 0 {
+			return true
+		}
+		subEntries, err := os.ReadDir(sub)
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if se.IsDir() && !strings.HasPrefix(se.Name(), ".") && se.Name() != "bin" && se.Name() != "obj" {
+				subSub := filepath.Join(sub, se.Name())
+				if len(globPattern(subSub, "*.csproj")) > 0 || len(globPattern(subSub, "*.fsproj")) > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Available reports whether a stage command can run on this machine.

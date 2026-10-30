@@ -344,6 +344,7 @@ func initRepo(ctx context.Context, dir string) error {
 	} {
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
+		process.HideWindow(cmd)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, out)
 		}

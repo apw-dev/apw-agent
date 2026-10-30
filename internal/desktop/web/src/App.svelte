@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { PanelLeftOpen, PanelRightOpen } from "lucide-svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import Thread from "./components/Thread.svelte";
   import ReviewPanel from "./components/ReviewPanel.svelte";
@@ -21,6 +22,7 @@
   import { loadTasks, loadApprovals, runningTasks } from "./lib/stores/tasks";
   import {
     initSettingsStore,
+    refreshProjectFolders,
     leftWidth,
     rightWidth,
     leftCollapsed,
@@ -39,6 +41,7 @@
     chooseWorkspace,
     openExternalURL
   } from "./lib/shell";
+  import { t } from "./lib/i18n";
 
   let resizingSide = $state<"left" | "right" | null>(null);
 
@@ -56,11 +59,13 @@
     const statusTimer = setInterval(async () => {
       const prev = $connectionState;
       const st = await loadStatus();
+      void refreshProjectFolders();
       if (st && prev !== "connected") {
         await ensureActiveSession();
         await Promise.all([loadSessions(), loadTasks(), loadApprovals(), loadAutonomy()]);
       } else if (st && $runningTasks.length > 0) {
         void loadTasks();
+        void loadSessions();
       }
     }, 4000);
 
@@ -197,16 +202,16 @@
 
 {#if $connectionState === "connecting" && !$connectionError}
   <div class="connecting-screen" data-testid="connecting-screen">
-    <div class="logo">A</div>
-    <h2>กำลังเริ่มต้นบริการ APW (apwd)…</h2>
-    <p>กำลังเชื่อมต่อกับ Workspace ของคุณ</p>
+    <img src="/bee-icon.png" alt="APW" class="logo-img" />
+    <h2>{$t("Starting APW service (apwd)…", "กำลังเริ่มต้นบริการ APW (apwd)…")}</h2>
+    <p>{$t("Connecting to your Workspace", "กำลังเชื่อมต่อกับ Workspace ของคุณ")}</p>
   </div>
 {:else if $connectionState === "connecting" && $connectionError}
   <div class="connecting-screen" data-testid="connecting-screen">
-    <div class="logo">A</div>
-    <h2>กำลังเชื่อมต่อกับบริการ APW…</h2>
+    <img src="/bee-icon.png" alt="APW" class="logo-img" />
+    <h2>{$t("Connecting to APW service…", "กำลังเชื่อมต่อกับบริการ APW…")}</h2>
     <p class="mono err-txt selectable">{$connectionError}</p>
-    <button type="button" class="retry-btn" onclick={bootstrap}>ลองเชื่อมต่อใหม่</button>
+    <button type="button" class="retry-btn" onclick={bootstrap}>{$t("Retry Connection", "ลองเชื่อมต่อใหม่")}</button>
   </div>
 {:else}
   <div class="app-shell" data-testid="app-shell">
@@ -220,12 +225,37 @@
         id="left-resizer"
         class="resizer"
         onpointerdown={() => (resizingSide = "left")}
-        aria-label="ปรับขนาดแถบด้านซ้าย"
+        aria-label={$t("Resize left sidebar", "ปรับขนาดแถบด้านซ้าย")}
         onkeydown={(e) => onResizerKeyDown("left", e)}
       ></button>
     {/if}
 
     <div class="center-pane">
+      {#if $leftCollapsed}
+        <button
+          type="button"
+          class="reopen-pane-btn left"
+          onclick={() => toggleLeftSidebar()}
+          title={$t("Show left sidebar (Ctrl+B)", "แสดงแถบด้านซ้าย (Ctrl+B)")}
+          aria-label={$t("Show left sidebar", "แสดงแถบด้านซ้าย")}
+          data-testid="reopen-left-sidebar-btn"
+        >
+          <img src="/bee-icon.png" alt="" class="reopen-bee" />
+          <PanelLeftOpen size={15} />
+        </button>
+      {/if}
+      {#if $rightCollapsed}
+        <button
+          type="button"
+          class="reopen-pane-btn right"
+          onclick={() => toggleRightPanel()}
+          title={$t("Show right panel (Ctrl+J)", "แสดงแถบด้านขวา (Ctrl+J)")}
+          aria-label={$t("Show right panel", "แสดงแถบด้านขวา")}
+          data-testid="reopen-right-panel-btn"
+        >
+          <PanelRightOpen size={15} />
+        </button>
+      {/if}
       {#if $centerView === "autonomy"}
         <AutonomyView />
       {:else if $centerView === "board"}
@@ -242,7 +272,7 @@
         id="right-resizer"
         class="resizer"
         onpointerdown={() => (resizingSide = "right")}
-        aria-label="ปรับขนาดแถบด้านขวา"
+        aria-label={$t("Resize right panel", "ปรับขนาดแถบด้านขวา")}
         onkeydown={(e) => onResizerKeyDown("right", e)}
       ></button>
       <div class="right-pane" style={`width:${$rightWidth}px`}>
@@ -270,11 +300,42 @@
     border-right: 1px solid var(--line);
   }
   .center-pane {
+    position: relative;
     flex: 1;
     min-width: 0;
     height: 100%;
     display: flex;
     flex-direction: column;
+  }
+  .reopen-pane-btn {
+    position: absolute;
+    top: 10px;
+    z-index: 40;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+  }
+  .reopen-pane-btn.left {
+    left: 12px;
+  }
+  .reopen-pane-btn.right {
+    right: 12px;
+  }
+  .reopen-pane-btn:hover {
+    background: var(--hover);
+    border-color: var(--line-strong);
+  }
+  .reopen-bee {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
   }
   .right-pane {
     height: 100%;
@@ -305,17 +366,11 @@
     background: var(--bg);
     color: var(--text);
   }
-  .logo {
-    width: 36px;
-    height: 36px;
-    border-radius: 9px;
-    background: var(--accent);
-    color: var(--accent-fg);
-    font-weight: 700;
-    font-size: 18px;
-    display: grid;
-    place-items: center;
-    margin-bottom: 4px;
+  .logo-img {
+    width: 64px;
+    height: 64px;
+    object-fit: contain;
+    margin-bottom: 6px;
   }
   .connecting-screen h2 {
     margin: 0;

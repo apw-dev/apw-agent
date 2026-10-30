@@ -4,6 +4,7 @@
   import type { TurnView } from "../lib/api";
   import { tasks, selectTask, submitComposerInstruction, ACTIVE_TASK_STATUSES } from "../lib/stores/tasks";
   import { parseInstructionSkillPills } from "../lib/stores/search";
+  import { t } from "../lib/i18n";
 
   let { turn }: { turn: TurnView } = $props();
   let copied = $state(false);
@@ -80,17 +81,20 @@
   const statusText = $derived.by(() => {
     if (linkedJob) {
       const st = linkedJob.status;
-      if (ACTIVE_TASK_STATUSES.has(st)) return "กำลังทำงาน…";
-      if (st === "preview_ready") return "Preview เสร็จแล้ว · รอตรวจทาน";
-      if (st === "ready_to_apply") return "ตรวจสอบผ่านแล้ว · พร้อม Apply";
-      if (st === "succeeded") return linkedJob.report?.applied || turn.applied ? "Applied เสร็จสมบูรณ์" : "เสร็จสมบูรณ์";
-      if (st === "interrupted") return "⏸ พักงานชั่วคราว · พร้อมทำต่อ";
-      if (st === "failed") return "ไม่สำเร็จ";
-      if (st === "cancelled") return "ยกเลิกแล้ว";
+      if (ACTIVE_TASK_STATUSES.has(st)) return $t("Working…", "กำลังทำงาน…");
+      if (st === "preview_ready") return $t("Preview ready · awaiting review", "Preview เสร็จแล้ว · รอตรวจทาน");
+      if (st === "ready_to_apply") return $t("Verified · ready to apply", "ตรวจสอบผ่านแล้ว · พร้อม Apply");
+      if (st === "succeeded")
+        return linkedJob.report?.applied || turn.applied
+          ? $t("Applied", "Applied เสร็จสมบูรณ์")
+          : $t("Completed", "เสร็จสมบูรณ์");
+      if (st === "interrupted") return $t("⏸ Paused · ready to resume", "⏸ พักงานชั่วคราว · พร้อมทำต่อ");
+      if (st === "failed") return $t("Failed", "ไม่สำเร็จ");
+      if (st === "cancelled") return $t("Cancelled", "ยกเลิกแล้ว");
       return st;
     }
-    if (turn.applied) return "Applied เสร็จสมบูรณ์";
-    return turn.success ? "เสร็จสิ้น" : "รอตรวจสอบ / ดำเนินการต่อ";
+    if (turn.applied) return $t("Applied", "Applied เสร็จสมบูรณ์");
+    return turn.success ? $t("Completed", "เสร็จสิ้น") : $t("Pending review / follow-up", "รอตรวจสอบ / ดำเนินการต่อ");
   });
 
   const statusKind = $derived.by(() => {
@@ -126,8 +130,8 @@
         type="button"
         class="meta-icon-btn"
         onclick={onCopyInstruction}
-        title="คัดลอกคำสั่ง"
-        aria-label="คัดลอกคำสั่ง"
+        title={$t("Copy instruction", "คัดลอกคำสั่ง")}
+        aria-label={$t("Copy instruction", "คัดลอกคำสั่ง")}
       >
         {#if copied}
           <Check size={12} />
@@ -139,8 +143,8 @@
         type="button"
         class="meta-icon-btn"
         onclick={() => submitComposerInstruction(turn.instruction)}
-        title="ส่งคำสั่งนี้อีกครั้ง"
-        aria-label="ส่งคำสั่งนี้อีกครั้ง"
+        title={$t("Resend instruction", "ส่งคำสั่งนี้อีกครั้ง")}
+        aria-label={$t("Resend instruction", "ส่งคำสั่งนี้อีกครั้ง")}
       >
         <RotateCcw size={12} />
       </button>

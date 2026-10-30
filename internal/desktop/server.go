@@ -136,7 +136,7 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/assets/") {
+		if strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/logo.png" || r.URL.Path == "/bee-icon.png" {
 			if r.Method != "GET" && r.Method != "HEAD" {
 				http.Error(w, "method not allowed", 405)
 				return

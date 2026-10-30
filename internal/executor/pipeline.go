@@ -115,21 +115,60 @@ func (e *Executor) review(ctx context.Context, instruction, overview string, ans
 	if e.Session != nil {
 		overview = e.Session.BuildContextSummary() + "\n" + overview
 	}
+	var auditCtx string
 	if !answer {
-		if auditCtx := e.runDomainAuditSubagents(ctx, instruction); auditCtx != "" {
+		if auditCtx = e.runDomainAuditSubagents(ctx, instruction); auditCtx != "" {
 			overview += "\n" + auditCtx
 		}
 	}
 	e.emit(ProgressEvent{Stage: "reviewing", Message: "Reading source without executing repository code"})
-	source := overview + "\n" + ProjectOverviewForTask(e.Workspace, instruction, e.Profile(e.Workspace))
-	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty.\nInstruction: " + instruction + "\n" + source
+	searchHint := instruction
+	if auditCtx != "" {
+		searchHint += "\n" + auditCtx
+	}
+	source := overview + "\n" + ProjectOverviewForTask(e.Workspace, searchHint, e.Profile(e.Workspace))
+	if pinned := expandPromptMentions(e.Workspace, searchHint, nil); pinned != "" && !strings.Contains(source, pinned) {
+		source += "\n" + pinned
+	}
+	prompt := "Review the supplied source only. Do not run tools, commands, tests, or modify files. Cite file paths and evidence. Distinguish confirmed bugs from uncertainty. Write your review findings in the same language as the user's Instruction while keeping file paths and code symbols in their original form.\nInstruction: " + instruction + "\n" + source
 	if answer {
 		prompt = answerPrompt(instruction, source)
 	}
 	var summary string
 	err := e.withArchitectFailover(ctx, "review", func(ctx context.Context, c FailoverCandidate) error {
+		started := time.Now()
+		e.emit(ProgressEvent{
+			Stage:   "review_attempt",
+			Message: fmt.Sprintf("Review request to %s (%s)...", c.Model, c.Provider.Name()),
+			Trace: &core.PromptTrace{
+				RequestID:   e.TaskID,
+				Stage:       "review",
+				Provider:    c.Provider.Name(),
+				Model:       c.Model,
+				Prompt:      prompt,
+				PromptBytes: len(prompt),
+				Timestamp:   started,
+				Status:      "running",
+			},
+		})
 		response, err := c.Provider.Ask(ctx, core.ModelRequest{RequestID: e.TaskID, Model: c.Model, Prompt: prompt})
 		if err != nil {
+			e.emit(ProgressEvent{
+				Stage:   "review_failed",
+				Message: fmt.Sprintf("Review failed for %s: %v", c.Model, err),
+				Trace: &core.PromptTrace{
+					RequestID:   e.TaskID,
+					Stage:       "review",
+					Provider:    c.Provider.Name(),
+					Model:       c.Model,
+					Prompt:      prompt,
+					PromptBytes: len(prompt),
+					DurationMs:  time.Since(started).Milliseconds(),
+					Timestamp:   started,
+					Status:      "failed",
+					Error:       err.Error(),
+				},
+			})
 			return err
 		}
 		if ctx.Err() != nil {
@@ -138,6 +177,23 @@ func (e *Executor) review(ctx context.Context, instruction, overview string, ans
 		if response == nil || !response.Completed || strings.TrimSpace(response.Content) == "" {
 			return errReviewIncomplete
 		}
+		e.emit(ProgressEvent{
+			Stage:   "review_done",
+			Message: fmt.Sprintf("Review response received from %s (%d bytes)", c.Model, len(response.Content)),
+			Trace: &core.PromptTrace{
+				RequestID:     e.TaskID,
+				Stage:         "review",
+				Provider:      c.Provider.Name(),
+				Model:         c.Model,
+				Prompt:        prompt,
+				PromptBytes:   len(prompt),
+				Response:      response.Content,
+				ResponseBytes: len(response.Content),
+				DurationMs:    time.Since(started).Milliseconds(),
+				Timestamp:     started,
+				Status:        "completed",
+			},
+		})
 		summary = response.Content
 		return nil
 	})

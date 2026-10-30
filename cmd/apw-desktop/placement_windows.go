@@ -3,11 +3,16 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/binary"
 	"os"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+//go:embed build/windows/icon.ico
+var embeddedAppIconICO []byte
 
 // windowClassName is the Win32 class of the main window (windows.Options.WindowClassName),
 // unique so the window can be found without depending on its title.
@@ -15,6 +20,7 @@ const windowClassName = "APWDesktopWindow"
 
 var (
 	user32                       = windows.NewLazySystemDLL("user32.dll")
+	kernel32                     = windows.NewLazySystemDLL("kernel32.dll")
 	procFindWindowW              = user32.NewProc("FindWindowW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	procGetWindowRect            = user32.NewProc("GetWindowRect")
@@ -25,6 +31,10 @@ var (
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
 	procShowWindow               = user32.NewProc("ShowWindow")
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	procSendMessageW             = user32.NewProc("SendMessageW")
+	procLoadImageW               = user32.NewProc("LoadImageW")
+	procCreateIconFromResourceEx = user32.NewProc("CreateIconFromResourceEx")
+	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
 )
 
 type winRect struct{ Left, Top, Right, Bottom int32 }
@@ -107,4 +117,79 @@ func focusWindow() {
 		procShowWindow.Call(h, swRestore)
 	}
 	procSetForegroundWindow.Call(h)
+}
+
+func iconFromEmbeddedICO(targetSize int) uintptr {
+	if len(embeddedAppIconICO) < 6 {
+		return 0
+	}
+	count := int(binary.LittleEndian.Uint16(embeddedAppIconICO[4:6]))
+	bestOff, bestLen, bestDiff := 0, 0, 1<<30
+	for i := 0; i < count; i++ {
+		ent := 6 + i*16
+		if ent+16 > len(embeddedAppIconICO) {
+			break
+		}
+		w := int(embeddedAppIconICO[ent])
+		if w == 0 {
+			w = 256
+		}
+		size := int(binary.LittleEndian.Uint32(embeddedAppIconICO[ent+8 : ent+12]))
+		off := int(binary.LittleEndian.Uint32(embeddedAppIconICO[ent+12 : ent+16]))
+		if off <= 0 || size <= 0 || off+size > len(embeddedAppIconICO) {
+			continue
+		}
+		diff := w - targetSize
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < bestDiff {
+			bestDiff = diff
+			bestOff = off
+			bestLen = size
+		}
+	}
+	if bestLen == 0 {
+		return 0
+	}
+	hIcon, _, _ := procCreateIconFromResourceEx.Call(
+		uintptr(unsafe.Pointer(&embeddedAppIconICO[bestOff])),
+		uintptr(bestLen),
+		1,
+		0x00030000,
+		uintptr(targetSize),
+		uintptr(targetSize),
+		0,
+	)
+	return hIcon
+}
+
+// applyWindowIcon sets both the small titlebar icon and large taskbar/Alt-Tab icon on the main HWND.
+func applyWindowIcon() {
+	h, ok := mainWindow()
+	if !ok {
+		return
+	}
+	const (
+		wmSetIcon = 0x0080
+		iconSmall = 0
+		iconBig   = 1
+		imageIcon = 1
+		lrShared  = 0x8000
+	)
+	hMod, _, _ := procGetModuleHandleW.Call(0)
+	smallIcon, _, _ := procLoadImageW.Call(hMod, 1, imageIcon, 32, 32, lrShared)
+	if smallIcon == 0 {
+		smallIcon = iconFromEmbeddedICO(32)
+	}
+	bigIcon, _, _ := procLoadImageW.Call(hMod, 1, imageIcon, 64, 64, lrShared)
+	if bigIcon == 0 {
+		bigIcon = iconFromEmbeddedICO(64)
+	}
+	if smallIcon != 0 {
+		procSendMessageW.Call(h, wmSetIcon, iconSmall, smallIcon)
+	}
+	if bigIcon != 0 {
+		procSendMessageW.Call(h, wmSetIcon, iconBig, bigIcon)
+	}
 }

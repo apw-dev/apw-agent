@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderOpen, ShieldCheck, ShieldAlert, FileText, Check } from "lucide-svelte";
+  import { FolderOpen, ShieldCheck, ShieldAlert, FileText, Check, ExternalLink } from "lucide-svelte";
   import {
     workspaceStatus,
     toggleWorkspaceTrust,
@@ -9,7 +9,14 @@
     inlineWorkspaceError
   } from "../lib/stores/workspace";
   import { recentWorkspaces, workspacePopoverOpen, rightCollapsed, rightPanelView } from "../lib/stores/settings";
-  import { chooseWorkspace, openWorkspaceDir, inDesktopShell, revealInExplorer } from "../lib/shell";
+  import {
+    chooseWorkspace,
+    chooseWorkspaceNewWindow,
+    openWorkspaceDir,
+    openNewWindow,
+    inDesktopShell,
+    revealInExplorer
+  } from "../lib/shell";
   import { fetchWorkspaceFile } from "../lib/stores/workspace";
 
   let showInstructionsModal = $state(false);
@@ -111,6 +118,17 @@
         <button
           type="button"
           class="row-btn"
+          onclick={async () => {
+            workspacePopoverOpen.set(false);
+            await chooseWorkspaceNewWindow();
+          }}
+        >
+          <ExternalLink size={15} />
+          <span>เปิดโฟลเดอร์ในหน้าต่างใหม่… (รันคู่กัน)</span>
+        </button>
+        <button
+          type="button"
+          class="row-btn"
           onclick={() => {
             workspacePopoverOpen.set(false);
             void revealInExplorer(".");
@@ -126,20 +144,35 @@
       <div class="sec">
         <div class="lbl">โฟลเดอร์ล่าสุด</div>
         {#each $recentWorkspaces as dir}
-          <button
-            type="button"
-            class="row-btn mono"
-            onclick={() => {
-              workspacePopoverOpen.set(false);
-              void openWorkspaceDir(dir);
-            }}
-            title={dir}
-          >
-            <span class="truncate">{basename(dir)} ({dir})</span>
-            {#if dir === $workspaceStatus?.workspace}
-              <Check size={14} />
+          <div class="recent-row">
+            <button
+              type="button"
+              class="row-btn mono recent-main-btn"
+              onclick={() => {
+                workspacePopoverOpen.set(false);
+                void openWorkspaceDir(dir);
+              }}
+              title={dir}
+            >
+              <span class="truncate">{basename(dir)} ({dir})</span>
+              {#if dir === $workspaceStatus?.workspace}
+                <Check size={14} />
+              {/if}
+            </button>
+            {#if inDesktopShell()}
+              <button
+                type="button"
+                class="recent-newwin-btn"
+                onclick={() => {
+                  workspacePopoverOpen.set(false);
+                  void openNewWindow(dir);
+                }}
+                title={`เปิด ${basename(dir)} ในหน้าต่างใหม่เพื่อรันคู่กัน`}
+              >
+                <ExternalLink size={13} />
+              </button>
             {/if}
-          </button>
+          </div>
         {/each}
       </div>
     {/if}
@@ -252,6 +285,30 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
+  }
+  .recent-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .recent-main-btn {
+    flex: 1;
+    min-width: 0;
+  }
+  .recent-newwin-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    padding: 5px 6px;
+    border-radius: 6px;
+    display: inline-grid;
+    place-items: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .recent-newwin-btn:hover {
+    background: var(--hover);
+    color: var(--text);
   }
   .err-box {
     padding: 6px 8px;

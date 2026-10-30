@@ -12,6 +12,7 @@
     createProceduralSkill
   } from "../lib/stores/workspace";
   import { centerView } from "../lib/stores/settings";
+  import { t, tNow } from "../lib/i18n";
 
   let goalTitle = $state("");
   let goalInstr = $state("");
@@ -34,7 +35,7 @@
       max_tasks_per_hour: gov.max_tasks_per_hour || 6,
       max_consecutive_failures: gov.max_consecutive_failures || 3,
       paused: !gov.paused,
-      pause_reason: !gov.paused ? "หยุดชั่วคราวโดยผู้ใช้ผ่าน Desktop UI" : ""
+      pause_reason: !gov.paused ? tNow("Paused by user via Desktop UI", "หยุดชั่วคราวโดยผู้ใช้ผ่าน Desktop UI") : ""
     });
     if (!res.ok) errorMsg = res.message;
   }
@@ -72,7 +73,10 @@
       instruction: skillInstr.trim()
     });
     if (!res.ok) {
-      errorMsg = res.status === 409 ? `มี Skill ชื่อนี้อยู่แล้ว (${res.message})` : res.message;
+      errorMsg =
+        res.status === 409
+          ? `${tNow("Skill with this slug already exists", "มี Skill ชื่อนี้อยู่แล้ว")} (${res.message})`
+          : res.message;
       return;
     }
     skillSlug = "";
@@ -86,7 +90,7 @@
       <div class="top-bar">
         <button type="button" class="back-btn" onclick={() => centerView.set("thread")}>
           <ArrowLeft size={14} />
-          <span>กลับไปที่บทสนทนา</span>
+          <span>{$t("Back to Conversation", "กลับไปที่บทสนทนา")}</span>
         </button>
         <h2>24/7 Autonomy & Procedural Memory</h2>
       </div>
@@ -100,7 +104,10 @@
           <div>
             <h3>Safety Governor</h3>
             <p class="sub">
-              โควตาสูงสุด {$autonomyState?.governor?.max_tasks_per_hour ?? 6} งาน/ชม. · ล้มเหลวติดกัน
+              {$t("Max quota", "โควตาสูงสุด")} {$autonomyState?.governor?.max_tasks_per_hour ?? 6} {$t(
+                "tasks/hr · Consecutive failures",
+                "งาน/ชม. · ล้มเหลวติดกัน"
+              )}
               {$autonomyState?.governor?.consecutive_failures ?? 0}/{$autonomyState?.governor
                 ?.max_consecutive_failures ?? 3}
             </p>
@@ -113,10 +120,10 @@
           >
             {#if $autonomyState?.governor?.paused}
               <Play size={13} />
-              <span>เปิดทำงานต่อ (Resume)</span>
+              <span>{$t("Resume", "เปิดทำงานต่อ (Resume)")}</span>
             {:else}
               <Pause size={13} />
-              <span>หยุดชั่วคราว (Pause)</span>
+              <span>{$t("Pause", "หยุดชั่วคราว (Pause)")}</span>
             {/if}
           </button>
         </div>
@@ -125,16 +132,20 @@
       <section class="sec">
         <h3>Goal Backlog ({$autonomyState?.goals?.length ?? 0})</h3>
         <div class="form-row">
-          <input bind:value={goalTitle} placeholder="ชื่อเป้าหมาย..." />
-          <input bind:value={goalInstr} placeholder="คำสั่งให้ Agent ดำเนินการ..." class="flex-2" />
+          <input bind:value={goalTitle} placeholder={$t("Goal title...", "ชื่อเป้าหมาย...")} />
+          <input
+            bind:value={goalInstr}
+            placeholder={$t("Instruction for the Agent...", "คำสั่งให้ Agent ดำเนินการ...")}
+            class="flex-2"
+          />
           <button type="button" class="btn primary" onclick={onCreateGoal} data-testid="add-goal-btn">
             <Plus size={13} />
-            <span>เพิ่ม Goal</span>
+            <span>{$t("Add Goal", "เพิ่ม Goal")}</span>
           </button>
         </div>
         <div class="list">
           {#if ($autonomyState?.goals || []).length === 0}
-            <div class="muted">ยังไม่มี Goal ที่ตั้งไว้</div>
+            <div class="muted">{$t("No goals configured yet", "ยังไม่มี Goal ที่ตั้งไว้")}</div>
           {/if}
           {#each $autonomyState?.goals || [] as g (g.id)}
             <div class="item">
@@ -153,22 +164,22 @@
       <section class="sec">
         <h3>Recurring Schedules ({$autonomyState?.schedules?.length ?? 0})</h3>
         <div class="form-row">
-          <input bind:value={schedName} placeholder="ชื่อตารางงาน..." />
-          <input bind:value={schedInstr} placeholder="คำสั่ง..." class="flex-2" />
+          <input bind:value={schedName} placeholder={$t("Schedule name...", "ชื่อตารางงาน...")} />
+          <input bind:value={schedInstr} placeholder={$t("Instruction...", "คำสั่ง...")} class="flex-2" />
           <input type="number" bind:value={schedInterval} min="60" style="width:90px" />
           <button type="button" class="btn primary" onclick={onCreateSchedule}>
             <Plus size={13} />
-            <span>เพิ่ม</span>
+            <span>{$t("Add", "เพิ่ม")}</span>
           </button>
         </div>
         <div class="list">
           {#if ($autonomyState?.schedules || []).length === 0}
-            <div class="muted">ยังไม่มีตารางรันอัตโนมัติ</div>
+            <div class="muted">{$t("No recurring schedules yet", "ยังไม่มีตารางรันอัตโนมัติ")}</div>
           {/if}
           {#each $autonomyState?.schedules || [] as s (s.id)}
             <div class="item">
               <div class="item-main">
-                <b>{s.name}</b> <span class="muted">(ทุก {Math.round(s.interval_sec / 60)} นาที)</span>
+                <b>{s.name}</b> <span class="muted">({$t("every", "ทุก")} {Math.round(s.interval_sec / 60)} {$t("min", "นาที")})</span>
                 <div class="mono muted">{s.instruction}</div>
               </div>
               <button type="button" class="btn" onclick={() => toggleSchedule(s.id, !s.enabled)}>
@@ -185,10 +196,18 @@
       <section class="sec">
         <h3>Procedural Skills & Episodes ({$autonomyState?.skills?.length ?? 0} skills)</h3>
         <div class="form-row">
-          <input bind:value={skillSlug} placeholder="slug เช่น go-table-test" class="mono" />
-          <input bind:value={skillInstr} placeholder="ขั้นตอนหรือแนวทางของ Skill..." class="flex-2" />
+          <input
+            bind:value={skillSlug}
+            placeholder={$t("slug e.g. go-table-test", "slug เช่น go-table-test")}
+            class="mono"
+          />
+          <input
+            bind:value={skillInstr}
+            placeholder={$t("Skill workflow or guidelines...", "ขั้นตอนหรือแนวทางของ Skill...")}
+            class="flex-2"
+          />
           <button type="button" class="btn primary" onclick={onCreateSkill} data-testid="add-skill-btn">
-            สร้าง Skill
+            {$t("Create Skill", "สร้าง Skill")}
           </button>
         </div>
         {#if $autonomyState?.skills?.length}
@@ -200,7 +219,7 @@
         {/if}
         <div class="list">
           {#if ($autonomyState?.episodes || []).length === 0}
-            <div class="muted">ยังไม่มีประวัติการทำงานอัตโนมัติ</div>
+            <div class="muted">{$t("No autonomous episodes recorded yet", "ยังไม่มีประวัติการทำงานอัตโนมัติ")}</div>
           {/if}
           {#each ($autonomyState?.episodes || []).slice(0, 8) as ep, i (i)}
             <div class="item">
