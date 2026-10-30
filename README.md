@@ -141,7 +141,7 @@ apw-agent/
 Requires **Go 1.27+** (see [`go.mod`](go.mod)):
 
 ```bash
-git clone https://github.com/apiwat/apw-agent.git
+git clone https://github.com/apw-dev/apw-agent.git
 cd apw-agent
 go install ./cmd/...
 ```
